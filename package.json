@@ -1,0 +1,40 @@
+{
+  "name": "mcpose",
+  "version": "1.0.0",
+  "description": "Composable FP (Koa-style) middleware proxy builder for any MCP server",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "keywords": ["mcp", "middleware","functional-programming", "proxy", "compose", "model-context-protocol"],
+  "author": "Amir Gorji",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "ts:ci": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run ts:ci && npm run test && npm run build"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
+  },"repository": {
+    "type": "git",
+    "url": "git+https://github.com/amir-gorji/mcpose.git"
+  }
+}
