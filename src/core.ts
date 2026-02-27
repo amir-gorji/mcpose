@@ -1,13 +1,9 @@
-/**
- * Generic MCP proxy core.
- *
- * Wires an MCP server (exposed to the LLM) to an upstream MCP client,
- * applying composed middleware pipelines to tool calls and resource reads.
- *
- * @module
- */
+/** MCP proxy core: wires server→upstream through middleware pipelines. */
+import * as http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -16,7 +12,10 @@ import {
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  PromptListChangedNotificationSchema,
   ReadResourceRequestSchema,
+  ResourceListChangedNotificationSchema,
+  ToolListChangedNotificationSchema,
   type CallToolRequest,
   type CallToolResult,
   type CompatibilityCallToolResult,
@@ -27,31 +26,24 @@ import { pipe, type Middleware } from './middleware.js';
 import type { BackendClient } from './backendClient.js';
 
 /**
- * Middleware for MCP tool calls.
- *
- * Uses `CompatibilityCallToolResult` because `Client.callTool()` returns a
- * union that includes the legacy `{ toolResult }` shape (protocol 2024-10-07).
- * Middleware implementations should narrow with `hasToolContent(result)` before
- * accessing `.content` or `.isError`.
+ * Middleware for tool calls.
+ * Uses `CompatibilityCallToolResult` to cover legacy `{ toolResult }` shape
+ * (protocol 2024-10-07). Narrow with `hasToolContent()` before accessing `.content`.
  */
 export type ToolMiddleware = Middleware<
   CallToolRequest,
   CompatibilityCallToolResult
 >;
 
-/** Middleware for MCP resource reads. */
+/** Middleware for resource reads. */
 export type ResourceMiddleware = Middleware<
   ReadResourceRequest,
   ReadResourceResult
 >;
 
 /**
- * Type guard that narrows a {@link CompatibilityCallToolResult} to the modern
- * {@link CallToolResult} shape (i.e. the result has a `content` array).
- *
- * Use this in middleware implementations to safely access `.content` and
- * `.isError` without casts, since both union members carry an index signature
- * (`[x: string]: unknown`) that would otherwise make property access `unknown`.
+ * Narrows `CompatibilityCallToolResult` to `CallToolResult` (has `.content` array).
+ * Both union members carry `[x: string]: unknown`, so this avoids unsafe casts.
  */
 export function hasToolContent(
   r: CompatibilityCallToolResult,
@@ -59,51 +51,52 @@ export function hasToolContent(
   return Array.isArray(r.content);
 }
 
-/** Options for the proxy server. */
+/** HTTP transport options for {@link startHttpProxy}. */
+export interface HttpProxyOptions {
+  /** Default: 3000 */
+  port?: number;
+  /** Default: all interfaces */
+  host?: string;
+  /** Default: '/mcp' */
+  path?: string;
+}
+
+/** Proxy server options. */
 export interface ProxyOptions {
   /**
-   * Ordered middleware stack for tool calls in response-processing order.
-   * The first element processes the response first (innermost layer).
-   * `pipe()` is called internally — no need to wrap manually.
-   *
-   * @example
-   * toolMiddleware: [piiMW, auditMW]  // pii redacts first, audit logs clean data
+   * Tool middleware in response-processing order (first = innermost).
+   * @example [piiMW, auditMW]  // pii redacts first, audit logs clean data
    */
   toolMiddleware?: ReadonlyArray<ToolMiddleware>;
 
-  /**
-   * Ordered middleware stack for resource reads in response-processing order.
-   * The first element processes the response first (innermost layer).
-   */
+  /** Resource middleware in response-processing order (first = innermost). */
   resourceMiddleware?: ReadonlyArray<ResourceMiddleware>;
 
-  /** Tool names that bypass all middleware — raw upstream response forwarded as-is. */
+  /** Tools that skip middleware — upstream response forwarded as-is. */
   passThroughTools?: ReadonlyArray<string>;
 
-  /** Resource URIs that bypass all middleware — raw upstream response forwarded as-is. */
+  /** Resources that skip middleware — upstream response forwarded as-is. */
   passThroughResources?: ReadonlyArray<string>;
 
-  /** Tool names hidden from list_tools AND rejected at runtime with MethodNotFound. */
+  /** Tools hidden from list_tools and rejected at runtime with MethodNotFound. */
   hiddenTools?: ReadonlyArray<string>;
 
-  /** Resource URIs hidden from list_resources AND rejected at runtime with InvalidRequest. */
+  /** Resources hidden from list_resources and rejected at runtime with InvalidRequest. */
   hiddenResources?: ReadonlyArray<string>;
 }
 
 /**
- * Creates and wires a proxy MCP server without connecting it to a transport.
+ * Creates a proxy MCP server without connecting it to a transport.
  *
- * Mirrors the upstream's tool/resource/prompt list and registers request
- * handlers that route through the provided middleware pipelines. Prompts are
- * forwarded as-is (no middleware applied).
+ * Mirrors upstream tool/resource/prompt lists and routes requests through
+ * middleware pipelines. Prompts are forwarded as-is.
  *
- * Separating creation from connection makes the server fully testable: tests
- * can call `createProxyServer(mockUpstream, options)` and inspect or invoke
- * the registered handlers without spawning a stdio transport.
+ * Uses low-level `Server` (not `McpServer`) — transparent proxying requires
+ * generic list interception; `McpServer.tool()` needs names upfront.
  *
- * @param upstream - Connected (or mock) upstream MCP client.
- * @param options  - Optional middleware stacks for tools and resources.
- * @returns A configured {@link Server} that is ready to be connected.
+ * @param backend - Connected (or mock) upstream MCP client.
+ * @param options - Middleware stacks, hidden/passthrough sets.
+ * @returns Configured {@link Server} ready to connect.
  */
 export function createProxyServer(
   backend: BackendClient,
@@ -117,11 +110,6 @@ export function createProxyServer(
   const hiddenResourceSet = new Set(options.hiddenResources ?? []);
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
 
-  // NOTE: Using the low-level Server intentionally — a transparent proxy must
-  // intercept list_tools / list_resources generically without knowing tool names
-  // upfront. McpServer.tool() requires pre-registering each tool by name, which
-  // breaks dynamic forwarding. The SDK explicitly carves out this pattern:
-  // "Only use Server for advanced use cases."
   const server = new Server(
     { name: 'mcpose', version: '1.0.0' },
     { capabilities: { tools: {}, resources: {}, prompts: {} } },
@@ -179,14 +167,9 @@ export function createProxyServer(
 }
 
 /**
- * Starts the proxy MCP server on stdio.
- *
- * Convenience wrapper that calls {@link createProxyServer} then connects the
- * result to a `StdioServerTransport`. Use `createProxyServer` directly when
- * you need a testable handle to the configured server.
- *
- * @param upstream - Connected upstream MCP client.
- * @param options  - Optional middleware stacks for tools and resources.
+ * Starts the proxy on stdio.
+ * Calls {@link createProxyServer} then connects to `StdioServerTransport`.
+ * Use `createProxyServer` directly for testable access to the server.
  */
 export async function startProxy(
   backend: BackendClient,
@@ -194,4 +177,88 @@ export async function startProxy(
 ): Promise<void> {
   const server = createProxyServer(backend, options);
   await server.connect(new StdioServerTransport());
+}
+
+/**
+ * Starts the proxy over Streamable HTTP with stateful sessions.
+ *
+ * Sessions keyed by `mcp-session-id`. Upstream notifications fanned out to
+ * all active sessions via their GET SSE stream.
+ *
+ * **Limitations:**
+ * - Two calls with same `backend` overwrite notification handlers (last wins).
+ * - Sessions never expire — only cleaned up on DELETE or server close.
+ * - No `EventStore` → SSE reconnect replay unsupported.
+ *
+ * @returns Promise resolving to the listening `http.Server`.
+ */
+export function startHttpProxy(
+  backend: BackendClient,
+  options: ProxyOptions = {},
+  httpOptions: HttpProxyOptions = {},
+): Promise<http.Server> {
+  const mcpPath = httpOptions.path ?? '/mcp';
+  const port    = httpOptions.port ?? 3000;
+  const host    = httpOptions.host;
+
+  // session ID → { transport, proxyServer }
+  const sessions = new Map<string, {
+    transport: StreamableHTTPServerTransport;
+    proxyServer: Server;
+  }>();
+
+  // Fan upstream notifications to all active sessions' SSE streams.
+  backend.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+    await Promise.all([...sessions.values()].map(({ proxyServer }) => proxyServer.sendToolListChanged()));
+  });
+  backend.setNotificationHandler(PromptListChangedNotificationSchema, async () => {
+    await Promise.all([...sessions.values()].map(({ proxyServer }) => proxyServer.sendPromptListChanged()));
+  });
+  backend.setNotificationHandler(ResourceListChangedNotificationSchema, async () => {
+    await Promise.all([...sessions.values()].map(({ proxyServer }) => proxyServer.sendResourceListChanged()));
+  });
+
+  const server = http.createServer((req, res) => {
+    const handle = async () => {
+      const url    = new URL(req.url ?? '/', 'http://localhost');
+      const method = req.method ?? '';
+
+      if (url.pathname !== mcpPath || !['GET', 'POST', 'DELETE'].includes(method)) {
+        res.writeHead(404).end();
+        return;
+      }
+
+      const sessionId = req.headers['mcp-session-id'];
+
+      if (typeof sessionId === 'string') {
+        // Route to existing session
+        const session = sessions.get(sessionId);
+        if (!session) { res.writeHead(404).end(); return; }
+        await session.transport.handleRequest(req, res);
+      } else {
+        // New session (initialize request)
+        const proxyServer = createProxyServer(backend, options);
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: randomUUID,
+          onsessioninitialized: (id) => { sessions.set(id, { transport, proxyServer }); },
+          onsessionclosed:      (id) => { sessions.delete(id); },
+        });
+        await proxyServer.connect(transport);
+        await transport.handleRequest(req, res);
+      }
+    };
+
+    handle().catch((err) => {
+      if (!res.headersSent) res.writeHead(500).end();
+      void err;
+    });
+  });
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, ...(host ? [host] : []), () => {
+      server.off('error', reject);
+      resolve(server);
+    });
+  });
 }

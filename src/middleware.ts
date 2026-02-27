@@ -1,51 +1,29 @@
 /**
- * Generic Koa-style middleware composition for MCP request/response pipelines.
+ * Koa-style middleware composition for MCP request/response pipelines.
  *
- * A middleware is a pure function:
- *   (req, next) => Promise<Res>
+ * `(req, next) => Promise<Res>` — call `next(req)` to delegate downstream.
+ * Middlewares wrap like an onion: outer runs before+after inner.
  *
- * Calling `next(req)` passes control to the next middleware in the chain.
- * The innermost `next` is the actual upstream call. Middlewares wrap it like
- * an onion: outer layers execute code before AND after inner layers.
- *
- * Execution order with `pipe([piiMW, auditMW])` (or equivalently `compose([auditMW, piiMW])`):
+ * `pipe([piiMW, auditMW])` execution order:
  *   1. auditMW enter  → capture startTime
  *   2. piiMW enter    → call next
  *   3. upstream call  → raw response
  *   4. piiMW exit     → redact PII
- *   5. auditMW exit   → log clean result (never logs raw PII)
- *
- * @module
+ *   5. auditMW exit   → log clean result
  */
 
-/**
- * A single middleware unit. Receives a request and a `next` function to
- * call the remainder of the pipeline. May transform the request before
- * calling `next` or transform the response after.
- *
- * @typeParam Req - Request type (e.g., `CallToolRequest`)
- * @typeParam Res - Response type (e.g., `CallToolResult`)
- */
+/** Single middleware unit. May transform req before `next` or res after. */
 export type Middleware<Req, Res> = (
   req: Req,
   next: (req: Req) => Promise<Res>,
 ) => Promise<Res>;
 
 /**
- * Composes an ordered array of middlewares into a single middleware using the
- * onion (Koa-style) model. The first middleware is the outermost layer.
- *
- * The returned function accepts the initial request and an innermost `next`
- * (typically the upstream I/O call).
- *
- * @param middlewares - Ordered list of middlewares, outermost first.
- * @returns A single composed middleware.
+ * Composes middlewares into one, outermost-first (Koa-style).
  *
  * @example
- * ```ts
  * const pipeline = compose([auditMW, piiMW]);
  * const result = await pipeline(req, (r) => upstream.callTool(r.params));
- * ```
  */
 export function compose<Req, Res>(
   middlewares: ReadonlyArray<Middleware<Req, Res>>,
@@ -70,19 +48,9 @@ export function compose<Req, Res>(
 }
 
 /**
- * Composes middlewares in response-processing order (internal helper used by mcpose core).
- *
- * The first element processes the response first — it is the innermost layer.
- * `pipe([piiMW, auditMW])` expresses "pii redacts first, then audit logs the clean result",
- * which is equivalent to `compose([auditMW, piiMW])` (outermost-first).
- *
- * This is an internal utility. Consumers pass plain arrays to `ProxyOptions` which
- * calls `pipe()` internally — there is no need to call `pipe()` directly.
- *
- * Equivalent to `compose([...middlewares].reverse())`.
- *
- * @param middlewares - Middlewares in response-processing order (first processes response first).
- * @returns A single composed middleware.
+ * Like `compose` but in response-processing order (first = innermost).
+ * `pipe([piiMW, auditMW])` ≡ `compose([auditMW, piiMW])`.
+ * Used internally by mcpose core — consumers pass arrays to `ProxyOptions`.
  */
 export function pipe<Req, Res>(
   middlewares: ReadonlyArray<Middleware<Req, Res>>,

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { compose, pipe, type Middleware } from '../middleware.js';
 
 type Req = { value: number };
@@ -66,7 +66,7 @@ describe('compose()', () => {
     const add1: Middleware<Req, Res> = (req, next) => next({ value: req.value + 1 });
     const mul2: Middleware<Req, Res> = (req, next) => next({ value: req.value * 2 });
 
-    // add1 is outer: value = (original + 1) * 2
+    // add1 outer: value = (original + 1) * 2
     const pipeline = compose([add1, mul2]);
     const result = await pipeline({ value: 3 }, async (r) => ({ result: r.value }));
     expect(result).toEqual({ result: 8 }); // (3 + 1) * 2 = 8
@@ -109,7 +109,7 @@ describe('pipe()', () => {
     const mul2: Middleware<Req, Res> = (req, next) => next({ value: req.value * 2 });
 
     // pipe([add1, mul2]) ≡ compose([mul2, add1])
-    // mul2 is outer: req.value = (original * 2) + 1 = (3 * 2) + 1 = 7
+    // mul2 outer: value = (original * 2) + 1 = 7
     const pipePipeline    = pipe([add1, mul2]);
     const composePipeline = compose([mul2, add1]);
 
@@ -121,7 +121,7 @@ describe('pipe()', () => {
   it('executes in data-flow order — first element processes the response first', async () => {
     const order: string[] = [];
 
-    // In pipe(), "inner" = first element = processes response first
+    // first element in pipe() = innermost = processes response first
     const innerMW: Middleware<Req, Res> = async (req, next) => {
       order.push('inner-enter');
       const res = await next(req);
