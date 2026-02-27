@@ -190,6 +190,39 @@ function createProxyServer(backend: BackendClient, options?: ProxyOptions): Serv
 
 ---
 
+### `HttpProxyOptions` · `startHttpProxy()`
+
+```ts
+interface HttpProxyOptions {
+  port?: number; // Default: 3000
+  host?: string; // Default: all interfaces
+  path?: string; // Default: '/mcp'
+}
+
+function startHttpProxy(
+  backend: BackendClient,
+  options?: ProxyOptions,
+  httpOptions?: HttpProxyOptions,
+): Promise<http.Server>;
+```
+
+Starts the proxy over Streamable HTTP with stateful sessions. Each client connection is assigned an `mcp-session-id`; upstream list-change notifications (`tools/list_changed`, `resources/list_changed`, `prompts/list_changed`) are fanned out to all active sessions.
+
+```ts
+import { createBackendClient, startHttpProxy } from 'mcpose';
+
+const backend = await createBackendClient({ url: 'http://upstream-mcp-server/mcp' });
+const server = await startHttpProxy(backend, { toolMiddleware: [loggingMW] }, { port: 8080 });
+// HTTP server is now listening on port 8080 at /mcp
+```
+
+**Limitations:**
+- Two `startHttpProxy` calls sharing the same `backend` will overwrite each other's notification handlers (last call wins).
+- Sessions are only cleaned up on `DELETE` or server close — there is no idle timeout.
+- SSE reconnect replay is not supported (no `EventStore`).
+
+---
+
 ## Recipe: PII redaction
 
 The origin use case for mcpose: a financial-grade MCP server where every Elasticsearch tool response must be scrubbed of PII before it reaches the LLM or the audit log.
@@ -239,7 +272,7 @@ The array order guarantees: PII is redacted *before* the audit layer ever sees t
 
 ## Roadmap
 
-- [ ] **HTTP/SSE server transport** — currently the proxy emits only a stdio server; add a streamable HTTP/SSE server-side transport so mcpose can front HTTP-based clients without a subprocess wrapper
+- [x] **HTTP/SSE server transport** — `startHttpProxy()` adds a Streamable HTTP server-side transport with stateful sessions
 - [ ] **ATXP protocol support** — enable MCP monetization by implementing the ATXP (Agent Transaction Protocol) standard, letting tool providers attach pricing and billing metadata to responses
 
 ---
