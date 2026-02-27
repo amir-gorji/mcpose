@@ -1,9 +1,5 @@
 /**
- * Framework-agnostic test helpers for code that uses mcpose middleware.
- *
- * **No test framework imports** — this module has zero dependencies on
- * vitest, jest, or mocha. Import it in any test environment.
- *
+ * Test helpers for mcpose middleware. No test framework imports — works in any env.
  * @module mcpose/testing
  */
 import type {
@@ -25,26 +21,13 @@ import { hasToolContent } from './core.js';
 import type { ToolMiddleware } from './core.js';
 import type { BackendClient } from './backendClient.js';
 
-// ---------------------------------------------------------------------------
-// Pain Point 1: runToolMiddleware
-// ---------------------------------------------------------------------------
-
 /**
- * Calls a {@link ToolMiddleware} and narrows the result to {@link CallToolResult}.
- *
- * Eliminates the boilerplate `isCallToolResult` guard that every test of a
- * `ToolMiddleware` must otherwise repeat. Throws a clear error if the upstream
- * returns the legacy `{ toolResult }` protocol shape.
- *
- * @param mw   - The middleware under test.
- * @param req  - The tool call request to pass in.
- * @param next - The innermost handler (simulates the upstream or next middleware).
+ * Runs a `ToolMiddleware` and narrows result to `CallToolResult`.
+ * Throws if upstream returns legacy `{ toolResult }` shape.
  *
  * @example
- * ```ts
  * const result = await runToolMiddleware(mw, req, async () => mockResult);
  * expect(result.content[0]).toMatchObject({ type: 'text' });
- * ```
  */
 export async function runToolMiddleware(
   mw: ToolMiddleware,
@@ -60,59 +43,36 @@ export async function runToolMiddleware(
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// Pain Point 2: createMockBackendClient
-// ---------------------------------------------------------------------------
-
-/**
- * Configuration for the mock backend client.
- */
+/** Config for mock backend client. */
 export interface MockBackendClientOptions {
-  /** Tools advertised by the mock upstream. Default: `[]`. */
+  /** Default: `[]` */
   tools?: Tool[];
   /**
-   * Response for `callTool`. Can be a static result or a factory function
-   * that receives the call params and returns a per-call result.
-   *
+   * Static result or factory `(params) => result` for `callTool`.
    * Default: `{ content: [{ type: 'text', text: 'mock response' }] }`
    */
   callToolResponse?:
     | CallToolResult
     | ((params: CallToolRequestParams) => CallToolResult);
-  /** Resources advertised by the mock upstream. Default: `[]`. */
+  /** Default: `[]` */
   resources?: Resource[];
-  /**
-   * Response for `readResource`.
-   *
-   * Default: `{ contents: [{ uri: '', text: 'mock resource' }] }`
-   */
+  /** Default: `{ contents: [{ uri: '', text: 'mock resource' }] }` */
   readResourceResponse?: ReadResourceResult;
-  /** Prompts advertised by the mock upstream. Default: `[]`. */
+  /** Default: `[]` */
   prompts?: Prompt[];
-  /**
-   * Response for `getPrompt`.
-   *
-   * Default: `{ messages: [] }`
-   */
+  /** Default: `{ messages: [] }` */
   getPromptResponse?: GetPromptResult;
 }
 
 /**
- * Creates a plain object implementing {@link BackendClient} for use in tests.
- *
- * No real process is spawned and no network connection is made. All methods
- * return configurable in-memory responses, making it possible to test the full
- * `compose([auditMW, piiMW])` pipeline in a unit test.
+ * Creates an in-memory `BackendClient` for unit tests. No process/network.
  *
  * @example
- * ```ts
  * const backend = createMockBackendClient({
  *   callToolResponse: { content: [{ type: 'text', text: 'John Doe: 123-45-6789' }] },
  * });
- * // Now compose real middlewares against it:
  * const pipeline = compose([auditMW, piiToolMW]);
  * const result = await pipeline(req, (r) => backend.callTool(r.params, undefined));
- * ```
  */
 export function createMockBackendClient(
   options: MockBackendClientOptions = {},

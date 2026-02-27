@@ -1,39 +1,26 @@
 /**
- * Factory for connecting to the backend MCP server.
- *
- * Supports two transport modes:
- *  - **stdio** (default): spawns the backend server as a child process.
- *  - **HTTP/SSE**: connects to an already-running HTTP MCP server.
- *
- * Returns a connected `@modelcontextprotocol/sdk` Client, which exposes the
- * full MCP protocol surface (listTools, callTool, listResources, readResource,
- * listPrompts, getPrompt) with exact MCP type fidelity — important for a
- * transparent proxy that must not transform protocol shapes.
- *
- * @module
+ * Backend MCP client factory.
+ * Modes: stdio (spawns child process) or HTTP/SSE (connects to running server).
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-/** Connection options for the backend MCP server. */
+/** Backend connection config. */
 export interface BackendConfig {
-  /** Shell command to spawn the backend server (e.g., `"node"`). Required when not using `url`. */
+  /** Shell command to spawn backend (e.g. `"node"`). Required if no `url`. */
   command?: string;
-  /** Arguments passed to the command (e.g., `["/path/to/server.mjs"]`). */
+  /** Args passed to command (e.g. `["/path/to/server.mjs"]`). */
   args?: string[];
-  /** HTTP/SSE URL of an already-running backend server. Takes precedence over stdio when set. */
+  /** HTTP/SSE URL of running backend. Takes precedence over stdio. */
   url?: string;
 }
 
 export type BackendClient = Client;
 
 /**
- * Creates and connects an MCP client to the backend server.
- *
- * @param config - Backend connection details (stdio or HTTP).
- * @returns A connected MCP SDK Client ready for tool/resource/prompt calls.
- * @throws If neither `command` nor `url` is provided, or if the connection fails.
+ * Creates and connects an MCP client to the backend.
+ * @throws If neither `command` nor `url` provided, or connection fails.
  */
 export async function createBackendClient(
   config: BackendConfig,

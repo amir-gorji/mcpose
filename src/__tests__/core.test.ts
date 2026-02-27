@@ -32,10 +32,7 @@ function makeMockBackend(): BackendClient {
   } as unknown as BackendClient;
 }
 
-/**
- * Invokes a registered request handler directly — no transport needed.
- * Accesses the SDK's internal `_requestHandlers` map to call handlers in unit tests.
- */
+/** Invokes a registered handler directly via `_requestHandlers` — no transport needed. */
 async function invokeHandler(
   server: ReturnType<typeof createProxyServer>,
   method: string,
