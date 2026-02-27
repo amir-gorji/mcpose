@@ -6,7 +6,8 @@ export { createBackendClient } from './backendClient.js';
 
 export type {
   ProxyOptions,
+  HttpProxyOptions,
   ToolMiddleware,
   ResourceMiddleware,
 } from './core.js';
-export { hasToolContent, createProxyServer, startProxy } from './core.js';
+export { hasToolContent, createProxyServer, startProxy, startHttpProxy } from './core.js';
