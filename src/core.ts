@@ -21,6 +21,7 @@ import {
   type CompatibilityCallToolResult,
   type ReadResourceRequest,
   type ReadResourceResult,
+  type ServerCapabilities,
 } from '@modelcontextprotocol/sdk/types.js';
 import { pipe, type Middleware } from './middleware.js';
 import type { BackendClient } from './backendClient.js';
@@ -85,6 +86,137 @@ export interface ProxyOptions {
   hiddenResources?: ReadonlyArray<string>;
 }
 
+type ProgressToken = string | number;
+type BackendRequestOptions = Parameters<BackendClient['listTools']>[1];
+type ProxyRequestExtra = {
+  signal?: AbortSignal;
+  _meta?: { progressToken?: ProgressToken };
+  sendNotification?: (notification: {
+    method: 'notifications/progress';
+    params: {
+      progressToken: ProgressToken;
+      progress: number;
+      total?: number;
+      message?: string;
+    };
+  }) => Promise<void>;
+};
+
+type ListChangedBus = {
+  servers: Set<Server>;
+};
+
+const listChangedBuses = new WeakMap<BackendClient, ListChangedBus>();
+
+function createProxyCapabilities(backend: BackendClient): ServerCapabilities {
+  const upstream = backend.getServerCapabilities();
+
+  return {
+    ...(upstream?.tools
+      ? { tools: upstream.tools.listChanged ? { listChanged: true } : {} }
+      : {}),
+    ...(upstream?.resources
+      ? { resources: upstream.resources.listChanged ? { listChanged: true } : {} }
+      : {}),
+    ...(upstream?.prompts
+      ? { prompts: upstream.prompts.listChanged ? { listChanged: true } : {} }
+      : {}),
+  };
+}
+
+function createRequestOptions(
+  extra: ProxyRequestExtra = {},
+): BackendRequestOptions {
+  const progressToken = extra._meta?.progressToken;
+  const onprogress = progressToken && extra.sendNotification
+    ? ({
+        progress,
+        total,
+        message,
+      }: {
+        progress: number;
+        total?: number;
+        message?: string;
+      }) => {
+        void extra.sendNotification?.({
+          method: 'notifications/progress',
+          params: {
+            progressToken,
+            progress,
+            ...(total === undefined ? {} : { total }),
+            ...(message === undefined ? {} : { message }),
+          },
+        });
+      }
+    : undefined;
+
+  if (!extra.signal && !onprogress) return undefined;
+
+  return {
+    ...(extra.signal ? { signal: extra.signal } : {}),
+    ...(onprogress ? { onprogress } : {}),
+  };
+}
+
+function registerListChangedForwarders(
+  backend: BackendClient,
+  server: Server,
+  capabilities: ServerCapabilities,
+): void {
+  if (
+    !capabilities.tools?.listChanged &&
+    !capabilities.resources?.listChanged &&
+    !capabilities.prompts?.listChanged
+  ) {
+    return;
+  }
+
+  let bus = listChangedBuses.get(backend);
+
+  if (!bus) {
+    const servers = new Set<Server>();
+    const fanOut = async (
+      notify: (proxyServer: Server) => Promise<void>,
+    ): Promise<void> => {
+      await Promise.allSettled([...servers].map((proxyServer) => notify(proxyServer)));
+    };
+
+    if (capabilities.tools?.listChanged) {
+      backend.setNotificationHandler(ToolListChangedNotificationSchema, () =>
+        fanOut((proxyServer) => proxyServer.sendToolListChanged()),
+      );
+    }
+
+    if (capabilities.prompts?.listChanged) {
+      backend.setNotificationHandler(PromptListChangedNotificationSchema, () =>
+        fanOut((proxyServer) => proxyServer.sendPromptListChanged()),
+      );
+    }
+
+    if (capabilities.resources?.listChanged) {
+      backend.setNotificationHandler(ResourceListChangedNotificationSchema, () =>
+        fanOut((proxyServer) => proxyServer.sendResourceListChanged()),
+      );
+    }
+
+    bus = { servers };
+    listChangedBuses.set(backend, bus);
+  }
+
+  bus.servers.add(server);
+
+  const prevOnClose = server.onclose;
+  let active = true;
+
+  server.onclose = () => {
+    if (!active) return;
+    active = false;
+    bus.servers.delete(server);
+    if (!bus.servers.size) listChangedBuses.delete(backend);
+    prevOnClose?.();
+  };
+}
+
 /**
  * Creates a proxy MCP server without connecting it to a transport.
  *
@@ -102,6 +234,7 @@ export function createProxyServer(
   backend: BackendClient,
   options: ProxyOptions = {},
 ): Server {
+  const capabilities = createProxyCapabilities(backend);
   const toolPipeline = pipe(options.toolMiddleware ?? []);
   const resourcePipeline = pipe(options.resourceMiddleware ?? []);
 
@@ -111,57 +244,69 @@ export function createProxyServer(
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
 
   const server = new Server(
-    { name: 'mcpose', version: '1.0.0' },
-    { capabilities: { tools: {}, resources: {}, prompts: {} } },
+    { name: 'mcpose', version: '1.1.1' },
+    { capabilities },
   );
+
+  registerListChangedForwarders(backend, server, capabilities);
 
   // ── Tool handlers ──────────────────────────────────────────────────────────
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const result = await backend.listTools();
-    if (!hiddenToolSet.size) return result;
-    return { ...result, tools: result.tools.filter((t) => !hiddenToolSet.has(t.name)) };
-  });
+  if (capabilities.tools) {
+    server.setRequestHandler(ListToolsRequestSchema, async (req, extra) => {
+      const result = await backend.listTools(req.params, createRequestOptions(extra));
+      if (!hiddenToolSet.size) return result;
+      return { ...result, tools: result.tools.filter((t) => !hiddenToolSet.has(t.name)) };
+    });
 
-  server.setRequestHandler(CallToolRequestSchema, (req) => {
-    const name = req.params.name;
-    if (hiddenToolSet.has(name)) {
-      throw new McpError(ErrorCode.MethodNotFound, `Tool not found: ${name}`);
-    }
-    if (passThroughToolSet.has(name)) {
-      return backend.callTool(req.params, undefined);
-    }
-    return toolPipeline(req, (r) => backend.callTool(r.params, undefined));
-  });
+    server.setRequestHandler(CallToolRequestSchema, (req, extra) => {
+      const name = req.params.name;
+      const requestOptions = createRequestOptions(extra);
+
+      if (hiddenToolSet.has(name)) {
+        throw new McpError(ErrorCode.MethodNotFound, `Tool not found: ${name}`);
+      }
+      if (passThroughToolSet.has(name)) {
+        return backend.callTool(req.params, undefined, requestOptions);
+      }
+      return toolPipeline(req, (r) => backend.callTool(r.params, undefined, requestOptions));
+    });
+  }
 
   // ── Resource handlers ──────────────────────────────────────────────────────
 
-  server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    const result = await backend.listResources();
-    if (!hiddenResourceSet.size) return result;
-    return { ...result, resources: result.resources.filter((r) => !hiddenResourceSet.has(r.uri)) };
-  });
+  if (capabilities.resources) {
+    server.setRequestHandler(ListResourcesRequestSchema, async (req, extra) => {
+      const result = await backend.listResources(req.params, createRequestOptions(extra));
+      if (!hiddenResourceSet.size) return result;
+      return { ...result, resources: result.resources.filter((r) => !hiddenResourceSet.has(r.uri)) };
+    });
 
-  server.setRequestHandler(ReadResourceRequestSchema, (req) => {
-    const uri = req.params.uri;
-    if (hiddenResourceSet.has(uri)) {
-      throw new McpError(ErrorCode.InvalidRequest, `Resource not found: ${uri}`);
-    }
-    if (passThroughResourceSet.has(uri)) {
-      return backend.readResource(req.params);
-    }
-    return resourcePipeline(req, (r) => backend.readResource(r.params));
-  });
+    server.setRequestHandler(ReadResourceRequestSchema, (req, extra) => {
+      const uri = req.params.uri;
+      const requestOptions = createRequestOptions(extra);
+
+      if (hiddenResourceSet.has(uri)) {
+        throw new McpError(ErrorCode.InvalidRequest, `Resource not found: ${uri}`);
+      }
+      if (passThroughResourceSet.has(uri)) {
+        return backend.readResource(req.params, requestOptions);
+      }
+      return resourcePipeline(req, (r) => backend.readResource(r.params, requestOptions));
+    });
+  }
 
   // ── Prompt handlers (pass-through) ────────────────────────────────────────
 
-  server.setRequestHandler(ListPromptsRequestSchema, () =>
-    backend.listPrompts(),
-  );
+  if (capabilities.prompts) {
+    server.setRequestHandler(ListPromptsRequestSchema, (req, extra) =>
+      backend.listPrompts(req.params, createRequestOptions(extra)),
+    );
 
-  server.setRequestHandler(GetPromptRequestSchema, (req) =>
-    backend.getPrompt(req.params),
-  );
+    server.setRequestHandler(GetPromptRequestSchema, (req, extra) =>
+      backend.getPrompt(req.params, createRequestOptions(extra)),
+    );
+  }
 
   return server;
 }
@@ -186,8 +331,7 @@ export async function startProxy(
  * all active sessions via their GET SSE stream.
  *
  * **Limitations:**
- * - Two calls with same `backend` overwrite notification handlers (last wins).
- * - Sessions never expire — only cleaned up on DELETE or server close.
+ * - Sessions never expire.
  * - No `EventStore` → SSE reconnect replay unsupported.
  *
  * @returns Promise resolving to the listening `http.Server`.
@@ -206,17 +350,6 @@ export function startHttpProxy(
     transport: StreamableHTTPServerTransport;
     proxyServer: Server;
   }>();
-
-  // Fan upstream notifications to all active sessions' SSE streams.
-  backend.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-    await Promise.all([...sessions.values()].map(({ proxyServer }) => proxyServer.sendToolListChanged()));
-  });
-  backend.setNotificationHandler(PromptListChangedNotificationSchema, async () => {
-    await Promise.all([...sessions.values()].map(({ proxyServer }) => proxyServer.sendPromptListChanged()));
-  });
-  backend.setNotificationHandler(ResourceListChangedNotificationSchema, async () => {
-    await Promise.all([...sessions.values()].map(({ proxyServer }) => proxyServer.sendResourceListChanged()));
-  });
 
   const server = http.createServer((req, res) => {
     const handle = async () => {
@@ -253,6 +386,25 @@ export function startHttpProxy(
       void err;
     });
   });
+
+  const rawClose = server.close.bind(server);
+  let shuttingDown = false;
+
+  server.close = ((callback?: (err?: Error) => void) => {
+    if (shuttingDown) return rawClose(callback as never);
+    shuttingDown = true;
+
+    const activeSessions = [...sessions.values()];
+    sessions.clear();
+
+    void Promise.allSettled(
+      activeSessions.map(({ proxyServer }) => proxyServer.close()),
+    ).finally(() => {
+      rawClose(callback as never);
+    });
+
+    return server;
+  }) as typeof server.close;
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);

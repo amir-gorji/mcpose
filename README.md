@@ -2,6 +2,15 @@
 
 Composable middleware proxy for MCP servers.
 
+## New in 1.1.1
+
+- mirrors only upstream-advertised MCP capabilities
+- forwards abort signals and progress updates through the proxy
+- advertises and fans out list-changed notifications correctly
+- closes active HTTP proxy sessions on shutdown
+- ships a stronger `mcpose/testing` mock backend
+
+---
 ---
 
 ## Background
@@ -12,7 +21,7 @@ mcpose was extracted from [`financial-elastic-mcp-server`](https://github.com/am
 
 ## Concept
 
-mcpose is a **transparent proxy**: it sits between an LLM client and an upstream MCP server, mirroring the upstream's tool, resource, and prompt lists while routing all calls through a configurable middleware pipeline. The client sees a normal MCP server; the upstream sees a normal MCP client. mcpose is the layer in between — controlling visibility and applying transformations without either side knowing.
+mcpose is a **transparent proxy** between an LLM client and an upstream MCP server. It mirrors the upstream MCP surface and routes supported calls through middleware. The client sees a normal MCP server; the upstream sees a normal MCP client.
 
 ---
 
@@ -68,7 +77,7 @@ await startProxy(backend, {
 └──────────────┘        └────────────────────────────────┘        └────────────────────┘
 ```
 
-For each tool or resource, mcpose picks one of three routing paths:
+For each supported tool or resource, mcpose picks one of three routing paths:
 
 | Path | Option | Behavior |
 |---|---|---|
@@ -76,7 +85,14 @@ For each tool or resource, mcpose picks one of three routing paths:
 | **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded raw to upstream — all middleware skipped |
 | **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline |
 
-Prompts are always forwarded as-is — no filtering or middleware.
+Prompts are forwarded as-is when the upstream supports prompts.
+
+The proxy preserves core request semantics end to end:
+
+- advertised capabilities are mirrored from the upstream server
+- abort signals are forwarded to upstream tool, resource, and prompt calls
+- upstream progress updates are relayed back to the downstream client
+- list-changed notifications are advertised and fanned out when the upstream supports them
 
 ---
 
@@ -157,7 +173,7 @@ interface BackendConfig {
 async function createBackendClient(config: BackendConfig): Promise<BackendClient>;
 ```
 
-`BackendClient` is an alias for the SDK `Client`. Throws if neither `command` nor `url` is provided, or if the connection fails.
+`BackendClient` is an alias for the SDK `Client`. It throws if neither `command` nor `url` is provided, or if the connection fails.
 
 ---
 
@@ -186,6 +202,8 @@ function createProxyServer(backend: BackendClient, options?: ProxyOptions): Serv
 | `hiddenTools` | Tool names removed from `list_tools` **and** rejected at call time with `MethodNotFound`. |
 | `hiddenResources` | Resource URIs removed from `list_resources` **and** rejected at call time with `InvalidRequest`. |
 
+`createProxyServer` mirrors only the upstream capabilities exposed by `backend.getServerCapabilities()`. Unsupported prompt, resource, and tool endpoints are not advertised or registered.
+
 `startProxy` connects the proxy to a `StdioServerTransport`. `createProxyServer` returns the configured `Server` without connecting — useful for testing request handlers without a live transport.
 
 ---
@@ -206,7 +224,7 @@ function startHttpProxy(
 ): Promise<http.Server>;
 ```
 
-Starts the proxy over Streamable HTTP with stateful sessions. Each client connection is assigned an `mcp-session-id`; upstream list-change notifications (`tools/list_changed`, `resources/list_changed`, `prompts/list_changed`) are fanned out to all active sessions.
+Starts the proxy over Streamable HTTP with stateful sessions. Each client connection is assigned an `mcp-session-id`. Upstream list-change notifications (`tools/list_changed`, `resources/list_changed`, `prompts/list_changed`) are fanned out to all active sessions when the upstream advertises them.
 
 ```ts
 import { createBackendClient, startHttpProxy } from 'mcpose';
@@ -216,10 +234,21 @@ const server = await startHttpProxy(backend, { toolMiddleware: [loggingMW] }, { 
 // HTTP server is now listening on port 8080 at /mcp
 ```
 
+On shutdown, active proxy sessions are closed before the underlying `http.Server` finishes closing.
+
 **Limitations:**
-- Two `startHttpProxy` calls sharing the same `backend` will overwrite each other's notification handlers (last call wins).
-- Sessions are only cleaned up on `DELETE` or server close — there is no idle timeout.
+- Sessions have no idle timeout.
 - SSE reconnect replay is not supported (no `EventStore`).
+
+---
+
+### `mcpose/testing`
+
+```ts
+import { createMockBackendClient, runToolMiddleware } from 'mcpose/testing';
+```
+
+`createMockBackendClient()` returns an in-memory backend stub with capability lookup and notification hooks. It works with both `createProxyServer()` and `startHttpProxy()` tests.
 
 ---
 

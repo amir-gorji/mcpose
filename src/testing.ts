@@ -16,6 +16,7 @@ import type {
   ReadResourceRequestParams,
   GetPromptRequestParams,
   GetPromptResult,
+  ServerCapabilities,
 } from '@modelcontextprotocol/sdk/types.js';
 import { hasToolContent } from './core.js';
 import type { ToolMiddleware } from './core.js';
@@ -45,6 +46,8 @@ export async function runToolMiddleware(
 
 /** Config for mock backend client. */
 export interface MockBackendClientOptions {
+  /** Default: tools/resources/prompts enabled */
+  capabilities?: ServerCapabilities;
   /** Default: `[]` */
   tools?: Tool[];
   /**
@@ -77,7 +80,15 @@ export interface MockBackendClientOptions {
 export function createMockBackendClient(
   options: MockBackendClientOptions = {},
 ): BackendClient {
+  const capabilities = options.capabilities ?? {
+    tools: {},
+    resources: {},
+    prompts: {},
+  };
+
   return {
+    getServerCapabilities: (): ServerCapabilities => capabilities,
+
     listTools: async (): Promise<ListToolsResult> => ({
       tools: options.tools ?? [],
     }),
@@ -109,5 +120,9 @@ export function createMockBackendClient(
       _params: GetPromptRequestParams,
     ): Promise<GetPromptResult> =>
       options.getPromptResponse ?? { messages: [] },
+
+    setNotificationHandler: () => undefined,
+    removeNotificationHandler: () => undefined,
+    close: async () => undefined,
   } as unknown as BackendClient;
 }
