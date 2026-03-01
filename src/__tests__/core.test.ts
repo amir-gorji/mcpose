@@ -1,12 +1,25 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createProxyServer, type ToolMiddleware } from '../core.js';
 import type { BackendClient } from '../backendClient.js';
-import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import {
+  ErrorCode,
+  PromptListChangedNotificationSchema,
+  ResourceListChangedNotificationSchema,
+  ToolListChangedNotificationSchema,
+  type ServerCapabilities,
+} from '@modelcontextprotocol/sdk/types.js';
 
 // ── Test helpers ────────────────────────────────────────────────────────────
 
 function makeMockBackend(): BackendClient {
+  const notificationHandlers = new Map<string, () => Promise<void>>();
+
   return {
+    getServerCapabilities: vi.fn<() => ServerCapabilities>().mockReturnValue({
+      tools: {},
+      resources: {},
+      prompts: {},
+    }),
     listTools: vi.fn().mockResolvedValue({
       tools: [
         { name: 'normal_tool', description: 'Normal', inputSchema: { type: 'object', properties: {} } },
@@ -29,6 +42,19 @@ function makeMockBackend(): BackendClient {
     }),
     listPrompts: vi.fn().mockResolvedValue({ prompts: [] }),
     getPrompt: vi.fn().mockResolvedValue({ messages: [] }),
+    setNotificationHandler: vi.fn((schema, handler) => {
+      const method =
+        schema === ToolListChangedNotificationSchema
+          ? 'notifications/tools/list_changed'
+          : schema === PromptListChangedNotificationSchema
+            ? 'notifications/prompts/list_changed'
+            : 'notifications/resources/list_changed';
+
+      notificationHandlers.set(method, handler as () => Promise<void>);
+    }),
+    removeNotificationHandler: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
+    __notificationHandlers: notificationHandlers,
   } as unknown as BackendClient;
 }
 
@@ -37,6 +63,7 @@ async function invokeHandler(
   server: ReturnType<typeof createProxyServer>,
   method: string,
   params: Record<string, unknown> = {},
+  extra: object = {},
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handlers = (server as any)._requestHandlers as Map<
@@ -45,7 +72,7 @@ async function invokeHandler(
   >;
   const handler = handlers.get(method);
   if (!handler) throw new Error(`No handler registered for method: ${method}`);
-  return handler({ method, params }, {});
+  return handler({ method, params }, extra);
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -181,5 +208,115 @@ describe('createProxyServer() — passThroughResources', () => {
     })) as { contents: { text: string }[] };
 
     expect(result.contents[0]?.text).toBe('raw content');
+  });
+});
+
+describe('createProxyServer() — capability mirroring', () => {
+  it('advertises only upstream capabilities', async () => {
+    const backend = makeMockBackend();
+    vi.mocked(backend.getServerCapabilities).mockReturnValue({ tools: {} });
+    const server = createProxyServer(backend);
+
+    const result = await invokeHandler(server, 'initialize', {
+      protocolVersion: '2025-03-26',
+      capabilities: {},
+      clientInfo: { name: 'test', version: '0.0.1' },
+    }) as { capabilities: ServerCapabilities };
+
+    expect(result.capabilities).toEqual({ tools: {} });
+    await expect(invokeHandler(server, 'prompts/list')).rejects.toThrow(
+      'No handler registered for method: prompts/list',
+    );
+    await expect(invokeHandler(server, 'resources/list')).rejects.toThrow(
+      'No handler registered for method: resources/list',
+    );
+  });
+});
+
+describe('createProxyServer() — notification fanout', () => {
+  it('fans list-changed notifications to active proxy servers only', async () => {
+    const backend = makeMockBackend() as BackendClient & {
+      __notificationHandlers: Map<string, () => Promise<void>>;
+    };
+
+    vi.mocked(backend.getServerCapabilities).mockReturnValue({
+      tools: { listChanged: true },
+    });
+
+    const serverA = createProxyServer(backend);
+    const serverB = createProxyServer(backend);
+
+    const sendA = vi.spyOn(serverA, 'sendToolListChanged').mockResolvedValue(undefined);
+    const sendB = vi.spyOn(serverB, 'sendToolListChanged').mockResolvedValue(undefined);
+
+    await backend.__notificationHandlers.get('notifications/tools/list_changed')?.();
+
+    expect(sendA).toHaveBeenCalledOnce();
+    expect(sendB).toHaveBeenCalledOnce();
+
+    serverA.onclose?.();
+    sendA.mockClear();
+    sendB.mockClear();
+
+    await backend.__notificationHandlers.get('notifications/tools/list_changed')?.();
+
+    expect(sendA).not.toHaveBeenCalled();
+    expect(sendB).toHaveBeenCalledOnce();
+  });
+});
+
+describe('createProxyServer() — request options', () => {
+  it('forwards signal and progress for tool calls', async () => {
+    const backend = makeMockBackend();
+    const sendNotification = vi.fn().mockResolvedValue(undefined);
+    const controller = new AbortController();
+
+    vi.mocked(backend.callTool).mockImplementation(async (_params, _schema, options) => {
+      options?.onprogress?.({ progress: 2, total: 5, message: 'working' });
+      expect(options?.signal).toBe(controller.signal);
+      return { content: [{ type: 'text', text: 'raw upstream response' }] };
+    });
+
+    const server = createProxyServer(backend);
+
+    await invokeHandler(
+      server,
+      'tools/call',
+      { name: 'normal_tool', arguments: {} },
+      {
+        signal: controller.signal,
+        requestId: 1,
+        sendNotification,
+        _meta: { progressToken: 'progress-1' },
+      },
+    );
+
+    expect(sendNotification).toHaveBeenCalledWith({
+      method: 'notifications/progress',
+      params: { progressToken: 'progress-1', progress: 2, total: 5, message: 'working' },
+    });
+  });
+
+  it('forwards signal for resource reads', async () => {
+    const backend = makeMockBackend();
+    const controller = new AbortController();
+
+    vi.mocked(backend.readResource).mockImplementation(async (_params, options) => {
+      expect(options?.signal).toBe(controller.signal);
+      return { contents: [{ uri: 'res://normal', text: 'raw content', mimeType: 'text/plain' }] };
+    });
+
+    const server = createProxyServer(backend);
+
+    await invokeHandler(
+      server,
+      'resources/read',
+      { uri: 'res://normal' },
+      {
+        signal: controller.signal,
+        requestId: 1,
+        sendNotification: vi.fn().mockResolvedValue(undefined),
+      },
+    );
   });
 });

@@ -32,7 +32,7 @@ export async function createBackendClient(
   }
 
   const client = new Client(
-    { name: 'mcpose-backend', version: '1.0.0' },
+    { name: 'mcpose-backend', version: '1.1.1' },
     { capabilities: {} },
   );
 

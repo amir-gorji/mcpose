@@ -7,6 +7,11 @@ import type { BackendClient } from '../backendClient.js';
 
 function makeMockBackend(): BackendClient {
   return {
+    getServerCapabilities: vi.fn().mockReturnValue({
+      tools: {},
+      resources: {},
+      prompts: {},
+    }),
     listTools: vi.fn().mockResolvedValue({ tools: [] }),
     callTool: vi.fn().mockResolvedValue({ content: [] }),
     listResources: vi.fn().mockResolvedValue({ resources: [] }),
@@ -14,6 +19,8 @@ function makeMockBackend(): BackendClient {
     listPrompts: vi.fn().mockResolvedValue({ prompts: [] }),
     getPrompt: vi.fn().mockResolvedValue({ messages: [] }),
     setNotificationHandler: vi.fn(),
+    removeNotificationHandler: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
   } as unknown as BackendClient;
 }
 
