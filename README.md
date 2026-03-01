@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="mcpose logo" width="500" />
+</p>
+
 # mcpose
 
 A transparent middleware proxy for MCP servers - intercept, transform, and govern tool calls through composable functional middleware.
