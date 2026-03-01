@@ -1,6 +1,8 @@
 # mcpose
 
-Composable middleware proxy for MCP servers.
+A transparent middleware proxy for MCP servers - intercept, transform, and govern tool calls through composable functional middleware.
+
+You'll probably love it if you have enjoyed working with middleware functions or LEGO.
 
 ## New in 1.1.1
 
