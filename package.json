@@ -32,7 +32,7 @@
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.0.0",
-    "vitest": "^3.0.0"
+    "vitest": "^4.0.18"
   },"repository": {
     "type": "git",
     "url": "git+https://github.com/amir-gorji/mcpose.git"
