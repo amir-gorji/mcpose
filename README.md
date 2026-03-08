@@ -4,6 +4,12 @@
 
 # mcpose
 
+[![npm](https://img.shields.io/npm/v/mcpose)](https://www.npmjs.com/package/mcpose)
+[![license](https://img.shields.io/npm/l/mcpose)](./LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
+[![CI](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml/badge.svg)](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml)
+[![Dependabot](https://img.shields.io/badge/Dependabot-enabled-025E8C?logo=dependabot)](https://github.com/amir-gorji/mcpose/blob/main/.github/dependabot.yml)
+
 A transparent middleware proxy for MCP servers - intercept, transform, and govern tool calls and tool discovery through composable functional middleware.
 
 You'll probably love it if you have enjoyed working with middleware functions or LEGO.
