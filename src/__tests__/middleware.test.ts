@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { compose, pipe, type Middleware } from '../middleware.js';
+import type { ProxyContext } from '../proxyContext.js';
 
 type Req = { value: number };
 type Res = { result: number };
@@ -17,6 +18,45 @@ describe('compose()', () => {
     const pipeline = compose([identity]);
     const result = await pipeline({ value: 3 }, async (r) => ({ result: r.value }));
     expect(result).toEqual({ result: 3 });
+  });
+
+  it('passes ProxyContext through the entire middleware chain unchanged', async () => {
+    const context: ProxyContext = {
+      requestId: 'req-1',
+      transport: 'http',
+      sessionId: 'sess-1',
+    };
+    const seen: ProxyContext[] = [];
+
+    const outer: Middleware<Req, Res> = async (req, next, currentContext) => {
+      seen.push(currentContext);
+      return next(req);
+    };
+
+    const inner: Middleware<Req, Res> = async (req, next, currentContext) => {
+      seen.push(currentContext);
+      return next(req);
+    };
+
+    const pipeline = compose([outer, inner]);
+    await pipeline({ value: 1 }, async (r) => ({ result: r.value }), context);
+
+    expect(seen).toEqual([context, context]);
+  });
+
+  it('creates a default ProxyContext when one is omitted', async () => {
+    let seenContext: ProxyContext | undefined;
+
+    const capture: Middleware<Req, Res> = async (req, next, context) => {
+      seenContext = context;
+      return next(req);
+    };
+
+    const pipeline = compose([capture]);
+    await pipeline({ value: 2 }, async (r) => ({ result: r.value }));
+
+    expect(seenContext?.transport).toBe('stdio');
+    expect(seenContext?.requestId).toEqual(expect.any(String));
   });
 
   it('executes middlewares in order — outer first, inner last', async () => {
@@ -141,5 +181,25 @@ describe('pipe()', () => {
     await pipeline({ value: 0 }, async () => ({ result: 0 }));
 
     expect(order).toEqual(['outer-enter', 'inner-enter', 'inner-exit', 'outer-exit']);
+  });
+
+  it('keeps the same ProxyContext while reversing response-processing order', async () => {
+    const context: ProxyContext = { requestId: 'req-2', transport: 'stdio' };
+    const seen: string[] = [];
+
+    const innerMW: Middleware<Req, Res> = async (req, next, currentContext) => {
+      seen.push(`inner:${currentContext.requestId}`);
+      return next(req);
+    };
+
+    const outerMW: Middleware<Req, Res> = async (req, next, currentContext) => {
+      seen.push(`outer:${currentContext.requestId}`);
+      return next(req);
+    };
+
+    const pipeline = pipe([innerMW, outerMW]);
+    await pipeline({ value: 1 }, async (r) => ({ result: r.value }), context);
+
+    expect(seen).toEqual(['outer:req-2', 'inner:req-2']);
   });
 });

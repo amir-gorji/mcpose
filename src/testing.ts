@@ -21,6 +21,7 @@ import type {
 import { hasToolContent } from './core.js';
 import type { ToolMiddleware } from './core.js';
 import type { BackendClient } from './backendClient.js';
+import { createProxyContext, type ProxyContext } from './proxyContext.js';
 
 /**
  * Runs a `ToolMiddleware` and narrows result to `CallToolResult`.
@@ -34,8 +35,9 @@ export async function runToolMiddleware(
   mw: ToolMiddleware,
   req: CallToolRequest,
   next: (req: CallToolRequest) => Promise<CallToolResult>,
+  context: ProxyContext = createProxyContext(),
 ): Promise<CallToolResult> {
-  const result = await mw(req, next);
+  const result = await mw(req, next, context);
   if (!hasToolContent(result)) {
     throw new Error(
       'runToolMiddleware: middleware returned legacy toolResult shape — expected { content: [...] }',

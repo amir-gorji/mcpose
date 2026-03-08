@@ -37,7 +37,7 @@ export async function createBackendClient(
   );
 
   const transport = config.url
-    ? new StreamableHTTPClientTransport(new URL(config.url))
+    ? getHttpTransport(config.url)
     : new StdioClientTransport({
         command: config.command!,
         args: config.args ?? [],
@@ -46,3 +46,14 @@ export async function createBackendClient(
   await client.connect(transport);
   return client;
 }
+
+const getHttpTransport = (urlString: string) => {
+  const url = new URL(urlString);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(
+      `mcpose: unsupported URL protocol "${url.protocol}" — only http: and https: are allowed`,
+    );
+  }
+  return new StreamableHTTPClientTransport(url);
+};
+
