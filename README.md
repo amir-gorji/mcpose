@@ -4,17 +4,18 @@
 
 # mcpose
 
-A transparent middleware proxy for MCP servers - intercept, transform, and govern tool calls through composable functional middleware.
+A transparent middleware proxy for MCP servers - intercept, transform, and govern tool calls and tool discovery through composable functional middleware.
 
 You'll probably love it if you have enjoyed working with middleware functions or LEGO.
 
-## New in 1.1.1
+## New in 1.2.0
 
-- mirrors only upstream-advertised MCP capabilities
-- forwards abort signals and progress updates through the proxy
-- advertises and fans out list-changed notifications correctly
-- closes active HTTP proxy sessions on shutdown
-- ships a stronger `mcpose/testing` mock backend
+- `onRequest` hook — auth/request gating on HTTP proxy
+- `onError` callback — custom error handler (replaces `console.error`)
+- `maxBodyBytes` — body size cap, returns 413 (default 4 MB)
+- `maxSessions` — concurrent session cap, excess returns 503
+- `sessionTtlMs` — session TTL with auto-close
+- `createProxyContext` exported for manual context construction
 
 ---
 ---
@@ -99,12 +100,13 @@ The proxy preserves core request semantics end to end:
 - abort signals are forwarded to upstream tool, resource, and prompt calls
 - upstream progress updates are relayed back to the downstream client
 - list-changed notifications are advertised and fanned out when the upstream supports them
+- `list_tools` responses can be transformed through `listToolsMiddleware` without weakening local `hiddenTools` guarantees
 
 ---
 
 ## Middleware model
 
-Middleware follows the **onion model**: outer layers run code before *and* after inner layers. Each middleware receives the request and a `next` function to invoke the rest of the pipeline.
+Middleware follows the **onion model**: outer layers run code before *and* after inner layers. Each middleware receives the request, a `next` function to invoke the rest of the pipeline, and a normalized `ProxyContext`.
 
 ```
   request ──►
@@ -136,34 +138,50 @@ toolMiddleware: [piiMW, auditMW]
 
 `compose([outerMW, innerMW])` uses the **opposite** (outermost-first) convention — `ProxyOptions` arrays are **not** interchangeable with `compose()` arguments.
 
-A middleware can **short-circuit** by returning without calling `next`, or **handle upstream errors** by wrapping `await next(req)` in a try/catch.
+A middleware can **short-circuit** by returning without calling `next`, or **handle upstream errors** by wrapping `await next(req)` in a try/catch. Existing two-argument middleware keeps working unchanged; `mcpose` supplies `ProxyContext` as an optional third argument.
 
 ---
 
 ## API Reference
 
-### `Middleware<Req, Res>` · `ToolMiddleware` · `ResourceMiddleware` · `compose()`
+### `ProxyContext` · `Middleware<Req, Res>` · `ToolMiddleware` · `ResourceMiddleware` · `ListToolsMiddleware` · `compose()` · `createProxyContext()`
 
 ```ts
+interface ProxyContext {
+  requestId: string;
+  transport: 'stdio' | 'http';
+  sessionId?: string;
+  headers?: Readonly<Record<string, string>>;
+  signal?: AbortSignal;
+}
+
+// Builds a ProxyContext with a fresh requestId; useful in tests or custom orchestration:
+function createProxyContext(overrides?: Partial<ProxyContext>): ProxyContext;
+
 type Middleware<Req, Res> = (
   req: Req,
   next: (req: Req) => Promise<Res>,
+  context: ProxyContext,
 ) => Promise<Res>;
 
-// Convenience aliases for the two pipeline types:
+// Convenience aliases for the three pipeline types:
 type ToolMiddleware     = Middleware<CallToolRequest, CompatibilityCallToolResult>;
 type ResourceMiddleware = Middleware<ReadResourceRequest, ReadResourceResult>;
+type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
 
 function compose<Req, Res>(
   middlewares: ReadonlyArray<Middleware<Req, Res>>,
-): Middleware<Req, Res>;
+): {
+  (req: Req, next: (req: Req) => Promise<Res>): Promise<Res>;
+  (req: Req, next: (req: Req) => Promise<Res>, context: ProxyContext): Promise<Res>;
+};
 
 // Type guard — narrows CompatibilityCallToolResult to CallToolResult
 // (safe access to .content and .isError without casts):
 function hasToolContent(r: CompatibilityCallToolResult): r is CallToolResult;
 ```
 
-`compose` takes an array in **outermost-first** order. Use `hasToolContent` in middleware implementations before accessing `.content` or `.isError`, since `CompatibilityCallToolResult` also covers the legacy `{ toolResult }` shape.
+`compose` takes an array in **outermost-first** order. Use `hasToolContent` in middleware implementations before accessing `.content` or `.isError`, since `CompatibilityCallToolResult` also covers the legacy `{ toolResult }` shape. `ProxyContext.signal` carries the downstream abort signal when the transport provides one.
 
 ---
 
@@ -189,6 +207,7 @@ async function createBackendClient(config: BackendConfig): Promise<BackendClient
 interface ProxyOptions {
   toolMiddleware?:       ReadonlyArray<ToolMiddleware>;
   resourceMiddleware?:   ReadonlyArray<ResourceMiddleware>;
+  listToolsMiddleware?:  ReadonlyArray<ListToolsMiddleware>;
   passThroughTools?:     ReadonlyArray<string>;
   passThroughResources?: ReadonlyArray<string>;
   hiddenTools?:          ReadonlyArray<string>;
@@ -203,6 +222,7 @@ function createProxyServer(backend: BackendClient, options?: ProxyOptions): Serv
 |---|---|
 | `toolMiddleware` | Middleware stack for tool calls, in response-processing order (first element processes response first). |
 | `resourceMiddleware` | Middleware stack for resource reads, in response-processing order. |
+| `listToolsMiddleware` | Middleware stack for `list_tools`, in response-processing order. Local `hiddenTools` filtering still runs before and after this pipeline. |
 | `passThroughTools` | Tool names forwarded raw to upstream — middleware skipped entirely. |
 | `passThroughResources` | Resource URIs forwarded raw to upstream — middleware skipped entirely. |
 | `hiddenTools` | Tool names removed from `list_tools` **and** rejected at call time with `MethodNotFound`. |
@@ -218,9 +238,14 @@ function createProxyServer(backend: BackendClient, options?: ProxyOptions): Serv
 
 ```ts
 interface HttpProxyOptions {
-  port?: number; // Default: 3000
-  host?: string; // Default: all interfaces
-  path?: string; // Default: '/mcp'
+  port?: number;        // Default: 3000
+  host?: string;        // Default: all interfaces
+  path?: string;        // Default: '/mcp'
+  onRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>;
+  onError?: (err: unknown) => void;
+  maxBodyBytes?: number; // Default: 4 MB — returns 413 on excess
+  maxSessions?: number;  // Excess requests return 503
+  sessionTtlMs?: number; // Sessions auto-close after this duration
 }
 
 function startHttpProxy(
@@ -243,7 +268,6 @@ const server = await startHttpProxy(backend, { toolMiddleware: [loggingMW] }, { 
 On shutdown, active proxy sessions are closed before the underlying `http.Server` finishes closing.
 
 **Limitations:**
-- Sessions have no idle timeout.
 - SSE reconnect replay is not supported (no `EventStore`).
 
 ---
@@ -255,6 +279,33 @@ import { createMockBackendClient, runToolMiddleware } from 'mcpose/testing';
 ```
 
 `createMockBackendClient()` returns an in-memory backend stub with capability lookup and notification hooks. It works with both `createProxyServer()` and `startHttpProxy()` tests.
+
+---
+
+## Recipe: list_tools rewriting
+
+Use `listToolsMiddleware` when you want to rewrite the visible tool catalog without changing local routing guarantees:
+
+```ts
+import type { ListToolsMiddleware } from 'mcpose';
+
+const enrichDescriptions: ListToolsMiddleware = async (req, next, context) => {
+  const result = await next(req);
+  return {
+    ...result,
+    tools: result.tools.map((tool) =>
+      tool.name === 'wire_transfer'
+        ? {
+            ...tool,
+            description: `${tool.description ?? 'Wire transfer'} (approval required on ${context.transport})`,
+          }
+        : tool,
+    ),
+  };
+};
+```
+
+`hiddenTools` remains authoritative even if a `listToolsMiddleware` tries to add a hidden tool back into the response.
 
 ---
 

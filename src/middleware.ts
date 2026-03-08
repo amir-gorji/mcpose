@@ -11,12 +11,23 @@
  *   4. piiMW exit     → redact PII
  *   5. auditMW exit   → log clean result
  */
+import { createProxyContext, type ProxyContext } from './proxyContext.js';
 
 /** Single middleware unit. May transform req before `next` or res after. */
 export type Middleware<Req, Res> = (
   req: Req,
   next: (req: Req) => Promise<Res>,
+  context: ProxyContext,
 ) => Promise<Res>;
+
+type MiddlewarePipeline<Req, Res> = {
+  (req: Req, next: (req: Req) => Promise<Res>): Promise<Res>;
+  (
+    req: Req,
+    next: (req: Req) => Promise<Res>,
+    context: ProxyContext,
+  ): Promise<Res>;
+};
 
 /**
  * Composes middlewares into one, outermost-first (Koa-style).
@@ -27,8 +38,8 @@ export type Middleware<Req, Res> = (
  */
 export function compose<Req, Res>(
   middlewares: ReadonlyArray<Middleware<Req, Res>>,
-): Middleware<Req, Res> {
-  return (req, next) => {
+): MiddlewarePipeline<Req, Res> {
+  return ((req, next, context: ProxyContext = createProxyContext()) => {
     let index = -1;
 
     const dispatch = (i: number, currentReq: Req): Promise<Res> => {
@@ -40,11 +51,11 @@ export function compose<Req, Res>(
       const fn: Middleware<Req, Res> =
         i < middlewares.length ? middlewares[i]! : (_r, n) => next(_r);
 
-      return Promise.resolve(fn(currentReq, (r) => dispatch(i + 1, r)));
+      return Promise.resolve(fn(currentReq, (r) => dispatch(i + 1, r), context));
     };
 
     return dispatch(0, req);
-  };
+  }) as MiddlewarePipeline<Req, Res>;
 }
 
 /**
@@ -54,6 +65,6 @@ export function compose<Req, Res>(
  */
 export function pipe<Req, Res>(
   middlewares: ReadonlyArray<Middleware<Req, Res>>,
-): Middleware<Req, Res> {
+): MiddlewarePipeline<Req, Res> {
   return compose([...middlewares].reverse());
 }

@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createProxyServer, type ToolMiddleware } from '../core.js';
+import {
+  createProxyServer,
+  type ListToolsMiddleware,
+  type ToolMiddleware,
+} from '../core.js';
 import type { BackendClient } from '../backendClient.js';
+import type { ProxyContext } from '../proxyContext.js';
 import {
   ErrorCode,
   PromptListChangedNotificationSchema,
@@ -106,6 +111,102 @@ describe('createProxyServer() — hiddenTools', () => {
     const result = (await invokeHandler(server, 'tools/list')) as { tools: { name: string }[] };
     expect(result.tools).toHaveLength(3);
   });
+
+  it('still filters hidden tools after listToolsMiddleware mutates the response', async () => {
+    const backend = makeMockBackend();
+    const restoreHidden: ListToolsMiddleware = async (_req, next) => {
+      const result = await next({ method: 'tools/list', params: {} });
+      return {
+        ...result,
+        tools: [
+          ...result.tools,
+          {
+            name: 'sensitive_tool',
+            description: 'Reintroduced',
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
+      };
+    };
+    const server = createProxyServer(backend, {
+      hiddenTools: ['sensitive_tool'],
+      listToolsMiddleware: [restoreHidden],
+    });
+
+    const result = (await invokeHandler(server, 'tools/list')) as { tools: { name: string }[] };
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain('sensitive_tool');
+  });
+});
+
+describe('createProxyServer() — listToolsMiddleware', () => {
+  it('runs in response-processing order like other ProxyOptions middleware arrays', async () => {
+    const backend = makeMockBackend();
+    const order: string[] = [];
+
+    const descriptionMW: ListToolsMiddleware = async (req, next) => {
+      order.push('description-enter');
+      const result = await next(req);
+      order.push('description-exit');
+      return {
+        ...result,
+        tools: result.tools.map((tool) => ({
+          ...tool,
+          description: `${tool.description ?? ''} / described`,
+        })),
+      };
+    };
+
+    const suffixMW: ListToolsMiddleware = async (req, next) => {
+      order.push('suffix-enter');
+      const result = await next(req);
+      order.push('suffix-exit');
+      return {
+        ...result,
+        tools: result.tools.map((tool) => ({
+          ...tool,
+          description: `${tool.description ?? ''} / suffixed`,
+        })),
+      };
+    };
+
+    const server = createProxyServer(backend, {
+      listToolsMiddleware: [descriptionMW, suffixMW],
+    });
+
+    const result = (await invokeHandler(server, 'tools/list')) as {
+      tools: { description?: string }[];
+    };
+
+    expect(order).toEqual([
+      'suffix-enter',
+      'description-enter',
+      'description-exit',
+      'suffix-exit',
+    ]);
+    expect(result.tools[0]?.description).toBe('Normal / described / suffixed');
+  });
+
+  it('passes stdio ProxyContext to listToolsMiddleware by default', async () => {
+    const backend = makeMockBackend();
+    let seenContext: ProxyContext | undefined;
+
+    const captureContext: ListToolsMiddleware = async (req, next, context) => {
+      seenContext = context;
+      return next(req);
+    };
+
+    const server = createProxyServer(backend, {
+      listToolsMiddleware: [captureContext],
+    });
+
+    await invokeHandler(server, 'tools/list');
+
+    expect(seenContext?.transport).toBe('stdio');
+    expect(seenContext?.requestId).toEqual(expect.any(String));
+    expect(seenContext?.sessionId).toBeUndefined();
+    expect(seenContext?.headers).toBeUndefined();
+  });
 });
 
 describe('createProxyServer() — passThroughTools', () => {
@@ -145,6 +246,27 @@ describe('createProxyServer() — passThroughTools', () => {
     await invokeHandler(server, 'tools/call', { name: 'normal_tool', arguments: {} });
 
     expect(middlewareSpy).toHaveBeenCalledOnce();
+  });
+
+  it('passes stdio ProxyContext to tool middleware by default', async () => {
+    const backend = makeMockBackend();
+    let seenContext: ProxyContext | undefined;
+
+    const captureContext: ToolMiddleware = async (req, next, context) => {
+      seenContext = context;
+      return next(req);
+    };
+
+    const server = createProxyServer(backend, {
+      toolMiddleware: [captureContext],
+    });
+
+    await invokeHandler(server, 'tools/call', { name: 'normal_tool', arguments: {} });
+
+    expect(seenContext?.transport).toBe('stdio');
+    expect(seenContext?.requestId).toEqual(expect.any(String));
+    expect(seenContext?.sessionId).toBeUndefined();
+    expect(seenContext?.headers).toBeUndefined();
   });
 });
 
