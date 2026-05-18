@@ -1,6 +1,7 @@
 /** MCP proxy core: wires server→upstream through middleware pipelines. */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as http from 'node:http';
+import * as https from 'node:https';
 import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -29,6 +30,10 @@ import {
 import { pipe, type Middleware } from './middleware.js';
 import type { BackendClient } from './backendClient.js';
 import { createProxyContext, type ProxyContext } from './proxyContext.js';
+import type { Identity } from './identity.js';
+import type { TelemetryEvent } from './telemetry.js';
+import { createInMemoryEventStore } from './eventStore.js';
+import type { EventStore } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
 export type { ProxyContext } from './proxyContext.js';
 
@@ -79,6 +84,41 @@ export interface HttpProxyOptions {
   maxSessions?: number;
   /** Session TTL in milliseconds. Sessions are closed after this duration. */
   sessionTtlMs?: number;
+  /**
+   * Resolves caller identity from the initial session request.
+   * Called once per new session; the result is stamped on every
+   * {@link ProxyContext} within that session.
+   *
+   * Supply a JWT extractor, mTLS cert reader, API-key lookup, or any async
+   * function returning an {@link Identity}. Errors thrown here abort the
+   * session with a 401.
+   *
+   * @example
+   * resolveIdentity: extractJwtIdentity({ jwksUri: '...' })
+   */
+  resolveIdentity?: (req: http.IncomingMessage) => Identity | Promise<Identity>;
+  /**
+   * TLS options for mutual TLS (mTLS). When provided, the proxy listens on
+   * HTTPS and requires client certificates signed by the supplied CA.
+   *
+   * @example
+   * tlsOptions: {
+   *   key: fs.readFileSync('server.key'),
+   *   cert: fs.readFileSync('server.crt'),
+   *   ca: fs.readFileSync('trusted-ca.crt'),
+   *   requestCert: true,
+   *   rejectUnauthorized: true,
+   * }
+   */
+  tlsOptions?: https.ServerOptions;
+  /**
+   * Event store for SSE reconnect replay. Defaults to an in-memory store
+   * (suitable for single-instance deployments). For multi-instance / HA
+   * deployments, supply a Redis or Postgres-backed implementation.
+   *
+   * Set to `null` to disable reconnect replay entirely.
+   */
+  eventStore?: EventStore | null;
 }
 
 /** Proxy server options. */
@@ -106,6 +146,13 @@ export interface ProxyOptions {
 
   /** Resources hidden from list_resources and rejected at runtime with InvalidRequest. */
   hiddenResources?: ReadonlyArray<string>;
+
+  /**
+   * Called after every tool call with timing and outcome data.
+   * Wire to {@link https://www.npmjs.com/package/@mcpose/otel | @mcpose/otel}
+   * or any custom telemetry sink.
+   */
+  onTelemetry?: (event: TelemetryEvent) => void;
 }
 
 type ProgressToken = string | number;
@@ -333,22 +380,50 @@ export function createProxyServer(
       return filterHiddenTools(result, hiddenToolSet);
     });
 
-    server.setRequestHandler(CallToolRequestSchema, (req, extra) => {
+    server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
       const name = req.params.name;
       const requestOptions = createRequestOptions(extra);
       const context = getMiddlewareContext(extra.signal);
+      const start = Date.now();
+
+      const emitTelemetry = (outcome: TelemetryEvent['outcome']) => {
+        options.onTelemetry?.({
+          type: 'tool_call',
+          requestId: context.requestId,
+          ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+          tool: name,
+          duration_ms: Date.now() - start,
+          outcome,
+          ...(context.identity === undefined ? {} : { identity: context.identity }),
+        });
+      };
 
       if (hiddenToolSet.has(name)) {
+        emitTelemetry('rejected');
         throw new McpError(ErrorCode.MethodNotFound, `Tool not found: ${name}`);
       }
       if (passThroughToolSet.has(name)) {
-        return backend.callTool(req.params, undefined, requestOptions);
+        try {
+          const result = await backend.callTool(req.params, undefined, requestOptions);
+          emitTelemetry('success');
+          return result;
+        } catch (err) {
+          emitTelemetry('error');
+          throw err;
+        }
       }
-      return toolPipeline(
-        req,
-        (r) => backend.callTool(r.params, undefined, requestOptions),
-        context,
-      );
+      try {
+        const result = await toolPipeline(
+          req,
+          (r) => backend.callTool(r.params, undefined, requestOptions),
+          context,
+        );
+        emitTelemetry('success');
+        return result;
+      } catch (err) {
+        emitTelemetry('error');
+        throw err;
+      }
     });
   }
 
@@ -439,30 +514,33 @@ function applyBodySizeLimit(
  * Starts the proxy over Streamable HTTP with stateful sessions.
  *
  * Sessions keyed by `mcp-session-id`. Upstream notifications fanned out to
- * all active sessions via their GET SSE stream.
+ * all active sessions via their GET SSE stream. Dropped connections can
+ * replay missed notifications via the built-in in-memory EventStore (or a
+ * custom persistent store for multi-instance deployments).
  *
- * **Limitations:**
- * - Sessions never expire.
- * - No `EventStore` → SSE reconnect replay unsupported.
- *
- * @returns Promise resolving to the listening `http.Server`.
+ * @returns Promise resolving to the listening `http.Server` (or `https.Server`
+ * when `tlsOptions` is supplied).
  */
 export function startHttpProxy(
   backend: BackendClient,
   options: ProxyOptions = {},
   httpOptions: HttpProxyOptions = {},
 ): Promise<http.Server> {
-  const mcpPath = httpOptions.path ?? '/mcp';
-  const port    = httpOptions.port ?? 3000;
-  const host    = httpOptions.host;
+  const mcpPath   = httpOptions.path ?? '/mcp';
+  const port      = httpOptions.port ?? 3000;
+  const host      = httpOptions.host;
+  const eventStore = httpOptions.eventStore === null
+    ? undefined
+    : (httpOptions.eventStore ?? createInMemoryEventStore());
 
-  // session ID → { transport, proxyServer }
+  // session ID → { transport, proxyServer, identity }
   const sessions = new Map<string, {
     transport: StreamableHTTPServerTransport;
     proxyServer: Server;
+    identity?: Identity;
   }>();
 
-  const server = http.createServer((req, res) => {
+  const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
     const handle = async () => {
       if (httpOptions.onRequest !== undefined) {
         let allowed: boolean;
@@ -489,53 +567,85 @@ export function startHttpProxy(
 
       const sessionId = req.headers['mcp-session-id'];
       const headers = normalizeHeaders(req.headers);
-      const requestContext: Omit<ProxyContext, 'requestId'> = {
-        transport: 'http',
-        ...(typeof sessionId === 'string' ? { sessionId } : {}),
-        ...(headers === undefined ? {} : { headers }),
-      };
 
-      await httpProxyContext.run(requestContext, async () => {
-        if (typeof sessionId === 'string') {
-          // Route to existing session
-          const session = sessions.get(sessionId);
-          if (!session) { res.writeHead(404).end(); return; }
-          await session.transport.handleRequest(req, res);
-        } else {
-          // New session (initialize request)
-          if (httpOptions.maxSessions !== undefined && sessions.size >= httpOptions.maxSessions) {
-            res.writeHead(503).end();
-            return;
-          }
-          const proxyServer = createProxyServer(backend, options);
-          const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: randomUUID,
-            onsessioninitialized: (id) => {
-              sessions.set(id, { transport, proxyServer });
-              if (httpOptions.sessionTtlMs !== undefined) {
-                const timer = setTimeout(() => {
-                  const session = sessions.get(id);
-                  if (session) {
-                    sessions.delete(id);
-                    void session.proxyServer.close();
-                  }
-                }, httpOptions.sessionTtlMs);
-                timer.unref();
+      await httpProxyContext.run(
+        // Base context — requestId added per-request by getMiddlewareContext()
+        { transport: 'http' } as Omit<ProxyContext, 'requestId'>,
+        async () => {
+          if (typeof sessionId === 'string') {
+            // Route to existing session — stamp its resolved identity into context
+            const session = sessions.get(sessionId);
+            if (!session) { res.writeHead(404).end(); return; }
+            const requestContext: Omit<ProxyContext, 'requestId'> = {
+              transport: 'http',
+              sessionId,
+              ...(headers === undefined ? {} : { headers }),
+              ...(session.identity === undefined ? {} : { identity: session.identity }),
+            };
+            await httpProxyContext.run(requestContext, () =>
+              session.transport.handleRequest(req, res),
+            );
+          } else {
+            // New session (initialize request)
+            if (httpOptions.maxSessions !== undefined && sessions.size >= httpOptions.maxSessions) {
+              res.writeHead(503).end();
+              return;
+            }
+
+            // Resolve identity once for the lifetime of this session
+            let identity: Identity | undefined;
+            if (httpOptions.resolveIdentity !== undefined) {
+              try {
+                identity = await httpOptions.resolveIdentity(req);
+              } catch {
+                if (!res.headersSent) res.writeHead(401).end();
+                return;
               }
-            },
-            onsessionclosed: (id) => { sessions.delete(id); },
-          });
-          await proxyServer.connect(transport);
-          await transport.handleRequest(req, res);
-        }
-      });
+            }
+
+            const proxyServer = createProxyServer(backend, options);
+            const transport = new StreamableHTTPServerTransport({
+              sessionIdGenerator: randomUUID,
+              ...(eventStore ? { eventStore } : {}),
+              onsessioninitialized: (id) => {
+                sessions.set(id, { transport, proxyServer, identity });
+                if (httpOptions.sessionTtlMs !== undefined) {
+                  const timer = setTimeout(() => {
+                    const session = sessions.get(id);
+                    if (session) {
+                      sessions.delete(id);
+                      void session.proxyServer.close();
+                    }
+                  }, httpOptions.sessionTtlMs);
+                  timer.unref();
+                }
+              },
+              onsessionclosed: (id) => { sessions.delete(id); },
+            });
+
+            const requestContext: Omit<ProxyContext, 'requestId'> = {
+              transport: 'http',
+              ...(headers === undefined ? {} : { headers }),
+              ...(identity === undefined ? {} : { identity }),
+            };
+            await proxyServer.connect(transport);
+            await httpProxyContext.run(requestContext, () =>
+              transport.handleRequest(req, res),
+            );
+          }
+        },
+      );
     };
 
     handle().catch((err) => {
       if (!res.headersSent) res.writeHead(500).end();
       (httpOptions.onError ?? console.error)(err);
     });
-  });
+  };
+
+  const server: http.Server = httpOptions.tlsOptions
+    ? https.createServer(httpOptions.tlsOptions, requestHandler)
+    : http.createServer(requestHandler);
 
   const rawClose = server.close.bind(server);
   let shuttingDown = false;
