@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   createProxyServer,
   type ListToolsMiddleware,
+  type ProxyOptions,
   type ToolMiddleware,
 } from '../core.js';
 import type { BackendClient } from '../backendClient.js';
@@ -102,6 +103,15 @@ describe('createProxyServer() — hiddenTools', () => {
     await expect(
       invokeHandler(server, 'tools/call', { name: 'sensitive_tool', arguments: {} }),
     ).rejects.toMatchObject({ code: ErrorCode.MethodNotFound });
+  });
+
+  it('includes TOOL_HIDDEN rejection reason in error data', async () => {
+    const backend = makeMockBackend();
+    const server = createProxyServer(backend, { hiddenTools: ['sensitive_tool'] });
+
+    await expect(
+      invokeHandler(server, 'tools/call', { name: 'sensitive_tool', arguments: {} }),
+    ).rejects.toMatchObject({ data: { rejectionReason: 'TOOL_HIDDEN' } });
   });
 
   it('returns full tool list when hiddenTools is empty', async () => {
@@ -294,6 +304,15 @@ describe('createProxyServer() — hiddenResources', () => {
     ).rejects.toMatchObject({ code: ErrorCode.InvalidRequest });
   });
 
+  it('includes RESOURCE_HIDDEN rejection reason in error data', async () => {
+    const backend = makeMockBackend();
+    const server = createProxyServer(backend, { hiddenResources: ['res://hidden'] });
+
+    await expect(
+      invokeHandler(server, 'resources/read', { uri: 'res://hidden' }),
+    ).rejects.toMatchObject({ data: { rejectionReason: 'RESOURCE_HIDDEN' } });
+  });
+
   it('returns full resource list when hiddenResources is empty', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, { hiddenResources: [] });
@@ -440,5 +459,54 @@ describe('createProxyServer() — request options', () => {
         sendNotification: vi.fn().mockResolvedValue(undefined),
       },
     );
+  });
+});
+
+describe('createProxyServer() — onTelemetry', () => {
+  it('emits a success event after a successful tool call', async () => {
+    const backend = makeMockBackend();
+    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] = [];
+    const server = createProxyServer(backend, { onTelemetry: (e) => events.push(e) });
+
+    await invokeHandler(server, 'tools/call', { name: 'echo', arguments: { msg: 'hi' } });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'tool_call', tool: 'echo', outcome: 'success' });
+    expect(typeof events[0].duration_ms).toBe('number');
+  });
+
+  it('emits a rejected event with TOOL_HIDDEN when a hidden tool is called', async () => {
+    const backend = makeMockBackend();
+    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] = [];
+    const server = createProxyServer(backend, {
+      hiddenTools: ['sensitive_tool'],
+      onTelemetry: (e) => events.push(e),
+    });
+
+    await expect(
+      invokeHandler(server, 'tools/call', { name: 'sensitive_tool', arguments: {} }),
+    ).rejects.toBeDefined();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'tool_call',
+      tool: 'sensitive_tool',
+      outcome: 'rejected',
+      rejectionReason: 'TOOL_HIDDEN',
+    });
+  });
+
+  it('emits an error event when the upstream throws', async () => {
+    const backend = makeMockBackend();
+    vi.mocked(backend.callTool).mockRejectedValueOnce(new Error('upstream failure'));
+    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] = [];
+    const server = createProxyServer(backend, { onTelemetry: (e) => events.push(e) });
+
+    await expect(
+      invokeHandler(server, 'tools/call', { name: 'echo', arguments: {} }),
+    ).rejects.toBeDefined();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'tool_call', tool: 'echo', outcome: 'error' });
   });
 });

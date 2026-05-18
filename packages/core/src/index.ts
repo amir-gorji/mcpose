@@ -14,6 +14,8 @@ export type { TelemetryEvent } from './telemetry.js';
 export type { PersistentEventStore } from './eventStore.js';
 export { createInMemoryEventStore } from './eventStore.js';
 
+export type { RejectionReason } from './rejection.js';
+
 export type {
   ProxyOptions,
   HttpProxyOptions,

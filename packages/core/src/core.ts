@@ -34,6 +34,8 @@ import type { Identity } from './identity.js';
 import type { TelemetryEvent } from './telemetry.js';
 import { createInMemoryEventStore } from './eventStore.js';
 import type { EventStore } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { rejectionMcpError } from './rejection.js';
+import type { RejectionReason } from './rejection.js';
 
 export type { ProxyContext } from './proxyContext.js';
 
@@ -386,7 +388,10 @@ export function createProxyServer(
       const context = getMiddlewareContext(extra.signal);
       const start = Date.now();
 
-      const emitTelemetry = (outcome: TelemetryEvent['outcome']) => {
+      const emitTelemetry = (
+        outcome: TelemetryEvent['outcome'],
+        rejectionReason?: RejectionReason,
+      ) => {
         options.onTelemetry?.({
           type: 'tool_call',
           requestId: context.requestId,
@@ -394,13 +399,14 @@ export function createProxyServer(
           tool: name,
           duration_ms: Date.now() - start,
           outcome,
+          ...(rejectionReason === undefined ? {} : { rejectionReason }),
           ...(context.identity === undefined ? {} : { identity: context.identity }),
         });
       };
 
       if (hiddenToolSet.has(name)) {
-        emitTelemetry('rejected');
-        throw new McpError(ErrorCode.MethodNotFound, `Tool not found: ${name}`);
+        emitTelemetry('rejected', 'TOOL_HIDDEN');
+        throw rejectionMcpError('TOOL_HIDDEN', ErrorCode.MethodNotFound, `Tool not found: ${name}`);
       }
       if (passThroughToolSet.has(name)) {
         try {
@@ -442,7 +448,7 @@ export function createProxyServer(
       const context = getMiddlewareContext(extra.signal);
 
       if (hiddenResourceSet.has(uri)) {
-        throw new McpError(ErrorCode.InvalidRequest, `Resource not found: ${uri}`);
+        throw rejectionMcpError('RESOURCE_HIDDEN', ErrorCode.InvalidRequest, `Resource not found: ${uri}`);
       }
       if (passThroughResourceSet.has(uri)) {
         return backend.readResource(req.params, requestOptions);
