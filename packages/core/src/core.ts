@@ -421,6 +421,12 @@ function applyBodySizeLimit(
   ): boolean => {
     if (chunk !== null && total + chunk.length > maxBodyBytes) {
       if (!res.headersSent) res.writeHead(413).end();
+      // Mute the response for downstream writers (the SDK transport will
+      // observe the destroyed request and try to send its own error).
+      const muted = res as unknown as Record<string, unknown>;
+      muted.writeHead = () => res;
+      muted.write = () => true;
+      muted.end = () => res;
       req.destroy(new Error('Request body too large'));
       return false;
     }

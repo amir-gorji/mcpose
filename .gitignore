@@ -43,3 +43,9 @@ Thumbs.db
 
 # tsup cache
 .tsup/
+
+# Turborepo
+.turbo/
+
+# pnpm
+.pnpm-store/

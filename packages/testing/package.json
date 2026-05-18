@@ -1,0 +1,37 @@
+{
+  "name": "@mcpose/testing",
+  "version": "2.0.0-alpha.0",
+  "description": "Compliance testing utilities for mcpose — audit chain assertions, scenario harness",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "keywords": ["mcp", "testing", "compliance", "audit", "fintech"],
+  "author": "Amir Gorji",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amir-gorji/mcpose.git",
+    "directory": "packages/testing"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "ts:ci": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "mcpose": ">=2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0",
+    "mcpose": "workspace:*"
+  }
+}

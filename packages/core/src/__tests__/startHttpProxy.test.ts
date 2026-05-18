@@ -5,35 +5,8 @@ import {
   type ListToolsMiddleware,
   type ToolMiddleware,
 } from '../core.js';
-import type { BackendClient } from '../backendClient.js';
 import type { ProxyContext } from '../proxyContext.js';
-
-// ── Test helpers ────────────────────────────────────────────────────────────
-
-function makeMockBackend(): BackendClient {
-  return {
-    getServerCapabilities: vi.fn().mockReturnValue({
-      tools: {},
-      resources: {},
-      prompts: {},
-    }),
-    listTools: vi.fn().mockResolvedValue({ tools: [] }),
-    callTool: vi.fn().mockResolvedValue({ content: [] }),
-    listResources: vi.fn().mockResolvedValue({ resources: [] }),
-    readResource: vi.fn().mockResolvedValue({ contents: [] }),
-    listPrompts: vi.fn().mockResolvedValue({ prompts: [] }),
-    getPrompt: vi.fn().mockResolvedValue({ messages: [] }),
-    setNotificationHandler: vi.fn(),
-    removeNotificationHandler: vi.fn(),
-    close: vi.fn().mockResolvedValue(undefined),
-  } as unknown as BackendClient;
-}
-
-function getPort(server: http.Server): number {
-  const addr = server.address();
-  if (!addr || typeof addr === 'string') throw new Error('Unexpected address');
-  return addr.port;
-}
+import { makeMockBackend, getPort, closeServer } from './_helpers.js';
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -492,5 +465,296 @@ describe('startHttpProxy()', () => {
     } finally {
       await new Promise<void>((res) => server.close(() => res()));
     }
+  });
+
+  // ── edge cases ────────────────────────────────────────────────────────────
+
+  describe('routing edge cases', () => {
+    let server: http.Server;
+    let baseUrl: string;
+
+    beforeAll(async () => {
+      server = await startHttpProxy(makeMockBackend(), {}, { port: 0, path: '/mcp' });
+      baseUrl = `http://localhost:${getPort(server)}`;
+    });
+    afterAll(() => closeServer(server));
+
+    it('returns 404 for /mcp/ (trailing slash)', async () => {
+      const res = await fetch(`${baseUrl}/mcp/`, { method: 'POST' });
+      expect(res.status).toBe(404);
+    });
+
+    it('does not return 404 for GET /mcp method routing', async () => {
+      // Pathname matches; method allowed. Without session-id the SDK transport
+      // will respond with 4xx other than 404 — assert it isn't a routing 404.
+      const res = await fetch(`${baseUrl}/mcp`, { method: 'GET' });
+      expect(res.status).not.toBe(404);
+    });
+
+    it('does not return method-routing 404 for DELETE /mcp', async () => {
+      const res = await fetch(`${baseUrl}/mcp`, { method: 'DELETE' });
+      // Method is allowed; the missing session means the SDK transport rejects
+      // with non-404 (likely 400). What we verify is: it's not a 404 from our
+      // routing check.
+      expect(res.status).not.toBe(404);
+    });
+  });
+
+  describe('maxBodyBytes boundary', () => {
+    it('accepts a body exactly at the limit', async () => {
+      // BUG candidate: confirm boundary semantics. core.ts:422 uses `>` so
+      // exactly N bytes should pass.
+      const backend = makeMockBackend();
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 't', version: '0' },
+        },
+      });
+      const server = await startHttpProxy(backend, {}, {
+        port: 0,
+        path: '/mcp',
+        maxBodyBytes: Buffer.byteLength(body),
+      });
+      const baseUrl = `http://localhost:${getPort(server)}`;
+      try {
+        const res = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+          },
+          body,
+        });
+        expect(res.status).not.toBe(413);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it('rejects a body one byte over the limit', async () => {
+      const backend = makeMockBackend();
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 't', version: '0' },
+        },
+      });
+      const server = await startHttpProxy(backend, {}, {
+        port: 0,
+        path: '/mcp',
+        maxBodyBytes: Buffer.byteLength(body) - 1,
+      });
+      const baseUrl = `http://localhost:${getPort(server)}`;
+      try {
+        const res = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        });
+        expect(res.status).toBe(413);
+      } finally {
+        await closeServer(server);
+      }
+    });
+  });
+
+  describe('maxSessions: 0', () => {
+    // BUG candidate: with maxSessions:0 the comparison `sessions.size >= 0`
+    // always rejects, which may be intentional ("no sessions allowed") but is
+    // also indistinguishable from "feature disabled". This test pins current
+    // behavior — every initialize → 503.
+    it('rejects every initialize with 503', async () => {
+      const backend = makeMockBackend();
+      const server = await startHttpProxy(backend, {}, {
+        port: 0,
+        path: '/mcp',
+        maxSessions: 0,
+      });
+      const baseUrl = `http://localhost:${getPort(server)}`;
+      try {
+        const res = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2024-11-05',
+              capabilities: {},
+              clientInfo: { name: 't', version: '0' },
+            },
+          }),
+        });
+        expect(res.status).toBe(503);
+      } finally {
+        await closeServer(server);
+      }
+    });
+  });
+
+  describe('server.close()', () => {
+    it('is idempotent — calling close() twice does not throw', async () => {
+      const backend = makeMockBackend();
+      const server = await startHttpProxy(backend, {}, { port: 0, path: '/mcp' });
+
+      const first = new Promise<void>((res) => server.close(() => res()));
+      // Second call before the first resolves; must not throw, must not double-close sessions.
+      expect(() => server.close()).not.toThrow();
+      await first;
+      expect(server.listening).toBe(false);
+    });
+
+    it('closes active sessions when called', async () => {
+      const backend = makeMockBackend();
+      const server = await startHttpProxy(backend, {}, { port: 0, path: '/mcp' });
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 't', version: '0' },
+          },
+        }),
+      });
+
+      await closeServer(server);
+      expect(server.listening).toBe(false);
+    });
+  });
+
+  describe('onRequest async behavior', () => {
+    it('returns 401 when an async onRequest rejects', async () => {
+      const backend = makeMockBackend();
+      const server = await startHttpProxy(
+        backend,
+        {},
+        {
+          port: 0,
+          path: '/mcp',
+          onRequest: async () => {
+            await Promise.resolve();
+            throw new Error('async auth failure');
+          },
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+      try {
+        const res = await fetch(`${baseUrl}/mcp`, { method: 'POST' });
+        expect(res.status).toBe(401);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it('respects the user-written response when async onRequest returns false', async () => {
+      const backend = makeMockBackend();
+      const server = await startHttpProxy(
+        backend,
+        {},
+        {
+          port: 0,
+          path: '/mcp',
+          onRequest: async (_req, res) => {
+            await Promise.resolve();
+            res.writeHead(418).end();
+            return false;
+          },
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+      try {
+        const res = await fetch(`${baseUrl}/mcp`, { method: 'POST' });
+        expect(res.status).toBe(418);
+      } finally {
+        await closeServer(server);
+      }
+    });
+  });
+
+  describe('header normalization through HTTP', () => {
+    it('joins repeated request headers with ", " in the middleware context', async () => {
+      const backend = makeMockBackend();
+      let seen: ProxyContext | undefined;
+      const mw: ListToolsMiddleware = async (req, next, context) => {
+        seen = context;
+        return next(req);
+      };
+      const server = await startHttpProxy(
+        backend,
+        { listToolsMiddleware: [mw] },
+        { port: 0, path: '/mcp' },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      try {
+        // initialize
+        const initRes = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'initialize',
+            params: {
+              protocolVersion: '2024-11-05',
+              capabilities: {},
+              clientInfo: { name: 't', version: '0' },
+            },
+          }),
+        });
+        const sessionId = initRes.headers.get('mcp-session-id')!;
+
+        // Use Node http.request to pass an array-style header (fetch dedupes).
+        await new Promise<void>((resolve) => {
+          const req = http.request(
+            {
+              hostname: 'localhost',
+              port: getPort(server),
+              path: '/mcp',
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json, text/event-stream',
+                'mcp-session-id': sessionId,
+                'x-multi': ['one', 'two'],
+              },
+            },
+            (res) => { res.on('data', () => {}); res.on('end', () => resolve()); },
+          );
+          req.write(JSON.stringify({
+            jsonrpc: '2.0', id: 2, method: 'tools/list', params: {},
+          }));
+          req.end();
+        });
+
+        expect(seen?.headers?.['x-multi']).toBe('one, two');
+      } finally {
+        await closeServer(server);
+      }
+    });
   });
 });

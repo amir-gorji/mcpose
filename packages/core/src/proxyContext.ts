@@ -14,7 +14,7 @@ export function createProxyContext(
   overrides: Partial<ProxyContext> = {},
 ): ProxyContext {
   return {
-    requestId: overrides.requestId ?? randomUUID(),
+    requestId: overrides.requestId || randomUUID(),
     transport: overrides.transport ?? 'stdio',
     ...(overrides.sessionId === undefined
       ? {}
