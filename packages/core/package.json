@@ -37,7 +37,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "ts:ci": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
   },
   "peerDependencies": {
