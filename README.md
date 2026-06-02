@@ -10,20 +10,23 @@
 [![CI](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml/badge.svg)](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-025E8C?logo=dependabot)](https://github.com/amir-gorji/mcpose/blob/main/.github/dependabot.yml)
 
-A transparent middleware proxy for MCP servers - intercept, transform, and govern tool calls and tool discovery through composable functional middleware.
+The audit and governance layer for MCP.
 
-You'll probably love it if you have enjoyed working with middleware functions or LEGO.
-
-## New in 1.2.0
-
-- `onRequest` hook — auth/request gating on HTTP proxy
-- `onError` callback — custom error handler (replaces `console.error`)
-- `maxBodyBytes` — body size cap, returns 413 (default 4 MB)
-- `maxSessions` — concurrent session cap, excess returns 503
-- `sessionTtlMs` — session TTL with auto-close
-- `createProxyContext` exported for manual context construction
+mcpose is a transparent middleware proxy for MCP servers. It intercepts, transforms, and governs tool calls through composable functional middleware — and with `@mcpose/audit`, produces tamper-evident, compliance-grade audit trails that satisfy DORA Article 17 and SR 11-7 requirements.
 
 ---
+
+## New in 2.0
+
+- **`@mcpose/audit`** — HMAC-chained audit events, Merkle-proof `ReplayManifest`, AES-256-GCM encryption for high-sensitivity tiers, `createSensitivityResolver`, `createDefaultSigningKeyProvider`
+- **`@mcpose/testing`** — compliance assertion helpers: `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`
+- **Identity resolution** — `resolveIdentity` hook on `HttpProxyOptions`; resolved `Identity` stamped on every `ProxyContext`
+- **Agent delegation chain** — `delegatedFrom?: Identity[]` on `ProxyContext` for A2A handoff recording
+- **mTLS** — pass `tlsOptions` to `startHttpProxy` for mutual TLS
+- **SSE reconnect replay** — built-in in-memory `EventStore` with `PersistentEventStore` interface for Redis/Postgres adapters
+- **Session lifecycle hook** — `onSessionClosed` on `HttpProxyOptions`; wire `auditHandle.closeSession` here to flush `ReplayManifest` on session end
+- **Structured rejection reasons** — `RejectionReason` in MCP error `data` field on every blocked call
+
 ---
 
 ## Background
@@ -48,6 +51,12 @@ npm install mcpose
 
 ```bash
 npm install @modelcontextprotocol/sdk@>=1.0.0
+```
+
+For compliance audit trails:
+
+```bash
+npm install @mcpose/audit
 ```
 
 ---
@@ -85,16 +94,18 @@ await startProxy(backend, {
 ```
 ┌──────────────┐        ┌────────────────────────────────┐        ┌────────────────────┐
 │  LLM client  │ ◄────► │  mcpose                        │ ◄────► │  Upstream MCP      │
-│  (Claude,    │        │  · visibility filters          │        │  server            │
-│   Cursor…)   │        │  · middleware pipelines        │        │  (stdio or HTTP)   │
-└──────────────┘        └────────────────────────────────┘        └────────────────────┘
+│  (Claude,    │        │  · identity resolution         │        │  server            │
+│   Cursor…)   │        │  · visibility filters          │        │  (stdio or HTTP)   │
+└──────────────┘        │  · middleware pipelines        │        └────────────────────┘
+                        │  · audit trail                 │
+                        └────────────────────────────────┘
 ```
 
 For each supported tool or resource, mcpose picks one of three routing paths:
 
 | Path | Option | Behavior |
 |---|---|---|
-| **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses; rejected with an error at call time |
+| **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses; rejected with `TOOL_HIDDEN` / `RESOURCE_HIDDEN` at call time |
 | **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded raw to upstream — all middleware skipped |
 | **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline |
 
@@ -130,7 +141,7 @@ Middleware follows the **onion model**: outer layers run code before *and* after
   ◄── response
 ```
 
-**Array order in `ProxyOptions`** uses **response-processing order**: the first element processes the response *first* (innermost layer). `ProxyOptions` calls `pipe()` internally — no need to wrap manually. To guarantee audit never sees raw PII:
+**Array order in `ProxyOptions`** uses **response-processing order**: the first element processes the response *first* (innermost layer). To guarantee audit never sees raw PII:
 
 ```ts
 toolMiddleware: [piiMW, auditMW]
@@ -143,8 +154,6 @@ toolMiddleware: [piiMW, auditMW]
 ```
 
 `compose([outerMW, innerMW])` uses the **opposite** (outermost-first) convention — `ProxyOptions` arrays are **not** interchangeable with `compose()` arguments.
-
-A middleware can **short-circuit** by returning without calling `next`, or **handle upstream errors** by wrapping `await next(req)` in a try/catch. Existing two-argument middleware keeps working unchanged; `mcpose` supplies `ProxyContext` as an optional third argument.
 
 ---
 
@@ -159,9 +168,24 @@ interface ProxyContext {
   sessionId?: string;
   headers?: Readonly<Record<string, string>>;
   signal?: AbortSignal;
+  /** Resolved caller identity. Present when resolveIdentity is configured. */
+  identity?: Identity;
+  /** Agent delegation chain — populated from A2A handoff headers. */
+  delegatedFrom?: Identity[];
+  /** Reserved for v3 policy engine. */
+  policy?: never;
 }
 
-// Builds a ProxyContext with a fresh requestId; useful in tests or custom orchestration:
+interface Identity {
+  sub: string;
+  type: 'human' | 'agent' | 'service';
+  displayName?: string;
+  roles: string[];
+  claims: Record<string, unknown>;
+  resolvedAt: string;  // ISO 8601
+  source: 'jwt' | 'mtls' | 'apikey' | 'custom';
+}
+
 function createProxyContext(overrides?: Partial<ProxyContext>): ProxyContext;
 
 type Middleware<Req, Res> = (
@@ -170,24 +194,13 @@ type Middleware<Req, Res> = (
   context: ProxyContext,
 ) => Promise<Res>;
 
-// Convenience aliases for the three pipeline types:
 type ToolMiddleware     = Middleware<CallToolRequest, CompatibilityCallToolResult>;
 type ResourceMiddleware = Middleware<ReadResourceRequest, ReadResourceResult>;
 type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
 
-function compose<Req, Res>(
-  middlewares: ReadonlyArray<Middleware<Req, Res>>,
-): {
-  (req: Req, next: (req: Req) => Promise<Res>): Promise<Res>;
-  (req: Req, next: (req: Req) => Promise<Res>, context: ProxyContext): Promise<Res>;
-};
-
 // Type guard — narrows CompatibilityCallToolResult to CallToolResult
-// (safe access to .content and .isError without casts):
 function hasToolContent(r: CompatibilityCallToolResult): r is CallToolResult;
 ```
-
-`compose` takes an array in **outermost-first** order. Use `hasToolContent` in middleware implementations before accessing `.content` or `.isError`, since `CompatibilityCallToolResult` also covers the legacy `{ toolResult }` shape. `ProxyContext.signal` carries the downstream abort signal when the transport provides one.
 
 ---
 
@@ -203,8 +216,6 @@ interface BackendConfig {
 async function createBackendClient(config: BackendConfig): Promise<BackendClient>;
 ```
 
-`BackendClient` is an alias for the SDK `Client`. It throws if neither `command` nor `url` is provided, or if the connection fails.
-
 ---
 
 ### `ProxyOptions` · `startProxy()` · `createProxyServer()`
@@ -218,25 +229,14 @@ interface ProxyOptions {
   passThroughResources?: ReadonlyArray<string>;
   hiddenTools?:          ReadonlyArray<string>;
   hiddenResources?:      ReadonlyArray<string>;
+  onTelemetry?:          (event: TelemetryEvent) => void;
 }
 
 async function startProxy(backend: BackendClient, options?: ProxyOptions): Promise<void>;
 function createProxyServer(backend: BackendClient, options?: ProxyOptions): Server;
 ```
 
-| Option | Description |
-|---|---|
-| `toolMiddleware` | Middleware stack for tool calls, in response-processing order (first element processes response first). |
-| `resourceMiddleware` | Middleware stack for resource reads, in response-processing order. |
-| `listToolsMiddleware` | Middleware stack for `list_tools`, in response-processing order. Local `hiddenTools` filtering still runs before and after this pipeline. |
-| `passThroughTools` | Tool names forwarded raw to upstream — middleware skipped entirely. |
-| `passThroughResources` | Resource URIs forwarded raw to upstream — middleware skipped entirely. |
-| `hiddenTools` | Tool names removed from `list_tools` **and** rejected at call time with `MethodNotFound`. |
-| `hiddenResources` | Resource URIs removed from `list_resources` **and** rejected at call time with `InvalidRequest`. |
-
-`createProxyServer` mirrors only the upstream capabilities exposed by `backend.getServerCapabilities()`. Unsupported prompt, resource, and tool endpoints are not advertised or registered.
-
-`startProxy` connects the proxy to a `StdioServerTransport`. `createProxyServer` returns the configured `Server` without connecting — useful for testing request handlers without a live transport.
+`onTelemetry` fires after every tool call with timing, outcome, tool name, and identity. Wire it to `@mcpose/otel` or any custom sink.
 
 ---
 
@@ -244,14 +244,22 @@ function createProxyServer(backend: BackendClient, options?: ProxyOptions): Serv
 
 ```ts
 interface HttpProxyOptions {
-  port?: number;        // Default: 3000
-  host?: string;        // Default: all interfaces
-  path?: string;        // Default: '/mcp'
+  port?: number;         // Default: 3000
+  host?: string;         // Default: all interfaces
+  path?: string;         // Default: '/mcp'
   onRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>;
   onError?: (err: unknown) => void;
   maxBodyBytes?: number; // Default: 4 MB — returns 413 on excess
   maxSessions?: number;  // Excess requests return 503
   sessionTtlMs?: number; // Sessions auto-close after this duration
+  /** Resolves caller identity once per session. Errors abort the session with 401. */
+  resolveIdentity?: (req: http.IncomingMessage) => Identity | Promise<Identity>;
+  /** mTLS — pass Node's https.ServerOptions (key, cert, ca, requestCert, rejectUnauthorized). */
+  tlsOptions?: https.ServerOptions;
+  /** SSE reconnect replay store. Defaults to in-memory. Pass null to disable. */
+  eventStore?: PersistentEventStore | null;
+  /** Called when a session closes. Wire auditHandle.closeSession here to flush ReplayManifest. */
+  onSessionClosed?: (sessionId: string) => void;
 }
 
 function startHttpProxy(
@@ -261,20 +269,34 @@ function startHttpProxy(
 ): Promise<http.Server>;
 ```
 
-Starts the proxy over Streamable HTTP with stateful sessions. Each client connection is assigned an `mcp-session-id`. Upstream list-change notifications (`tools/list_changed`, `resources/list_changed`, `prompts/list_changed`) are fanned out to all active sessions when the upstream advertises them.
-
 ```ts
 import { createBackendClient, startHttpProxy } from 'mcpose';
 
 const backend = await createBackendClient({ url: 'http://upstream-mcp-server/mcp' });
 const server = await startHttpProxy(backend, { toolMiddleware: [loggingMW] }, { port: 8080 });
-// HTTP server is now listening on port 8080 at /mcp
 ```
 
 On shutdown, active proxy sessions are closed before the underlying `http.Server` finishes closing.
 
-**Limitations:**
-- SSE reconnect replay is not supported (no `EventStore`).
+---
+
+### `RejectionReason`
+
+Every blocked call embeds a `RejectionReason` in the MCP error `data` field. The top-level error code is unchanged, so existing clients that only inspect the code are unaffected. Audit middleware and agents can inspect `error.data.rejectionReason` for programmatic handling.
+
+```ts
+type RejectionReason =
+  | 'TOOL_HIDDEN'           // tool exists but is hidden from this caller
+  | 'RESOURCE_HIDDEN'       // resource exists but is hidden from this caller
+  | 'POLICY_DENIED'         // v3: RBAC policy blocked the call
+  | 'IDENTITY_UNRESOLVED'   // v3: identity could not be established
+  | 'CONSENT_MISSING'       // v3: GDPR/CCPA consent gate blocked the call
+  | 'SENSITIVITY_BLOCKED'   // v3: data sensitivity policy blocked the call
+  | 'DELEGATION_INVALID'    // v3: agent delegation chain is invalid or expired
+  | 'BUDGET_EXCEEDED'       // v3: cost budget for this session/user exceeded
+  | 'SESSION_LIMIT'         // max concurrent sessions reached (HTTP 503)
+  | 'BODY_LIMIT';           // request body exceeded maxBodyBytes (HTTP 413)
+```
 
 ---
 
@@ -288,9 +310,223 @@ import { createMockBackendClient, runToolMiddleware } from 'mcpose/testing';
 
 ---
 
-## Recipe: list_tools rewriting
+## `@mcpose/audit`
 
-Use `listToolsMiddleware` when you want to rewrite the visible tool catalog without changing local routing guarantees:
+```bash
+npm install @mcpose/audit
+```
+
+`@mcpose/audit` provides a tamper-evident, compliance-grade audit trail for every tool call. It produces an HMAC-chained log of `AuditEvent` records and a `ReplayManifest` per session — a Merkle-proof document that lets auditors verify what happened without re-executing anything.
+
+### Sensitivity tiers
+
+Every audit event is classified by a `SensitivityTier`:
+
+| Tier | Stored fields |
+|---|---|
+| `'low'` | `inputRaw`, `outputRaw` (plaintext) |
+| `'medium'` | `inputRaw`, `outputRaw` (PII already redacted upstream) |
+| `'high'` | `inputEncrypted`, `outputEncrypted` (AES-256-GCM, per-event key) |
+
+Unknown tools always resolve to `'high'`.
+
+### Quick start
+
+```ts
+import { createAuditMiddleware, createDefaultSigningKeyProvider, createSensitivityResolver } from '@mcpose/audit';
+import { startHttpProxy } from 'mcpose';
+
+const signingKey = createDefaultSigningKeyProvider(process.env.AUDIT_SECRET!);
+
+const sensitivityResolver = createSensitivityResolver({
+  get_balance:    'low',
+  search_trades:  'medium',
+  transfer_funds: 'high',
+});
+
+const auditHandle = createAuditMiddleware({
+  signingKey,
+  sensitivityResolver,
+  onEvent: (event) => auditLog.append(event),
+  onManifest: (manifest) => manifestStore.save(manifest),
+});
+
+const server = await startHttpProxy(backend, {
+  toolMiddleware: [piiMW, auditHandle.middleware],
+}, {
+  resolveIdentity: extractJwt,
+  onSessionClosed: (sessionId) => auditHandle.closeSession(sessionId),
+});
+```
+
+### `createSensitivityResolver(map, override?)`
+
+```ts
+const resolver = createSensitivityResolver(
+  { get_balance: 'low', search: 'medium' },
+  // Optional override fn — takes precedence over the static map
+  (tool, identity, args) => identity.roles.includes('admin') ? 'low' : 'high',
+);
+```
+
+Unknown tools not in the map always resolve to `'high'` unless the override fn returns otherwise.
+
+### `createDefaultSigningKeyProvider(secret)`
+
+```ts
+const signingKey = createDefaultSigningKeyProvider('your-secret-or-buffer');
+// { algorithm: 'HMAC-SHA256', keyId: '<sha256-of-secret>', sign(data) }
+```
+
+HMAC-SHA256 in-process signing. For production, implement `SigningKeyProvider` against your KMS.
+
+### `createAuditMiddleware(options)`
+
+```ts
+interface AuditOptions {
+  signingKey: SigningKeyProvider;
+  hashAlgorithm?: 'SHA-256';           // default: SHA-256
+  sensitivityResolver: SensitivityResolverFn;
+  onEvent: (event: AuditEvent) => void | Promise<void>;
+  /**
+   * Called with the finished ReplayManifest when closeSession() is invoked.
+   *
+   * Why this exists: ToolMiddleware is a pure per-request function with no
+   * lifecycle hooks. Sessions are owned by the HTTP transport, not by
+   * middleware. The host signals session end via closeSession(); onManifest
+   * is the push-based delivery mechanism for the resulting manifest.
+   */
+  onManifest?: (manifest: ReplayManifest) => void | Promise<void>;
+  includeRejections?: boolean;         // default: true
+  includeCost?: boolean;               // default: true
+}
+
+interface AuditMiddlewareHandle {
+  middleware: ToolMiddleware;
+  closeSession(sessionId: string): Promise<ReplayManifest | undefined>;
+}
+```
+
+`closeSession` returns `undefined` if the session had no events or is unknown. Wire it to `HttpProxyOptions.onSessionClosed`.
+
+### `AuditEvent` schema
+
+```ts
+// Discriminated union on sensitivityTier
+type AuditEvent = LowAuditEvent | MediumAuditEvent | HighAuditEvent;
+
+interface AuditEventBase {
+  id: string;                    // = ProxyContext.requestId
+  timestamp: string;             // ISO 8601 microsecond
+  sessionId?: string;
+  identity: Identity;
+  delegatedFrom?: Identity[];
+  tool: string;
+  duration_ms: number;
+  outcome: 'success' | 'rejected' | 'error';
+  rejectionReason?: RejectionReason;
+  inputHash: string;             // SHA-256
+  outputHash: string;
+  chainHash: string;             // HMAC(entry || prevChainHash)
+  replayManifestPosition: number;
+}
+```
+
+### `ReplayManifest`
+
+Produced at session close. Covers all audit events with a Merkle root and individual proofs, signed by the `SigningKeyProvider`. Any third party can verify a single event without access to the full log.
+
+```ts
+interface ReplayManifest {
+  sessionId: string;
+  identity: Identity;
+  startedAt: string;
+  closedAt: string;
+  eventCount: number;
+  merkleRoot: string;
+  merkleProofs: MerkleProof[];
+  signedBy: string;   // keyId
+  signature: string;  // signs merkleRoot
+}
+```
+
+---
+
+## `@mcpose/testing`
+
+```bash
+npm install --save-dev @mcpose/testing
+```
+
+Compliance assertion helpers for use in test suites:
+
+```ts
+import {
+  assertAuditChainIntegrity,
+  assertReplayManifestValid,
+  assertPiiRedacted,
+  assertDelegationHonored,
+} from '@mcpose/testing';
+```
+
+| Function | What it checks |
+|---|---|
+| `assertAuditChainIntegrity(events)` | Sequential positions, non-empty chain hashes, no duplicates (tamper detection) |
+| `assertReplayManifestValid(events, manifest)` | Event count matches; Merkle proof verifies for every event |
+| `assertPiiRedacted(event, patterns)` | No pattern matches in plaintext fields; passes automatically for high-tier (encrypted) events |
+| `assertDelegationHonored(chain)` | Non-empty chain; every entry has a `sub` |
+
+---
+
+## Recipe: PII redaction + audit
+
+The origin use case for mcpose: a financial-grade MCP server where every Elasticsearch tool response must be scrubbed of PII before it reaches the LLM or the audit log.
+
+```ts
+import { hasToolContent } from 'mcpose';
+import type { ToolMiddleware } from 'mcpose';
+import { createAuditMiddleware, createDefaultSigningKeyProvider, createSensitivityResolver } from '@mcpose/audit';
+
+function createPiiMiddleware(patterns: RegExp[]): ToolMiddleware {
+  return async (req, next) => {
+    const result = await next(req);
+    if (!hasToolContent(result)) return result;
+    return {
+      ...result,
+      content: result.content.map((item) =>
+        item.type === 'text'
+          ? { ...item, text: patterns.reduce((t, re) => t.replace(re, '[REDACTED]'), item.text) }
+          : item,
+      ),
+    };
+  };
+}
+
+const auditHandle = createAuditMiddleware({
+  signingKey: createDefaultSigningKeyProvider(process.env.AUDIT_SECRET!),
+  sensitivityResolver: createSensitivityResolver({ search: 'medium', transfer: 'high' }),
+  onEvent: (e) => auditLog.append(e),
+  onManifest: (m) => manifestStore.save(m),
+});
+
+await startHttpProxy(backend, {
+  toolMiddleware: [
+    createPiiMiddleware([/\b\d{9}\b/g, /[A-Z]{2}\d{6}/g]), // PII first
+    auditHandle.middleware,                                   // audit sees clean data
+  ],
+}, {
+  resolveIdentity: extractJwt,
+  onSessionClosed: (id) => auditHandle.closeSession(id),
+});
+```
+
+PII is redacted *before* the audit layer ever sees the response — no raw PII reaches a log.
+
+> **Reference implementation:** [`elastic-pii-proxy`](https://github.com/amir-gorji/elastic-pii-proxy) is a production example of this pattern — an Elasticsearch MCP proxy that uses mcpose with PII redaction and `@mcpose/audit` to serve financial data safely to LLM agents.
+
+---
+
+## Recipe: list_tools rewriting
 
 ```ts
 import type { ListToolsMiddleware } from 'mcpose';
@@ -301,71 +537,30 @@ const enrichDescriptions: ListToolsMiddleware = async (req, next, context) => {
     ...result,
     tools: result.tools.map((tool) =>
       tool.name === 'wire_transfer'
-        ? {
-            ...tool,
-            description: `${tool.description ?? 'Wire transfer'} (approval required on ${context.transport})`,
-          }
+        ? { ...tool, description: `${tool.description ?? ''} (approval required)` }
         : tool,
     ),
   };
 };
 ```
 
-`hiddenTools` remains authoritative even if a `listToolsMiddleware` tries to add a hidden tool back into the response.
-
----
-
-## Recipe: PII redaction
-
-The origin use case for mcpose: a financial-grade MCP server where every Elasticsearch tool response must be scrubbed of PII before it reaches the LLM or the audit log.
-
-Use a factory to keep middleware configurable and testable:
-
-```ts
-import { hasToolContent } from 'mcpose';
-import type { ToolMiddleware } from 'mcpose';
-
-function createPiiMiddleware(patterns: RegExp[]): ToolMiddleware {
-  return async (req, next) => {
-    const result = await next(req);
-    if (!hasToolContent(result)) return result;
-    return {
-      ...result,
-      content: result.content.map((item) =>
-        item.type === 'text'
-          ? { ...item, text: redactPii(item.text, patterns) }
-          : item,
-      ),
-    };
-  };
-}
-
-function redactPii(text: string, patterns: RegExp[]): string {
-  return patterns.reduce((t, re) => t.replace(re, '[REDACTED]'), text);
-}
-```
-
-Stack it with audit middleware — PII first in the array so audit always sees clean data:
-
-```ts
-await startProxy(backend, {
-  toolMiddleware: [
-    createPiiMiddleware([/\b\d{9}\b/g, /[A-Z]{2}\d{6}/g]), // SSNs, account numbers
-    createAuditMiddleware({ destination: auditLog }),
-  ],
-});
-```
-
-The array order guarantees: PII is redacted *before* the audit layer ever sees the response. No raw PII reaches a log, satisfying financial regulatory requirements.
-
-> **Reference implementation:** [`elastic-pii-proxy`](https://github.com/amir-gorji/elastic-pii-proxy) is a production example of this pattern — an Elasticsearch MCP proxy that uses mcpose with a PII redaction middleware and an audit middleware to serve financial data safely to LLM agents.
+`hiddenTools` remains authoritative even if a `listToolsMiddleware` tries to re-add a hidden tool.
 
 ---
 
 ## Roadmap
 
-- [x] **HTTP/SSE server transport** — `startHttpProxy()` adds a Streamable HTTP server-side transport with stateful sessions
-- [ ] **ATXP protocol support** — enable MCP monetization by implementing the ATXP (Agent Transaction Protocol) standard, letting tool providers attach pricing and billing metadata to responses
+- [x] Composable middleware — `startProxy()`, `startHttpProxy()`, `createProxyServer()`
+- [x] Streamable HTTP transport with stateful sessions and SSE reconnect replay
+- [x] Identity resolution — `resolveIdentity` hook, `Identity` on `ProxyContext`
+- [x] mTLS support — `tlsOptions` on `HttpProxyOptions`
+- [x] `@mcpose/audit` — HMAC chain, Merkle proofs, `ReplayManifest`, sensitivity tiers
+- [x] `@mcpose/testing` — compliance assertion helpers
+- [ ] `@mcpose/policy` — RBAC policy engine (v3)
+- [ ] `@mcpose/fintech-identity` — OIDC → financial identity profile (v3)
+- [ ] `@mcpose/otel` — OpenTelemetry spans adapter (v3)
+- [ ] Persistent EventStore adapters — Redis, Postgres (v3)
+- [ ] GDPR/CCPA consent middleware + cryptographic erasure (v3)
 
 ---
 
