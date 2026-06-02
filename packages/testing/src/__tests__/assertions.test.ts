@@ -39,7 +39,7 @@ async function collectEvents(n: number, sessionId = 'test-session') {
   const { middleware, closeSession } = createAuditMiddleware({
     signingKey: createDefaultSigningKeyProvider('test-secret'),
     sensitivityResolver: createSensitivityResolver({ search: 'low' }),
-    onEvent: (e) => events.push(e),
+    onEvent: (e) => { events.push(e); },
   });
   const ctx = createProxyContext({ transport: 'http', identity, sessionId });
   for (let i = 0; i < n; i++) {
@@ -111,7 +111,7 @@ describe('assertPiiRedacted', () => {
     const { middleware } = createAuditMiddleware({
       signingKey: createDefaultSigningKeyProvider('s'),
       sensitivityResolver: () => 'low',
-      onEvent: (e) => events.push(e),
+      onEvent: (e) => { events.push(e); },
     });
     await middleware(
       { method: 'tools/call', params: { name: 'x', arguments: { ssn: '123-45-6789' } } } as Parameters<typeof middleware>[0],
@@ -126,7 +126,7 @@ describe('assertPiiRedacted', () => {
     const { middleware } = createAuditMiddleware({
       signingKey: createDefaultSigningKeyProvider('s'),
       sensitivityResolver: () => 'high',
-      onEvent: (e) => events.push(e),
+      onEvent: (e) => { events.push(e); },
     });
     await middleware(
       { method: 'tools/call', params: { name: 'x', arguments: { ssn: '123-45-6789' } } } as Parameters<typeof middleware>[0],
