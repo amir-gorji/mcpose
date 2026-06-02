@@ -44,6 +44,9 @@ importers:
 
   packages/testing:
     devDependencies:
+      '@mcpose/audit':
+        specifier: workspace:*
+        version: link:../audit
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.19
