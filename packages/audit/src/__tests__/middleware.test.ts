@@ -67,7 +67,7 @@ describe('createAuditMiddleware — tracer bullet', () => {
   it('sets replayManifestPosition sequentially within a session', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => events.push(e) }),
+      makeOptions({ onEvent: (e) => { events.push(e); } }),
     );
     const ctx = makeCtx('sess-seq');
 
@@ -83,7 +83,7 @@ describe('createAuditMiddleware — HMAC chain', () => {
   it('first event chainHash is non-empty', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => events.push(e) }),
+      makeOptions({ onEvent: (e) => { events.push(e); } }),
     );
     await middleware(makeReq('search'), async () => ({ content: [] }), makeCtx('s1'));
     expect(events[0].chainHash).toBeTruthy();
@@ -93,7 +93,7 @@ describe('createAuditMiddleware — HMAC chain', () => {
   it('each chainHash differs from the previous (chain advances)', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => events.push(e) }),
+      makeOptions({ onEvent: (e) => { events.push(e); } }),
     );
     const ctx = makeCtx('s2');
     for (let i = 0; i < 5; i++) {
@@ -109,7 +109,7 @@ describe('createAuditMiddleware — sensitivity tiers', () => {
   it('low-tier event has inputRaw and outputRaw', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => events.push(e) }),
+      makeOptions({ onEvent: (e) => { events.push(e); } }),
     );
     await middleware(
       makeReq('search', { q: 'hello' }),
@@ -126,7 +126,7 @@ describe('createAuditMiddleware — sensitivity tiers', () => {
   it('high-tier event has encrypted fields, no inputRaw/outputRaw', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => events.push(e) }),
+      makeOptions({ onEvent: (e) => { events.push(e); } }),
     );
     await middleware(
       makeReq('transfer', { amount: 1000 }),
@@ -184,7 +184,7 @@ describe('createAuditMiddleware — Merkle proof', () => {
     const { verifyMerkleProof } = await import('../chain.js');
     const events: AuditEvent[] = [];
     const { middleware, closeSession } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => events.push(e) }),
+      makeOptions({ onEvent: (e) => { events.push(e); } }),
     );
     const ctx = makeCtx('sess-merkle');
     for (let i = 0; i < 4; i++) {
