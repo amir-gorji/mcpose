@@ -121,6 +121,15 @@ export interface HttpProxyOptions {
    * Set to `null` to disable reconnect replay entirely.
    */
   eventStore?: EventStore | null;
+  /**
+   * Called when a session is closed (client DELETE or TTL expiry).
+   * Wire {@link AuditMiddlewareHandle.closeSession} here to flush the
+   * ReplayManifest for the session.
+   *
+   * @example
+   * onSessionClosed: (sessionId) => auditHandle.closeSession(sessionId)
+   */
+  onSessionClosed?: (sessionId: string) => void;
 }
 
 /** Proxy server options. */
@@ -626,7 +635,10 @@ export function startHttpProxy(
                   timer.unref();
                 }
               },
-              onsessionclosed: (id) => { sessions.delete(id); },
+              onsessionclosed: (id) => {
+                sessions.delete(id);
+                httpOptions.onSessionClosed?.(id);
+              },
             });
 
             const requestContext: Omit<ProxyContext, 'requestId'> = {
