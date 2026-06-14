@@ -1,6 +1,6 @@
 {
   "name": "mcpose",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "The audit and governance layer for MCP",
   "type": "module",
   "main": "./dist/index.js",
