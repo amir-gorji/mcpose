@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createHash, createHmac, createDecipheriv } from 'node:crypto';
 import { createAuditMiddleware } from '../middleware.js';
 import { createDefaultSigningKeyProvider } from '../signingKey.js';
 import { createSensitivityResolver } from '../sensitivity.js';
@@ -201,5 +202,50 @@ describe('createAuditMiddleware — Merkle proof', () => {
       );
       expect(valid).toBe(true);
     }
+  });
+});
+
+function aesGcmDecrypt(b64: string, key: Buffer): string {
+  const buf = Buffer.from(b64, 'base64');
+  const iv = buf.subarray(0, 12);
+  const tag = buf.subarray(12, 28);
+  const ciphertext = buf.subarray(28);
+  const decipher = createDecipheriv('aes-256-gcm', key.subarray(0, 32), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+}
+
+describe('createAuditMiddleware — subkey confidentiality (regression)', () => {
+  // Guards the fix for the keyId-as-key-material footgun: subkeys must derive
+  // from the SECRET via the sign() oracle, never from the public keyId (which is
+  // published in ReplayManifest.signedBy). If this regresses, a manifest-holder
+  // can decrypt high-tier payloads. See ADR-0003.
+  it('high-tier payload is NOT decryptable from the public keyId, but IS from the secret-derived key', async () => {
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware } = createAuditMiddleware(
+      makeOptions({ signingKey, onEvent: (e) => { events.push(e); } }),
+    );
+
+    await middleware(
+      makeReq('transfer', { acct: 'secret-acct' }),
+      async () => ({ content: [] }),
+      makeCtx(),
+    );
+
+    const event = events[0];
+    if (event.sensitivityTier !== 'high') throw new Error('expected high tier');
+
+    // Attacker path: keyId is public (== manifest.signedBy). The OLD scheme keyed
+    // encryption off SHA256(keyIdBytes ‖ id). Prove that path no longer decrypts.
+    const publicKeyId = Buffer.from(signingKey.keyId, 'hex');
+    const forgedKey = createHash('sha256').update(publicKeyId).update(event.id).digest();
+    expect(() => aesGcmDecrypt(event.inputEncrypted, forgedKey)).toThrow();
+
+    // Legitimate path: encRoot is derived from the secret through the oracle and
+    // is never published; only a secret-holder can reproduce it.
+    const encRoot = await signingKey.sign(Buffer.from('mcpose/v1/enc'));
+    const realKey = createHmac('sha256', encRoot).update(event.id).digest();
+    expect(JSON.parse(aesGcmDecrypt(event.inputEncrypted, realKey))).toEqual({ acct: 'secret-acct' });
   });
 });

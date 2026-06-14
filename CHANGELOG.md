@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.2] - 2026-06-02
+
+### Security
+
+- **`@mcpose/audit` 2.0.2 — audit subkeys now derive from the signing secret via the `sign()` oracle, not from the public `keyId`.** The per-entry HMAC chain key and the high-tier AES encryption root were previously `keyId` (= `SHA256(secret)`), which is published in `ReplayManifest.signedBy` — so a manifest-holder could forge `chainHash` values and decrypt high-tier payloads. Keys now derive through domain-separated labels (`mcpose/v1/chain`, `mcpose/v1/enc`) and never leave the process; `keyId` is a public identifier only. **Format change:** `chainHash` and `inputEncrypted`/`outputEncrypted` differ from 2.0.0; chains written under the old scheme do not verify under 2.0.2. Core (2.0.1) and `@mcpose/testing` (2.0.0) are unchanged. See ADR-0003.
+
 ## [2.0.1] - 2026-06-02
 
 ### Changed

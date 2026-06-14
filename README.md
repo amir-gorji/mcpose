@@ -41,6 +41,18 @@ mcpose is a **transparent proxy** between an LLM client and an upstream MCP serv
 
 ---
 
+## Packages
+
+This is a monorepo. Each package publishes independently and has its own README on npm.
+
+| Package | npm | What it does |
+|---|---|---|
+| [`mcpose`](./packages/core/README.md) | [![npm](https://img.shields.io/npm/v/mcpose)](https://www.npmjs.com/package/mcpose) | Proxy core — pipeline, transports, identity, governance. |
+| [`@mcpose/audit`](./packages/audit/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/audit)](https://www.npmjs.com/package/@mcpose/audit) | Tamper-evident HMAC audit chain + Merkle `ReplayManifest`. |
+| [`@mcpose/testing`](./packages/testing/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/testing)](https://www.npmjs.com/package/@mcpose/testing) | Runner-agnostic compliance assertions for the audit chain. |
+
+---
+
 ## Install
 
 ```bash
@@ -335,6 +347,13 @@ Unknown tools always resolve to `'high'`.
 ```ts
 import { createAuditMiddleware, createDefaultSigningKeyProvider, createSensitivityResolver } from '@mcpose/audit';
 import { startHttpProxy } from 'mcpose';
+
+// Supplied by your application:
+//   backend       — an mcpose BackendClient (see Quick Start above)
+//   auditLog      — your durable sink for audit events
+//   manifestStore — your durable sink for replay manifests
+//   piiMW         — an upstream redaction middleware
+//   extractJwt    — your resolveIdentity function
 
 const signingKey = createDefaultSigningKeyProvider(process.env.AUDIT_SECRET!);
 
