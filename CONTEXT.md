@@ -50,6 +50,16 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Rejection reason**: The `RejectionReason` value in the MCP error `data` field, identifying why a call was rejected. _Avoid_: "error code", "block reason"
 
+### Keys and signing
+
+**Signing secret**: The private root held only by the `SigningKeyProvider`; every subkey and the manifest signature derive from it via `sign()`, and it never leaves the process. _Avoid_: bare "key", "signing key"
+
+**Key id**: A public identifier for the signing secret — published as `signedBy` on a replay manifest, names which key signed it, and is never key material. _Avoid_: treating it as secret or as the chain key
+
+**Chain key**: The private HMAC key for the per-entry audit chain, derived from the signing secret via the oracle — never from the key id. _Avoid_: conflating with key id
+
+**Event key**: A per-event AES-256 key protecting a high-tier payload, derived from a private encryption root and the event id — never from any public value.
+
 ### Events and replay
 
 **Telemetry event**: An observability signal emitted to `onTelemetry` for routing to OTEL or a custom backend. _Avoid_: bare "event"
@@ -66,6 +76,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 - A **session** groups **audit events** and closes with a **replay manifest**
 - An **audit event**'s **sensitivity tier** determines whether it stores plaintext or encrypted payload
 - A **delegation chain** on `ProxyContext` records which agents delegated to which before reaching mcpose
+- **Tamper-evidence** is anchored by the **signed Merkle root**; the per-entry HMAC **chain** links events under a private **chain key**, while the **key id** is public and identifies the signer only
 
 ## Example dialogue
 
@@ -75,3 +86,4 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 ## Flagged ambiguities
 
 - "replay" means SSE reconnect replay (v1.2, transport) and session re-execution (v4, audit) — always qualify
+- "key" / `keyId` was used to mean both a public identifier and secret key material — resolved: the **key id** is public-only; all **chain key** / **event key** material derives from the **signing secret** via the oracle (ADR-0003)
