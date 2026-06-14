@@ -1,4 +1,4 @@
-import { createCipheriv, randomBytes, createHash } from 'node:crypto';
+import { createCipheriv, randomBytes, createHmac } from 'node:crypto';
 import type {
   AuditEvent,
   AuditMiddlewareHandle,
@@ -10,6 +10,11 @@ import type {
 } from './types.js';
 import { computeChainHash, computeMerkleProof, computeMerkleRoot, sha256hex } from './chain.js';
 import type { Identity, ProxyContext } from 'mcpose';
+
+// Domain-separation labels for subkey derivation. The version segment lets the
+// derivation scheme rotate without colliding with chains written under an old scheme.
+const DOMAIN_CHAIN = Buffer.from('mcpose/v1/chain');
+const DOMAIN_ENC = Buffer.from('mcpose/v1/enc');
 
 interface SessionState {
   events: AuditEvent[];
@@ -26,8 +31,8 @@ function aesEncrypt(plaintext: string, key: Buffer): string {
   return Buffer.concat([iv, tag, encrypted]).toString('base64');
 }
 
-function deriveEventKey(chainKey: Buffer, eventId: string): Buffer {
-  return createHash('sha256').update(chainKey).update(eventId).digest();
+function deriveEventKey(encRoot: Buffer, eventId: string): Buffer {
+  return createHmac('sha256', encRoot).update(eventId).digest();
 }
 
 function anonymousIdentity(): Identity {
@@ -44,12 +49,26 @@ function anonymousIdentity(): Identity {
 export function createAuditMiddleware(options: AuditOptions): AuditMiddlewareHandle {
   const sessions = new Map<string, SessionState>();
 
-  // Derive a stable 32-byte key from the signingKey.keyId (SHA-256 hex of the secret).
-  // Used for HMAC chain hashes (synchronous) and per-event AES-256 encryption.
-  // The async sign() on signingKey is reserved for signing the ReplayManifest root.
-  const chainKey = Buffer.from(options.signingKey.keyId, 'hex');
+  // Private subkeys, derived once from the signing secret THROUGH the oracle with
+  // domain separation. The provider never exposes raw key bytes, and keyId must
+  // NOT be used as key material — keyId is a public identifier, published in
+  // ReplayManifest.signedBy. sign() is HMAC-SHA256 per the SigningKeyProvider
+  // contract, hence a PRF suitable for key derivation.
+  //   chainKey — keys the per-entry HMAC chain (forgery resistance)
+  //   encRoot  — root for per-event AES-256 keys (high-tier confidentiality)
+  // Cache the promise so concurrent first calls share one derivation.
+  let subkeys: Promise<{ chainKey: Buffer; encRoot: Buffer }> | undefined;
+  const deriveSubkeys = () =>
+    (subkeys ??= (async () => {
+      const [chainKey, encRoot] = await Promise.all([
+        options.signingKey.sign(DOMAIN_CHAIN),
+        options.signingKey.sign(DOMAIN_ENC),
+      ]);
+      return { chainKey, encRoot };
+    })());
 
   const middleware: AuditMiddlewareHandle['middleware'] = async (req, next, ctx) => {
+    const { chainKey, encRoot } = await deriveSubkeys();
     const start = Date.now();
     const identity = ctx.identity ?? anonymousIdentity();
     const sessionId = ctx.sessionId;
@@ -83,7 +102,7 @@ export function createAuditMiddleware(options: AuditOptions): AuditMiddlewareHan
         ctx, identity, tool, args, result: undefined,
         duration_ms: Date.now() - start, outcome, position,
         prevChainHash: session?.prevChainHash ?? '',
-        tier, chainKey,
+        tier, chainKey, encRoot,
       });
       advanceSession(session, event);
       await options.onEvent(event);
@@ -95,7 +114,7 @@ export function createAuditMiddleware(options: AuditOptions): AuditMiddlewareHan
         ctx, identity, tool, args, result,
         duration_ms: Date.now() - start, outcome, position,
         prevChainHash: session?.prevChainHash ?? '',
-        tier, chainKey,
+        tier, chainKey, encRoot,
       });
       advanceSession(session, event);
       await options.onEvent(event);
@@ -154,6 +173,7 @@ interface BuildParams {
   prevChainHash: string;
   tier: 'low' | 'medium' | 'high';
   chainKey: Buffer;
+  encRoot: Buffer;
 }
 
 function buildEvent(p: BuildParams): AuditEvent {
@@ -176,7 +196,7 @@ function buildEvent(p: BuildParams): AuditEvent {
   const base = { ...stableFields, chainHash };
 
   if (p.tier === 'high') {
-    const eventKey = deriveEventKey(p.chainKey, base.id);
+    const eventKey = deriveEventKey(p.encRoot, base.id);
     return {
       ...base,
       sensitivityTier: 'high',
