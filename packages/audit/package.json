@@ -1,6 +1,6 @@
 {
   "name": "@mcpose/audit",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Integrity-chained audit middleware for mcpose — HMAC chain, Merkle proofs, ReplayManifest",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,7 +23,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "ts:ci": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
   },
   "peerDependencies": {
     "mcpose": ">=2.0.0"
