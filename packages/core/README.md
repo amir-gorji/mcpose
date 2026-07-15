@@ -103,6 +103,7 @@ await startHttpProxy(
 | `args` | stdio | Args passed to `command` (e.g. `["/path/to/server.mjs"]`). |
 | `url` | HTTP/SSE | URL of a running backend. Takes precedence over stdio. |
 | `headers` | HTTP/SSE | Custom HTTP headers sent on every request to the backend. |
+| `authProvider` | HTTP/SSE | `OAuthClientProvider` for interactive/browser OAuth and transparent token refresh. |
 
 `headers` is HTTP/SSE only and is ignored in stdio mode.
 Use it to authenticate with the upstream, for example an API key or bearer token.
@@ -111,6 +112,23 @@ Use it to authenticate with the upstream, for example an API key or bearer token
 const backend = await createBackendClient({
   url: 'https://mcp.example.com/sse',
   headers: { Authorization: `Bearer ${process.env.UPSTREAM_TOKEN}` },
+});
+```
+
+For backends that require OAuth rather than a static token, pass an `authProvider`.
+mcpose forwards it to the HTTP/SSE transport, which runs the MCP OAuth flow (interactive/browser authorization with transparent token refresh), so you don't manage tokens yourself.
+Like `headers`, it is HTTP/SSE only and ignored in stdio mode.
+
+```ts
+import { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth';
+
+const authProvider: OAuthClientProvider = {
+  // redirectUrl, clientMetadata, and the token/authorization-code callbacks
+};
+
+const backend = await createBackendClient({
+  url: 'https://mcp.example.com/sse',
+  authProvider,
 });
 ```
 
