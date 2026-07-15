@@ -77,7 +77,10 @@ export interface HttpProxyOptions {
   /** Default: '/mcp' */
   path?: string;
   /** Called for every incoming request before MCP handling. Return false to block (caller writes its own response). Throw to get a 401. */
-  onRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>;
+  onRequest?: (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ) => boolean | Promise<boolean>;
   /** Called on unhandled errors instead of console.error. */
   onError?: (err: unknown) => void;
   /** Maximum request body size in bytes. Default: 4 MB. */
@@ -134,6 +137,12 @@ export interface HttpProxyOptions {
 
 /** Proxy server options. */
 export interface ProxyOptions {
+  /**
+   * Human-readable name for this proxy instance.
+   * This is what the new MCP server is called
+   */
+  name: string;
+
   /**
    * Tool middleware in response-processing order (first = innermost).
    * @example [piiMW, auditMW]  // pii redacts first, audit logs clean data
@@ -199,7 +208,11 @@ function createProxyCapabilities(backend: BackendClient): ServerCapabilities {
       ? { tools: upstream.tools.listChanged ? { listChanged: true } : {} }
       : {}),
     ...(upstream?.resources
-      ? { resources: upstream.resources.listChanged ? { listChanged: true } : {} }
+      ? {
+          resources: upstream.resources.listChanged
+            ? { listChanged: true }
+            : {},
+        }
       : {}),
     ...(upstream?.prompts
       ? { prompts: upstream.prompts.listChanged ? { listChanged: true } : {} }
@@ -211,27 +224,28 @@ function createRequestOptions(
   extra: ProxyRequestExtra = {},
 ): BackendRequestOptions {
   const progressToken = extra._meta?.progressToken;
-  const onprogress = progressToken && extra.sendNotification
-    ? ({
-        progress,
-        total,
-        message,
-      }: {
-        progress: number;
-        total?: number;
-        message?: string;
-      }) => {
-        void extra.sendNotification?.({
-          method: 'notifications/progress',
-          params: {
-            progressToken,
-            progress,
-            ...(total === undefined ? {} : { total }),
-            ...(message === undefined ? {} : { message }),
-          },
-        });
-      }
-    : undefined;
+  const onprogress =
+    progressToken && extra.sendNotification
+      ? ({
+          progress,
+          total,
+          message,
+        }: {
+          progress: number;
+          total?: number;
+          message?: string;
+        }) => {
+          void extra.sendNotification?.({
+            method: 'notifications/progress',
+            params: {
+              progressToken,
+              progress,
+              ...(total === undefined ? {} : { total }),
+              ...(message === undefined ? {} : { message }),
+            },
+          });
+        }
+      : undefined;
 
   if (!extra.signal && !onprogress) return undefined;
 
@@ -299,7 +313,9 @@ function registerListChangedForwarders(
     const fanOut = async (
       notify: (proxyServer: Server) => Promise<void>,
     ): Promise<void> => {
-      await Promise.allSettled([...servers].map((proxyServer) => notify(proxyServer)));
+      await Promise.allSettled(
+        [...servers].map((proxyServer) => notify(proxyServer)),
+      );
     };
 
     if (capabilities.tools?.listChanged) {
@@ -315,8 +331,9 @@ function registerListChangedForwarders(
     }
 
     if (capabilities.resources?.listChanged) {
-      backend.setNotificationHandler(ResourceListChangedNotificationSchema, () =>
-        fanOut((proxyServer) => proxyServer.sendResourceListChanged()),
+      backend.setNotificationHandler(
+        ResourceListChangedNotificationSchema,
+        () => fanOut((proxyServer) => proxyServer.sendResourceListChanged()),
       );
     }
 
@@ -353,7 +370,7 @@ function registerListChangedForwarders(
  */
 export function createProxyServer(
   backend: BackendClient,
-  options: ProxyOptions = {},
+  options: ProxyOptions,
 ): Server {
   const capabilities = createProxyCapabilities(backend);
   const toolPipeline = pipe(options.toolMiddleware ?? []);
@@ -366,7 +383,7 @@ export function createProxyServer(
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
 
   const server = new Server(
-    { name: 'mcpose', version: '1.1.1' },
+    { name: options.name, version: '1.1.1' },
     { capabilities },
   );
 
@@ -404,22 +421,34 @@ export function createProxyServer(
         options.onTelemetry?.({
           type: 'tool_call',
           requestId: context.requestId,
-          ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+          ...(context.sessionId === undefined
+            ? {}
+            : { sessionId: context.sessionId }),
           tool: name,
           duration_ms: Date.now() - start,
           outcome,
           ...(rejectionReason === undefined ? {} : { rejectionReason }),
-          ...(context.identity === undefined ? {} : { identity: context.identity }),
+          ...(context.identity === undefined
+            ? {}
+            : { identity: context.identity }),
         });
       };
 
       if (hiddenToolSet.has(name)) {
         emitTelemetry('rejected', 'TOOL_HIDDEN');
-        throw rejectionMcpError('TOOL_HIDDEN', ErrorCode.MethodNotFound, `Tool not found: ${name}`);
+        throw rejectionMcpError(
+          'TOOL_HIDDEN',
+          ErrorCode.MethodNotFound,
+          `Tool not found: ${name}`,
+        );
       }
       if (passThroughToolSet.has(name)) {
         try {
-          const result = await backend.callTool(req.params, undefined, requestOptions);
+          const result = await backend.callTool(
+            req.params,
+            undefined,
+            requestOptions,
+          );
           emitTelemetry('success');
           return result;
         } catch (err) {
@@ -446,9 +475,17 @@ export function createProxyServer(
 
   if (capabilities.resources) {
     server.setRequestHandler(ListResourcesRequestSchema, async (req, extra) => {
-      const result = await backend.listResources(req.params, createRequestOptions(extra));
+      const result = await backend.listResources(
+        req.params,
+        createRequestOptions(extra),
+      );
       if (!hiddenResourceSet.size) return result;
-      return { ...result, resources: result.resources.filter((r) => !hiddenResourceSet.has(r.uri)) };
+      return {
+        ...result,
+        resources: result.resources.filter(
+          (r) => !hiddenResourceSet.has(r.uri),
+        ),
+      };
     });
 
     server.setRequestHandler(ReadResourceRequestSchema, (req, extra) => {
@@ -457,7 +494,11 @@ export function createProxyServer(
       const context = getMiddlewareContext(extra.signal);
 
       if (hiddenResourceSet.has(uri)) {
-        throw rejectionMcpError('RESOURCE_HIDDEN', ErrorCode.InvalidRequest, `Resource not found: ${uri}`);
+        throw rejectionMcpError(
+          'RESOURCE_HIDDEN',
+          ErrorCode.InvalidRequest,
+          `Resource not found: ${uri}`,
+        );
       }
       if (passThroughResourceSet.has(uri)) {
         return backend.readResource(req.params, requestOptions);
@@ -492,7 +533,7 @@ export function createProxyServer(
  */
 export async function startProxy(
   backend: BackendClient,
-  options: ProxyOptions = {},
+  options: ProxyOptions,
 ): Promise<void> {
   const server = createProxyServer(backend, options);
   await server.connect(new StdioServerTransport());
@@ -538,24 +579,31 @@ function applyBodySizeLimit(
  */
 export function startHttpProxy(
   backend: BackendClient,
-  options: ProxyOptions = {},
-  httpOptions: HttpProxyOptions = {},
+  options: ProxyOptions,
+  httpOptions: HttpProxyOptions,
 ): Promise<http.Server> {
-  const mcpPath   = httpOptions.path ?? '/mcp';
-  const port      = httpOptions.port ?? 3000;
-  const host      = httpOptions.host;
-  const eventStore = httpOptions.eventStore === null
-    ? undefined
-    : (httpOptions.eventStore ?? createInMemoryEventStore());
+  const mcpPath = httpOptions.path ?? '/mcp';
+  const port = httpOptions.port ?? 3000;
+  const host = httpOptions.host;
+  const eventStore =
+    httpOptions.eventStore === null
+      ? undefined
+      : (httpOptions.eventStore ?? createInMemoryEventStore());
 
   // session ID → { transport, proxyServer, identity }
-  const sessions = new Map<string, {
-    transport: StreamableHTTPServerTransport;
-    proxyServer: Server;
-    identity?: Identity;
-  }>();
+  const sessions = new Map<
+    string,
+    {
+      transport: StreamableHTTPServerTransport;
+      proxyServer: Server;
+      identity?: Identity;
+    }
+  >();
 
-  const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
+  const requestHandler = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ) => {
     const handle = async () => {
       if (httpOptions.onRequest !== undefined) {
         let allowed: boolean;
@@ -568,16 +616,23 @@ export function startHttpProxy(
         if (!allowed) return;
       }
 
-      const url    = new URL(req.url ?? '/', 'http://localhost');
+      const url = new URL(req.url ?? '/', 'http://localhost');
       const method = req.method ?? '';
 
-      if (url.pathname !== mcpPath || !['GET', 'POST', 'DELETE'].includes(method)) {
+      if (
+        url.pathname !== mcpPath ||
+        !['GET', 'POST', 'DELETE'].includes(method)
+      ) {
         res.writeHead(404).end();
         return;
       }
 
       if (method === 'POST') {
-        applyBodySizeLimit(req, res, httpOptions.maxBodyBytes ?? 4 * 1024 * 1024);
+        applyBodySizeLimit(
+          req,
+          res,
+          httpOptions.maxBodyBytes ?? 4 * 1024 * 1024,
+        );
       }
 
       const sessionId = req.headers['mcp-session-id'];
@@ -590,19 +645,27 @@ export function startHttpProxy(
           if (typeof sessionId === 'string') {
             // Route to existing session — stamp its resolved identity into context
             const session = sessions.get(sessionId);
-            if (!session) { res.writeHead(404).end(); return; }
+            if (!session) {
+              res.writeHead(404).end();
+              return;
+            }
             const requestContext: Omit<ProxyContext, 'requestId'> = {
               transport: 'http',
               sessionId,
               ...(headers === undefined ? {} : { headers }),
-              ...(session.identity === undefined ? {} : { identity: session.identity }),
+              ...(session.identity === undefined
+                ? {}
+                : { identity: session.identity }),
             };
             await httpProxyContext.run(requestContext, () =>
               session.transport.handleRequest(req, res),
             );
           } else {
             // New session (initialize request)
-            if (httpOptions.maxSessions !== undefined && sessions.size >= httpOptions.maxSessions) {
+            if (
+              httpOptions.maxSessions !== undefined &&
+              sessions.size >= httpOptions.maxSessions
+            ) {
               res.writeHead(503).end();
               return;
             }

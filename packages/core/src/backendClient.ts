@@ -14,6 +14,8 @@ export interface BackendConfig {
   args?: string[];
   /** HTTP/SSE URL of running backend. Takes precedence over stdio. */
   url?: string;
+  /** Custom HTTP headers sent on every request to the backend (HTTP/SSE only). */
+  headers?: Record<string, string>;
 }
 
 export type BackendClient = Client;
@@ -37,7 +39,7 @@ export async function createBackendClient(
   );
 
   const transport = config.url
-    ? getHttpTransport(config.url)
+    ? getHttpTransport(config.url, config.headers)
     : new StdioClientTransport({
         command: config.command!,
         args: config.args ?? [],
@@ -47,13 +49,18 @@ export async function createBackendClient(
   return client;
 }
 
-const getHttpTransport = (urlString: string) => {
+const getHttpTransport = (
+  urlString: string,
+  headers?: Record<string, string>,
+) => {
   const url = new URL(urlString);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(
       `mcpose: unsupported URL protocol "${url.protocol}" — only http: and https: are allowed`,
     );
   }
-  return new StreamableHTTPClientTransport(url);
+  return new StreamableHTTPClientTransport(
+    url,
+    headers ? { requestInit: { headers } } : undefined,
+  );
 };
-

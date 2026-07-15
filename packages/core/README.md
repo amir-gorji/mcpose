@@ -93,6 +93,27 @@ await startHttpProxy(
 
 **Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
 
+### Backend config (`BackendConfig`)
+
+`createBackendClient` accepts a `BackendConfig` describing how to reach the upstream, in one of two modes.
+
+| Field | Mode | Description |
+|---|---|---|
+| `command` | stdio | Shell command to spawn the backend (e.g. `"node"`). |
+| `args` | stdio | Args passed to `command` (e.g. `["/path/to/server.mjs"]`). |
+| `url` | HTTP/SSE | URL of a running backend. Takes precedence over stdio. |
+| `headers` | HTTP/SSE | Custom HTTP headers sent on every request to the backend. |
+
+`headers` is HTTP/SSE only and is ignored in stdio mode.
+Use it to authenticate with the upstream, for example an API key or bearer token.
+
+```ts
+const backend = await createBackendClient({
+  url: 'https://mcp.example.com/sse',
+  headers: { Authorization: `Bearer ${process.env.UPSTREAM_TOKEN}` },
+});
+```
+
 ### Governance options (`ProxyOptions`)
 
 `hiddenTools` / `hiddenResources` reject calls with a structured [`RejectionReason`](https://github.com/amir-gorji/mcpose#rejectionreason) in the MCP error `data` field; `passThroughTools` skip the pipeline entirely; `onTelemetry` emits per-call timing and outcome.
