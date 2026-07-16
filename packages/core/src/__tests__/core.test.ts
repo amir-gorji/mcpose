@@ -28,9 +28,21 @@ function makeMockBackend(): BackendClient {
     }),
     listTools: vi.fn().mockResolvedValue({
       tools: [
-        { name: 'normal_tool', description: 'Normal', inputSchema: { type: 'object', properties: {} } },
-        { name: 'sensitive_tool', description: 'Sensitive', inputSchema: { type: 'object', properties: {} } },
-        { name: 'pass_tool', description: 'Pass-through', inputSchema: { type: 'object', properties: {} } },
+        {
+          name: 'normal_tool',
+          description: 'Normal',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'sensitive_tool',
+          description: 'Sensitive',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'pass_tool',
+          description: 'Pass-through',
+          inputSchema: { type: 'object', properties: {} },
+        },
       ],
     }),
     callTool: vi.fn().mockResolvedValue({
@@ -38,13 +50,23 @@ function makeMockBackend(): BackendClient {
     }),
     listResources: vi.fn().mockResolvedValue({
       resources: [
-        { name: 'Normal Resource', uri: 'res://normal', mimeType: 'text/plain' },
-        { name: 'Hidden Resource', uri: 'res://hidden', mimeType: 'text/plain' },
+        {
+          name: 'Normal Resource',
+          uri: 'res://normal',
+          mimeType: 'text/plain',
+        },
+        {
+          name: 'Hidden Resource',
+          uri: 'res://hidden',
+          mimeType: 'text/plain',
+        },
         { name: 'Pass Resource', uri: 'res://pass', mimeType: 'text/plain' },
       ],
     }),
     readResource: vi.fn().mockResolvedValue({
-      contents: [{ uri: 'res://normal', text: 'raw content', mimeType: 'text/plain' }],
+      contents: [
+        { uri: 'res://normal', text: 'raw content', mimeType: 'text/plain' },
+      ],
     }),
     listPrompts: vi.fn().mockResolvedValue({ prompts: [] }),
     getPrompt: vi.fn().mockResolvedValue({ messages: [] }),
@@ -74,7 +96,10 @@ async function invokeHandler(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handlers = (server as any)._requestHandlers as Map<
     string,
-    (req: { method: string; params: Record<string, unknown> }, extra: object) => Promise<unknown>
+    (
+      req: { method: string; params: Record<string, unknown> },
+      extra: object,
+    ) => Promise<unknown>
   >;
   const handler = handlers.get(method);
   if (!handler) throw new Error(`No handler registered for method: ${method}`);
@@ -86,9 +111,14 @@ async function invokeHandler(
 describe('createProxyServer() — hiddenTools', () => {
   it('filters hidden tools out of list_tools response', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { hiddenTools: ['sensitive_tool'] });
+    const server = createProxyServer(backend, {
+      hiddenTools: ['sensitive_tool'],
+      name: 'test-server',
+    });
 
-    const result = (await invokeHandler(server, 'tools/list')) as { tools: { name: string }[] };
+    const result = (await invokeHandler(server, 'tools/list')) as {
+      tools: { name: string }[];
+    };
 
     const names = result.tools.map((t) => t.name);
     expect(names).not.toContain('sensitive_tool');
@@ -98,27 +128,44 @@ describe('createProxyServer() — hiddenTools', () => {
 
   it('throws MethodNotFound when a hidden tool is called directly', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { hiddenTools: ['sensitive_tool'] });
+    const server = createProxyServer(backend, {
+      hiddenTools: ['sensitive_tool'],
+      name: 'test-server',
+    });
 
     await expect(
-      invokeHandler(server, 'tools/call', { name: 'sensitive_tool', arguments: {} }),
+      invokeHandler(server, 'tools/call', {
+        name: 'sensitive_tool',
+        arguments: {},
+      }),
     ).rejects.toMatchObject({ code: ErrorCode.MethodNotFound });
   });
 
   it('includes TOOL_HIDDEN rejection reason in error data', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { hiddenTools: ['sensitive_tool'] });
+    const server = createProxyServer(backend, {
+      hiddenTools: ['sensitive_tool'],
+      name: 'test-server',
+    });
 
     await expect(
-      invokeHandler(server, 'tools/call', { name: 'sensitive_tool', arguments: {} }),
+      invokeHandler(server, 'tools/call', {
+        name: 'sensitive_tool',
+        arguments: {},
+      }),
     ).rejects.toMatchObject({ data: { rejectionReason: 'TOOL_HIDDEN' } });
   });
 
   it('returns full tool list when hiddenTools is empty', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { hiddenTools: [] });
+    const server = createProxyServer(backend, {
+      hiddenTools: [],
+      name: 'test-server',
+    });
 
-    const result = (await invokeHandler(server, 'tools/list')) as { tools: { name: string }[] };
+    const result = (await invokeHandler(server, 'tools/list')) as {
+      tools: { name: string }[];
+    };
     expect(result.tools).toHaveLength(3);
   });
 
@@ -141,11 +188,16 @@ describe('createProxyServer() — hiddenTools', () => {
     const server = createProxyServer(backend, {
       hiddenTools: ['sensitive_tool'],
       listToolsMiddleware: [restoreHidden],
+      name: 'test-server',
     });
 
-    const result = (await invokeHandler(server, 'tools/list')) as { tools: { name: string }[] };
+    const result = (await invokeHandler(server, 'tools/list')) as {
+      tools: { name: string }[];
+    };
 
-    expect(result.tools.map((tool) => tool.name)).not.toContain('sensitive_tool');
+    expect(result.tools.map((tool) => tool.name)).not.toContain(
+      'sensitive_tool',
+    );
   });
 });
 
@@ -182,6 +234,7 @@ describe('createProxyServer() — listToolsMiddleware', () => {
 
     const server = createProxyServer(backend, {
       listToolsMiddleware: [descriptionMW, suffixMW],
+      name: 'test-server',
     });
 
     const result = (await invokeHandler(server, 'tools/list')) as {
@@ -208,6 +261,7 @@ describe('createProxyServer() — listToolsMiddleware', () => {
 
     const server = createProxyServer(backend, {
       listToolsMiddleware: [captureContext],
+      name: 'test-server',
     });
 
     await invokeHandler(server, 'tools/list');
@@ -226,16 +280,23 @@ describe('createProxyServer() — passThroughTools', () => {
     const server = createProxyServer(backend, {
       passThroughTools: ['pass_tool'],
       toolMiddleware: [middlewareSpy],
+      name: 'test-server',
     });
 
-    await invokeHandler(server, 'tools/call', { name: 'pass_tool', arguments: {} });
+    await invokeHandler(server, 'tools/call', {
+      name: 'pass_tool',
+      arguments: {},
+    });
 
     expect(middlewareSpy).not.toHaveBeenCalled();
   });
 
   it('returns the raw upstream response for pass-through tools', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { passThroughTools: ['pass_tool'] });
+    const server = createProxyServer(backend, {
+      passThroughTools: ['pass_tool'],
+      name: 'test-server',
+    });
 
     const result = (await invokeHandler(server, 'tools/call', {
       name: 'pass_tool',
@@ -251,9 +312,13 @@ describe('createProxyServer() — passThroughTools', () => {
     const server = createProxyServer(backend, {
       passThroughTools: ['pass_tool'],
       toolMiddleware: [middlewareSpy],
+      name: 'test-server',
     });
 
-    await invokeHandler(server, 'tools/call', { name: 'normal_tool', arguments: {} });
+    await invokeHandler(server, 'tools/call', {
+      name: 'normal_tool',
+      arguments: {},
+    });
 
     expect(middlewareSpy).toHaveBeenCalledOnce();
   });
@@ -269,9 +334,13 @@ describe('createProxyServer() — passThroughTools', () => {
 
     const server = createProxyServer(backend, {
       toolMiddleware: [captureContext],
+      name: 'test-server',
     });
 
-    await invokeHandler(server, 'tools/call', { name: 'normal_tool', arguments: {} });
+    await invokeHandler(server, 'tools/call', {
+      name: 'normal_tool',
+      arguments: {},
+    });
 
     expect(seenContext?.transport).toBe('stdio');
     expect(seenContext?.requestId).toEqual(expect.any(String));
@@ -283,7 +352,10 @@ describe('createProxyServer() — passThroughTools', () => {
 describe('createProxyServer() — hiddenResources', () => {
   it('filters hidden resources out of list_resources response', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { hiddenResources: ['res://hidden'] });
+    const server = createProxyServer(backend, {
+      hiddenResources: ['res://hidden'],
+      name: 'test-server',
+    });
 
     const result = (await invokeHandler(server, 'resources/list')) as {
       resources: { uri: string }[];
@@ -297,7 +369,10 @@ describe('createProxyServer() — hiddenResources', () => {
 
   it('throws InvalidRequest when a hidden resource is read directly', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { hiddenResources: ['res://hidden'] });
+    const server = createProxyServer(backend, {
+      hiddenResources: ['res://hidden'],
+      name: 'test-server',
+    });
 
     await expect(
       invokeHandler(server, 'resources/read', { uri: 'res://hidden' }),
@@ -306,7 +381,10 @@ describe('createProxyServer() — hiddenResources', () => {
 
   it('includes RESOURCE_HIDDEN rejection reason in error data', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { hiddenResources: ['res://hidden'] });
+    const server = createProxyServer(backend, {
+      hiddenResources: ['res://hidden'],
+      name: 'test-server',
+    });
 
     await expect(
       invokeHandler(server, 'resources/read', { uri: 'res://hidden' }),
@@ -315,7 +393,10 @@ describe('createProxyServer() — hiddenResources', () => {
 
   it('returns full resource list when hiddenResources is empty', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { hiddenResources: [] });
+    const server = createProxyServer(backend, {
+      hiddenResources: [],
+      name: 'test-server',
+    });
 
     const result = (await invokeHandler(server, 'resources/list')) as {
       resources: { uri: string }[];
@@ -327,12 +408,13 @@ describe('createProxyServer() — hiddenResources', () => {
 describe('createProxyServer() — passThroughResources', () => {
   it('bypasses middleware for pass-through resources', async () => {
     const backend = makeMockBackend();
-    const middlewareSpy = vi.fn((req: unknown, next: (r: unknown) => Promise<unknown>) =>
-      next(req),
+    const middlewareSpy = vi.fn(
+      (req: unknown, next: (r: unknown) => Promise<unknown>) => next(req),
     );
     const server = createProxyServer(backend, {
       passThroughResources: ['res://pass'],
       resourceMiddleware: [middlewareSpy as never],
+      name: 'test-server',
     });
 
     await invokeHandler(server, 'resources/read', { uri: 'res://pass' });
@@ -342,7 +424,10 @@ describe('createProxyServer() — passThroughResources', () => {
 
   it('returns the raw upstream response for pass-through resources', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { passThroughResources: ['res://pass'] });
+    const server = createProxyServer(backend, {
+      passThroughResources: ['res://pass'],
+      name: 'test-server',
+    });
 
     const result = (await invokeHandler(server, 'resources/read', {
       uri: 'res://pass',
@@ -356,13 +441,13 @@ describe('createProxyServer() — capability mirroring', () => {
   it('advertises only upstream capabilities', async () => {
     const backend = makeMockBackend();
     vi.mocked(backend.getServerCapabilities).mockReturnValue({ tools: {} });
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
 
-    const result = await invokeHandler(server, 'initialize', {
+    const result = (await invokeHandler(server, 'initialize', {
       protocolVersion: '2025-03-26',
       capabilities: {},
       clientInfo: { name: 'test', version: '0.0.1' },
-    }) as { capabilities: ServerCapabilities };
+    })) as { capabilities: ServerCapabilities };
 
     expect(result.capabilities).toEqual({ tools: {} });
     await expect(invokeHandler(server, 'prompts/list')).rejects.toThrow(
@@ -384,13 +469,19 @@ describe('createProxyServer() — notification fanout', () => {
       tools: { listChanged: true },
     });
 
-    const serverA = createProxyServer(backend);
-    const serverB = createProxyServer(backend);
+    const serverA = createProxyServer(backend, { name: 'test-server' });
+    const serverB = createProxyServer(backend, { name: 'test-server' });
 
-    const sendA = vi.spyOn(serverA, 'sendToolListChanged').mockResolvedValue(undefined);
-    const sendB = vi.spyOn(serverB, 'sendToolListChanged').mockResolvedValue(undefined);
+    const sendA = vi
+      .spyOn(serverA, 'sendToolListChanged')
+      .mockResolvedValue(undefined);
+    const sendB = vi
+      .spyOn(serverB, 'sendToolListChanged')
+      .mockResolvedValue(undefined);
 
-    await backend.__notificationHandlers.get('notifications/tools/list_changed')?.();
+    await backend.__notificationHandlers.get(
+      'notifications/tools/list_changed',
+    )?.();
 
     expect(sendA).toHaveBeenCalledOnce();
     expect(sendB).toHaveBeenCalledOnce();
@@ -399,7 +490,9 @@ describe('createProxyServer() — notification fanout', () => {
     sendA.mockClear();
     sendB.mockClear();
 
-    await backend.__notificationHandlers.get('notifications/tools/list_changed')?.();
+    await backend.__notificationHandlers.get(
+      'notifications/tools/list_changed',
+    )?.();
 
     expect(sendA).not.toHaveBeenCalled();
     expect(sendB).toHaveBeenCalledOnce();
@@ -412,13 +505,15 @@ describe('createProxyServer() — request options', () => {
     const sendNotification = vi.fn().mockResolvedValue(undefined);
     const controller = new AbortController();
 
-    vi.mocked(backend.callTool).mockImplementation(async (_params, _schema, options) => {
-      options?.onprogress?.({ progress: 2, total: 5, message: 'working' });
-      expect(options?.signal).toBe(controller.signal);
-      return { content: [{ type: 'text', text: 'raw upstream response' }] };
-    });
+    vi.mocked(backend.callTool).mockImplementation(
+      async (_params, _schema, options) => {
+        options?.onprogress?.({ progress: 2, total: 5, message: 'working' });
+        expect(options?.signal).toBe(controller.signal);
+        return { content: [{ type: 'text', text: 'raw upstream response' }] };
+      },
+    );
 
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(
       server,
@@ -434,7 +529,12 @@ describe('createProxyServer() — request options', () => {
 
     expect(sendNotification).toHaveBeenCalledWith({
       method: 'notifications/progress',
-      params: { progressToken: 'progress-1', progress: 2, total: 5, message: 'working' },
+      params: {
+        progressToken: 'progress-1',
+        progress: 2,
+        total: 5,
+        message: 'working',
+      },
     });
   });
 
@@ -442,12 +542,22 @@ describe('createProxyServer() — request options', () => {
     const backend = makeMockBackend();
     const controller = new AbortController();
 
-    vi.mocked(backend.readResource).mockImplementation(async (_params, options) => {
-      expect(options?.signal).toBe(controller.signal);
-      return { contents: [{ uri: 'res://normal', text: 'raw content', mimeType: 'text/plain' }] };
-    });
+    vi.mocked(backend.readResource).mockImplementation(
+      async (_params, options) => {
+        expect(options?.signal).toBe(controller.signal);
+        return {
+          contents: [
+            {
+              uri: 'res://normal',
+              text: 'raw content',
+              mimeType: 'text/plain',
+            },
+          ],
+        };
+      },
+    );
 
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(
       server,
@@ -465,26 +575,42 @@ describe('createProxyServer() — request options', () => {
 describe('createProxyServer() — onTelemetry', () => {
   it('emits a success event after a successful tool call', async () => {
     const backend = makeMockBackend();
-    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] = [];
-    const server = createProxyServer(backend, { onTelemetry: (e) => events.push(e) });
+    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] =
+      [];
+    const server = createProxyServer(backend, {
+      onTelemetry: (e) => events.push(e),
+      name: 'test-server',
+    });
 
-    await invokeHandler(server, 'tools/call', { name: 'echo', arguments: { msg: 'hi' } });
+    await invokeHandler(server, 'tools/call', {
+      name: 'echo',
+      arguments: { msg: 'hi' },
+    });
 
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: 'tool_call', tool: 'echo', outcome: 'success' });
+    expect(events[0]).toMatchObject({
+      type: 'tool_call',
+      tool: 'echo',
+      outcome: 'success',
+    });
     expect(typeof events[0].duration_ms).toBe('number');
   });
 
   it('emits a rejected event with TOOL_HIDDEN when a hidden tool is called', async () => {
     const backend = makeMockBackend();
-    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] = [];
+    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] =
+      [];
     const server = createProxyServer(backend, {
       hiddenTools: ['sensitive_tool'],
       onTelemetry: (e) => events.push(e),
+      name: 'test-server',
     });
 
     await expect(
-      invokeHandler(server, 'tools/call', { name: 'sensitive_tool', arguments: {} }),
+      invokeHandler(server, 'tools/call', {
+        name: 'sensitive_tool',
+        arguments: {},
+      }),
     ).rejects.toBeDefined();
 
     expect(events).toHaveLength(1);
@@ -498,15 +624,25 @@ describe('createProxyServer() — onTelemetry', () => {
 
   it('emits an error event when the upstream throws', async () => {
     const backend = makeMockBackend();
-    vi.mocked(backend.callTool).mockRejectedValueOnce(new Error('upstream failure'));
-    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] = [];
-    const server = createProxyServer(backend, { onTelemetry: (e) => events.push(e) });
+    vi.mocked(backend.callTool).mockRejectedValueOnce(
+      new Error('upstream failure'),
+    );
+    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] =
+      [];
+    const server = createProxyServer(backend, {
+      onTelemetry: (e) => events.push(e),
+      name: 'test-server',
+    });
 
     await expect(
       invokeHandler(server, 'tools/call', { name: 'echo', arguments: {} }),
     ).rejects.toBeDefined();
 
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: 'tool_call', tool: 'echo', outcome: 'error' });
+    expect(events[0]).toMatchObject({
+      type: 'tool_call',
+      tool: 'echo',
+      outcome: 'error',
+    });
   });
 });
