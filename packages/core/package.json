@@ -15,7 +15,10 @@
       "default": "./dist/testing.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "keywords": [
     "mcp",
     "middleware",
@@ -44,9 +47,9 @@
     "@modelcontextprotocol/sdk": ">=1.0.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@types/node": "^22.0.0",
-    "typescript": "^5.0.0",
+    "typescript": "~6.0.3",
     "vitest": "^3.0.0"
   }
 }
