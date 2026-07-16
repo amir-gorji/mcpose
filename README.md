@@ -293,6 +293,8 @@ Middleware arrays, visibility filters (`hiddenTools` / `passThroughTools`), and 
 
 ```ts
 interface ProxyOptions {
+  name?:                 string;
+  version?:              string;
   toolMiddleware?:       ReadonlyArray<ToolMiddleware>;
   resourceMiddleware?:   ReadonlyArray<ResourceMiddleware>;
   listToolsMiddleware?:  ReadonlyArray<ListToolsMiddleware>;
@@ -308,6 +310,9 @@ function createProxyServer(backend: BackendClient, options?: ProxyOptions): Serv
 ```
 
 </details>
+
+`name` and `version` set the MCP server identity returned in `initialize`.
+Both are optional: `name` defaults to `'mcpose'`, and `version` defaults to the mcpose library version, so set your own when you ship a proxy.
 
 `onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
 Wire it to `@mcpose/otel` or any custom sink.

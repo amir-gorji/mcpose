@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth';
 
 vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   StreamableHTTPClientTransport: vi.fn(),
@@ -105,5 +106,67 @@ describe('createBackendClient() URL scheme validation', () => {
     await expect(
       createBackendClient({ url: 'not a url' }),
     ).rejects.toThrow();
+  });
+});
+
+describe('createBackendClient() HTTP transport options', () => {
+  // A recognizable stand-in for an OAuthClientProvider. createBackendClient only
+  // stores the reference, so we assert identity rather than driving a real flow.
+  const stubAuthProvider = {
+    redirectUrl: 'http://localhost:3000/callback',
+  } as unknown as OAuthClientProvider;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Resolves to the options object passed to the last StreamableHTTPClientTransport. */
+  const lastTransportOpts = async () => {
+    const { StreamableHTTPClientTransport } = await import(
+      '@modelcontextprotocol/sdk/client/streamableHttp.js'
+    );
+    return vi.mocked(StreamableHTTPClientTransport).mock.lastCall?.[1] as
+      | {
+          requestInit?: { headers?: Record<string, string> };
+          authProvider?: OAuthClientProvider;
+        }
+      | undefined;
+  };
+
+  it('forwards custom headers to the HTTP transport via requestInit', async () => {
+    const headers = { Authorization: 'Bearer abc', 'X-Trace-Id': '123' };
+    await createBackendClient({ url: 'https://example.com/mcp', headers });
+
+    expect((await lastTransportOpts())?.requestInit?.headers).toEqual(headers);
+  });
+
+  it('forwards an OAuth authProvider to the HTTP transport', async () => {
+    await createBackendClient({
+      url: 'https://example.com/mcp',
+      authProvider: stubAuthProvider,
+    });
+
+    expect((await lastTransportOpts())?.authProvider).toBe(stubAuthProvider);
+  });
+
+  it('forwards headers and authProvider together', async () => {
+    const headers = { Authorization: 'Bearer t' };
+    await createBackendClient({
+      url: 'https://example.com/mcp',
+      headers,
+      authProvider: stubAuthProvider,
+    });
+    const opts = await lastTransportOpts();
+
+    expect(opts?.requestInit?.headers).toEqual(headers);
+    expect(opts?.authProvider).toBe(stubAuthProvider);
+  });
+
+  it('omits requestInit and authProvider when neither is configured', async () => {
+    await createBackendClient({ url: 'https://example.com/mcp' });
+    const opts = await lastTransportOpts();
+
+    expect(opts?.requestInit).toBeUndefined();
+    expect(opts?.authProvider).toBeUndefined();
   });
 });

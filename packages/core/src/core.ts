@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -36,6 +37,15 @@ import { createInMemoryEventStore } from './eventStore.js';
 import type { EventStore } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { rejectionMcpError } from './rejection.js';
 import type { RejectionReason } from './rejection.js';
+
+// Source our own package version once at module load. `createRequire` works under
+// ESM on Node 18+ without the `--experimental-json-modules` flag and avoids the
+// tsconfig and runtime caveats of a static JSON import.
+const readPackageJson = createRequire(import.meta.url);
+const pkg = readPackageJson('../package.json') as { version: string };
+
+/** Name the proxy advertises when `ProxyOptions.name` is omitted. */
+const DEFAULT_PROXY_NAME = 'mcpose';
 
 export type { ProxyContext } from './proxyContext.js';
 
@@ -139,9 +149,17 @@ export interface HttpProxyOptions {
 export interface ProxyOptions {
   /**
    * Human-readable name for this proxy instance.
-   * This is what the new MCP server is called
+   * Defaults to `'mcpose'` when omitted, so leaving out `options` entirely stays
+   * backward compatible.
    */
-  name: string;
+  name?: string;
+
+  /**
+   * Version of this proxy server (yours, not the mcpose library). MCP clients see
+   * it in the `initialize` response. Defaults to the mcpose library version when
+   * omitted; set it to your own release version when you ship your proxy.
+   */
+  version?: string;
 
   /**
    * Tool middleware in response-processing order (first = innermost).
@@ -370,7 +388,7 @@ function registerListChangedForwarders(
  */
 export function createProxyServer(
   backend: BackendClient,
-  options: ProxyOptions,
+  options: ProxyOptions = {},
 ): Server {
   const capabilities = createProxyCapabilities(backend);
   const toolPipeline = pipe(options.toolMiddleware ?? []);
@@ -383,7 +401,10 @@ export function createProxyServer(
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
 
   const server = new Server(
-    { name: options.name, version: '1.1.1' },
+    {
+      name: options.name ?? DEFAULT_PROXY_NAME,
+      version: options.version ?? pkg.version,
+    },
     { capabilities },
   );
 
@@ -533,7 +554,7 @@ export function createProxyServer(
  */
 export async function startProxy(
   backend: BackendClient,
-  options: ProxyOptions,
+  options: ProxyOptions = {},
 ): Promise<void> {
   const server = createProxyServer(backend, options);
   await server.connect(new StdioServerTransport());
@@ -579,8 +600,8 @@ function applyBodySizeLimit(
  */
 export function startHttpProxy(
   backend: BackendClient,
-  options: ProxyOptions,
-  httpOptions: HttpProxyOptions,
+  options: ProxyOptions = {},
+  httpOptions: HttpProxyOptions = {},
 ): Promise<http.Server> {
   const mcpPath = httpOptions.path ?? '/mcp';
   const port = httpOptions.port ?? 3000;

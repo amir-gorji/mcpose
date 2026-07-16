@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   createProxyServer,
   type ListToolsMiddleware,
@@ -14,6 +16,16 @@ import {
   ToolListChangedNotificationSchema,
   type ServerCapabilities,
 } from '@modelcontextprotocol/sdk/types.js';
+
+/** Independent copy of our own package version, read straight from disk. */
+const pkgVersion = (
+  JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL('../../package.json', import.meta.url)),
+      'utf8',
+    ),
+  ) as { version: string }
+).version;
 
 // ── Test helpers ────────────────────────────────────────────────────────────
 
@@ -644,5 +656,45 @@ describe('createProxyServer() — onTelemetry', () => {
       tool: 'echo',
       outcome: 'error',
     });
+  });
+});
+
+describe('createProxyServer() — server identity', () => {
+  // The MCP SDK stores the advertised server info on a protected `_serverInfo`.
+  const serverInfo = (server: ReturnType<typeof createProxyServer>) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (server as any)._serverInfo as { name: string; version: string };
+  };
+
+  it('omitting options is allowed and defaults name to "mcpose"', () => {
+    const backend = makeMockBackend();
+    // No options at all: this is the backward-compatible path.
+    const server = createProxyServer(backend);
+
+    expect(serverInfo(server).name).toBe('mcpose');
+  });
+
+  it('honors an explicit name when provided', () => {
+    const backend = makeMockBackend();
+    const server = createProxyServer(backend, { name: 'my-proxy' });
+
+    expect(serverInfo(server).name).toBe('my-proxy');
+  });
+
+  it('defaults version to the mcpose library version when omitted', () => {
+    const backend = makeMockBackend();
+    const server = createProxyServer(backend);
+
+    expect(serverInfo(server).version).toBe(pkgVersion);
+    // Regression guard against the stale hardcoded '1.1.1'.
+    expect(serverInfo(server).version).not.toBe('1.1.1');
+  });
+
+  it('honors an explicit version, independent of the library version', () => {
+    const backend = makeMockBackend();
+    // A developer ships their own proxy version on top of a pinned library.
+    const server = createProxyServer(backend, { version: '9.9.9' });
+
+    expect(serverInfo(server).version).toBe('9.9.9');
   });
 });
