@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/amir-gorji/mcpose/security/advisories/new
+    about: Report a security vulnerability privately. Do not open a public issue for security reports.
+  - name: Documentation
+    url: https://github.com/amir-gorji/mcpose#readme
+    about: Read the README and package docs before opening an issue.
