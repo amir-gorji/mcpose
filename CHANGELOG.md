@@ -2,11 +2,17 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-07-16
+
 ### Added
 
 - **`mcpose`** — `BackendConfig` gains a `headers` property (`Record<string, string>`); the headers are sent on every request to the backend (HTTP/SSE only), so the upstream client can pass headers through.
 - **`mcpose`** — `BackendConfig` gains an `authProvider` property (`OAuthClientProvider` from the MCP SDK); when set, the HTTP/SSE transport drives the MCP OAuth flow (interactive/browser authorization with transparent token refresh) for backends that require OAuth. HTTP/SSE only; ignored in stdio mode.
-- **`mcpose`** — `ProxyOptions` gains a required `name` property; the proxy MCP server now advertises `options.name` instead of the generic `'mcpose'`.
+- **`mcpose`** — `ProxyOptions` gains optional `name` and `version` properties that control the MCP server identity advertised in `initialize`. `name` defaults to `'mcpose'`; `version` defaults to the mcpose library version, so set your own proxy's release version when you ship. Omitting `options` entirely stays backward compatible.
+
+### Fixed
+
+- **`mcpose`** — the proxy no longer advertises a hardcoded `'1.1.1'` as its server version; the default now reflects the mcpose library version and is overridable via `ProxyOptions.version`.
 
 ## [2.0.2] - 2026-06-02
 
