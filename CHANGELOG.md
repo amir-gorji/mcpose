@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-07-16
+
+### Changed
+
+- **`mcpose`** — re-release of 2.1.0, which was published to npm then unpublished due to breaking changes.
+- The corrected, non-breaking build is identical to the 2.1.0 in this repository.
+- npm does not allow republishing the same version number, so the corrected build ships as 2.1.1.
+- No functional changes from 2.1.0.
+
 ## [2.1.0] - 2026-07-16
 
 ### Added
