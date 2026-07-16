@@ -11,8 +11,18 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
-  "keywords": ["mcp", "audit", "compliance", "fintech", "hmac", "merkle"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "audit",
+    "compliance",
+    "fintech",
+    "hmac",
+    "merkle"
+  ],
   "author": "Amir Gorji",
   "license": "MIT",
   "repository": {
@@ -30,7 +40,7 @@
     "mcpose": ">=2.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^25.9.1",
     "typescript": "~6.0.3",
     "vitest": "^3.0.0",
     "mcpose": "workspace:*"
