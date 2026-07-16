@@ -1,0 +1,20 @@
+{
+  "name": "mcpose-examples",
+  "private": true,
+  "type": "module",
+  "description": "Runnable examples for mcpose",
+  "scripts": {
+    "pii-redaction-audit": "tsx pii-redaction-audit.ts",
+    "governance-proxy": "tsx governance-proxy.ts"
+  },
+  "dependencies": {
+    "@mcpose/audit": "^2.0.0",
+    "@modelcontextprotocol/sdk": ">=1.0.0",
+    "mcpose": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "~6.0.3"
+  }
+}

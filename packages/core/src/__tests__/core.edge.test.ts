@@ -1,8 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import {
-  createProxyServer,
-  type ToolMiddleware,
-} from '../core.js';
+import { createProxyServer, type ToolMiddleware } from '../core.js';
 import type { BackendClient } from '../backendClient.js';
 import {
   ErrorCode,
@@ -14,7 +11,9 @@ import {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function makeRichBackend(capabilities: ServerCapabilities | undefined): BackendClient & {
+function makeRichBackend(
+  capabilities: ServerCapabilities | undefined,
+): BackendClient & {
   __notificationHandlers: Map<string, () => Promise<void>>;
 } {
   const notificationHandlers = new Map<string, () => Promise<void>>();
@@ -22,10 +21,16 @@ function makeRichBackend(capabilities: ServerCapabilities | undefined): BackendC
     getServerCapabilities: vi.fn().mockReturnValue(capabilities),
     listTools: vi.fn().mockResolvedValue({
       tools: [
-        { name: 'normal_tool', description: 'n', inputSchema: { type: 'object', properties: {} } },
+        {
+          name: 'normal_tool',
+          description: 'n',
+          inputSchema: { type: 'object', properties: {} },
+        },
       ],
     }),
-    callTool: vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] }),
+    callTool: vi
+      .fn()
+      .mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] }),
     listResources: vi.fn().mockResolvedValue({
       resources: [
         { name: 'a', uri: 'res://a', mimeType: 'text/plain' },
@@ -63,14 +68,20 @@ async function invoke(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handlers = (server as any)._requestHandlers as Map<
     string,
-    (req: { method: string; params: Record<string, unknown> }, extra: object) => Promise<unknown>
+    (
+      req: { method: string; params: Record<string, unknown> },
+      extra: object,
+    ) => Promise<unknown>
   >;
   const handler = handlers.get(method);
   if (!handler) throw new Error(`No handler registered for method: ${method}`);
   return handler({ method, params }, extra);
 }
 
-function hasHandler(server: ReturnType<typeof createProxyServer>, method: string): boolean {
+function hasHandler(
+  server: ReturnType<typeof createProxyServer>,
+  method: string,
+): boolean {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return ((server as any)._requestHandlers as Map<string, unknown>).has(method);
 }
@@ -81,7 +92,7 @@ describe('createProxyServer() — capability edge cases', () => {
   it('builds a server even when upstream returns undefined capabilities', () => {
     const backend = makeRichBackend(undefined);
 
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     expect(hasHandler(server, 'tools/list')).toBe(false);
     expect(hasHandler(server, 'tools/call')).toBe(false);
@@ -94,7 +105,7 @@ describe('createProxyServer() — capability edge cases', () => {
 
   it('mirrors tools without listChanged as {} (not {listChanged:true})', async () => {
     const backend = makeRichBackend({ tools: {} });
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     const result = (await invoke(server, 'initialize', {
       protocolVersion: '2025-03-26',
@@ -109,7 +120,7 @@ describe('createProxyServer() — capability edge cases', () => {
   it('does not register list-changed handlers when upstream lacks listChanged', () => {
     const backend = makeRichBackend({ tools: {}, resources: {}, prompts: {} });
 
-    createProxyServer(backend);
+    createProxyServer(backend, { name: 'test-server' });
 
     expect(backend.setNotificationHandler).not.toHaveBeenCalled();
   });
@@ -121,10 +132,12 @@ describe('createProxyServer() — shared notification bus', () => {
   it('registers backend handler exactly once for two proxies sharing one backend', () => {
     const backend = makeRichBackend({ tools: { listChanged: true } });
 
-    createProxyServer(backend);
-    createProxyServer(backend);
+    createProxyServer(backend, { name: 'test-server' });
+    createProxyServer(backend, { name: 'test-server' });
 
-    const calls = (backend.setNotificationHandler as ReturnType<typeof vi.fn>).mock.calls.filter(
+    const calls = (
+      backend.setNotificationHandler as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(
       ([schema]) => schema === ToolListChangedNotificationSchema,
     );
     expect(calls).toHaveLength(1);
@@ -133,13 +146,15 @@ describe('createProxyServer() — shared notification bus', () => {
   it('re-registers handler after all proxies close (bus is dropped)', async () => {
     const backend = makeRichBackend({ tools: { listChanged: true } });
 
-    const a = createProxyServer(backend);
+    const a = createProxyServer(backend, { name: 'test-server' });
     a.onclose?.();
 
     // The bus should have been deleted; a fresh proxy registers a new handler.
-    createProxyServer(backend);
+    createProxyServer(backend, { name: 'test-server' });
 
-    const calls = (backend.setNotificationHandler as ReturnType<typeof vi.fn>).mock.calls.filter(
+    const calls = (
+      backend.setNotificationHandler as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(
       ([schema]) => schema === ToolListChangedNotificationSchema,
     );
     expect(calls.length).toBeGreaterThanOrEqual(2);
@@ -154,6 +169,7 @@ describe('createProxyServer() — hidden vs passthrough precedence', () => {
     const server = createProxyServer(backend, {
       hiddenTools: ['shared_name'],
       passThroughTools: ['shared_name'],
+      name: 'test-server',
     });
 
     await expect(
@@ -163,10 +179,21 @@ describe('createProxyServer() — hidden vs passthrough precedence', () => {
 
   it('returns the upstream list reference unchanged when hiddenTools is empty', async () => {
     const backend = makeRichBackend({ tools: {} });
-    const upstream = { tools: [{ name: 't', description: '', inputSchema: { type: 'object', properties: {} } }] };
+    const upstream = {
+      tools: [
+        {
+          name: 't',
+          description: '',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+    };
     (backend.listTools as ReturnType<typeof vi.fn>).mockResolvedValue(upstream);
 
-    const server = createProxyServer(backend, { hiddenTools: [] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      hiddenTools: [],
+    });
     const result = await invoke(server, 'tools/list');
 
     expect(result).toBe(upstream);
@@ -178,7 +205,7 @@ describe('createProxyServer() — hidden vs passthrough precedence', () => {
 describe('createProxyServer() — request options shapes', () => {
   it('passes undefined when neither signal nor progressToken is present', async () => {
     const backend = makeRichBackend({ tools: {} });
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invoke(server, 'tools/list');
 
@@ -187,10 +214,15 @@ describe('createProxyServer() — request options shapes', () => {
 
   it('passes only { signal } when there is no progressToken', async () => {
     const backend = makeRichBackend({ tools: {} });
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
     const controller = new AbortController();
 
-    await invoke(server, 'tools/list', {}, { signal: controller.signal, requestId: 1 });
+    await invoke(
+      server,
+      'tools/list',
+      {},
+      { signal: controller.signal, requestId: 1 },
+    );
 
     expect(backend.listTools).toHaveBeenCalledWith(
       {},
@@ -200,7 +232,7 @@ describe('createProxyServer() — request options shapes', () => {
 
   it('passes undefined when progressToken is present but sendNotification is missing', async () => {
     const backend = makeRichBackend({ tools: {} });
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invoke(
       server,
@@ -216,12 +248,14 @@ describe('createProxyServer() — request options shapes', () => {
     const backend = makeRichBackend({ tools: {} });
     const sendNotification = vi.fn().mockResolvedValue(undefined);
 
-    (backend.callTool as ReturnType<typeof vi.fn>).mockImplementation(async (_p, _s, options) => {
-      options?.onprogress?.({ progress: 1 });
-      return { content: [] };
-    });
+    (backend.callTool as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_p, _s, options) => {
+        options?.onprogress?.({ progress: 1 });
+        return { content: [] };
+      },
+    );
 
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
     await invoke(
       server,
       'tools/call',
@@ -233,7 +267,9 @@ describe('createProxyServer() — request options shapes', () => {
       method: 'notifications/progress',
       params: { progressToken: 'tok', progress: 1 },
     });
-    const call = sendNotification.mock.calls[0]?.[0] as { params: Record<string, unknown> };
+    const call = sendNotification.mock.calls[0]?.[0] as {
+      params: Record<string, unknown>;
+    };
     expect('total' in call.params).toBe(false);
     expect('message' in call.params).toBe(false);
   });
@@ -247,7 +283,10 @@ describe('createProxyServer() — middleware behavior', () => {
     const failing: ToolMiddleware = async () => {
       throw new Error('mw failure');
     };
-    const server = createProxyServer(backend, { toolMiddleware: [failing] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [failing],
+    });
 
     await expect(
       invoke(server, 'tools/call', { name: 'normal_tool', arguments: {} }),

@@ -1,4 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll, vi, beforeEach, afterEach } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  vi,
+  beforeEach,
+  afterEach,
+} from 'vitest';
 import * as http from 'node:http';
 import {
   startHttpProxy,
@@ -13,7 +22,11 @@ import { makeMockBackend, getPort, closeServer } from './_helpers.js';
 describe('startHttpProxy()', () => {
   it('resolves to a listening http.Server', async () => {
     const backend = makeMockBackend();
-    const server = await startHttpProxy(backend, {}, { port: 0 });
+    const server = await startHttpProxy(
+      backend,
+      { name: 'test-server' },
+      { port: 0 },
+    );
     try {
       expect(server).toBeInstanceOf(http.Server);
       expect(server.listening).toBe(true);
@@ -28,13 +41,15 @@ describe('startHttpProxy()', () => {
 
     beforeAll(async () => {
       const backend = makeMockBackend();
-      server = await startHttpProxy(backend, {}, { port: 0, path: '/mcp' });
+      server = await startHttpProxy(
+        backend,
+        { name: 'test-server' },
+        { port: 0, path: '/mcp' },
+      );
       baseUrl = `http://localhost:${getPort(server)}`;
     });
 
-    afterAll(
-      () => new Promise<void>((res) => server.close(() => res())),
-    );
+    afterAll(() => new Promise<void>((res) => server.close(() => res())));
 
     it('returns 404 for unknown paths', async () => {
       const res = await fetch(`${baseUrl}/unknown`, { method: 'POST' });
@@ -118,7 +133,12 @@ describe('startHttpProxy()', () => {
           'Content-Type': 'application/json',
           'mcp-session-id': 'nonexistent-session-id-12345',
         },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/list',
+          params: {},
+        }),
       });
 
       expect(res.status).toBe(404);
@@ -128,7 +148,11 @@ describe('startHttpProxy()', () => {
   describe('maxSessions', () => {
     it('returns 503 when session cap is reached', async () => {
       const backend = makeMockBackend();
-      const server = await startHttpProxy(backend, {}, { port: 0, path: '/mcp', maxSessions: 1 });
+      const server = await startHttpProxy(
+        backend,
+        { name: 'test-server' },
+        { port: 0, path: '/mcp', maxSessions: 1 },
+      );
       const baseUrl = `http://localhost:${getPort(server)}`;
 
       const initBody = JSON.stringify({
@@ -141,15 +165,26 @@ describe('startHttpProxy()', () => {
           clientInfo: { name: 'test', version: '0.0.1' },
         },
       });
-      const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
+      const headers = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      };
 
       try {
         // First session — should succeed
-        const res1 = await fetch(`${baseUrl}/mcp`, { method: 'POST', headers, body: initBody });
+        const res1 = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers,
+          body: initBody,
+        });
         expect(res1.status).not.toBe(503);
 
         // Second session — should be rejected
-        const res2 = await fetch(`${baseUrl}/mcp`, { method: 'POST', headers, body: initBody });
+        const res2 = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers,
+          body: initBody,
+        });
         expect(res2.status).toBe(503);
       } finally {
         await new Promise<void>((res) => server.close(() => res()));
@@ -158,13 +193,21 @@ describe('startHttpProxy()', () => {
   });
 
   describe('sessionTtlMs', () => {
-    beforeEach(() => { vi.useFakeTimers(); });
-    afterEach(() => { vi.useRealTimers(); });
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
     it('removes session after TTL expires', async () => {
       const backend = makeMockBackend();
       const ttlMs = 5000;
-      const server = await startHttpProxy(backend, {}, { port: 0, path: '/mcp', sessionTtlMs: ttlMs });
+      const server = await startHttpProxy(
+        backend,
+        { name: 'test-server' },
+        { port: 0, path: '/mcp', sessionTtlMs: ttlMs },
+      );
       const baseUrl = `http://localhost:${getPort(server)}`;
 
       const initBody = JSON.stringify({
@@ -177,10 +220,17 @@ describe('startHttpProxy()', () => {
           clientInfo: { name: 'test', version: '0.0.1' },
         },
       });
-      const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
+      const headers = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      };
 
       try {
-        const initRes = await fetch(`${baseUrl}/mcp`, { method: 'POST', headers, body: initBody });
+        const initRes = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers,
+          body: initBody,
+        });
         const sessionId = initRes.headers.get('mcp-session-id');
         expect(sessionId).toBeTruthy();
 
@@ -188,7 +238,12 @@ describe('startHttpProxy()', () => {
         const before = await fetch(`${baseUrl}/mcp`, {
           method: 'POST',
           headers: { ...headers, 'mcp-session-id': sessionId! },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/list',
+            params: {},
+          }),
         });
         expect(before.status).not.toBe(404);
 
@@ -199,7 +254,12 @@ describe('startHttpProxy()', () => {
         const after = await fetch(`${baseUrl}/mcp`, {
           method: 'POST',
           headers: { ...headers, 'mcp-session-id': sessionId! },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }),
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 3,
+            method: 'tools/list',
+            params: {},
+          }),
         });
         expect(after.status).toBe(404);
       } finally {
@@ -211,7 +271,11 @@ describe('startHttpProxy()', () => {
   describe('maxBodyBytes', () => {
     it('returns 413 when request body exceeds limit', async () => {
       const backend = makeMockBackend();
-      const server = await startHttpProxy(backend, {}, { port: 0, path: '/mcp', maxBodyBytes: 10 });
+      const server = await startHttpProxy(
+        backend,
+        { name: 'test-server' },
+        { port: 0, path: '/mcp', maxBodyBytes: 10 },
+      );
       const baseUrl = `http://localhost:${getPort(server)}`;
 
       try {
@@ -222,7 +286,10 @@ describe('startHttpProxy()', () => {
           params: {
             protocolVersion: '2024-11-05',
             capabilities: {},
-            clientInfo: { name: 'test-client-with-long-name', version: '0.0.1' },
+            clientInfo: {
+              name: 'test-client-with-long-name',
+              version: '0.0.1',
+            },
           },
         });
         const res = await fetch(`${baseUrl}/mcp`, {
@@ -242,7 +309,7 @@ describe('startHttpProxy()', () => {
       const backend = makeMockBackend();
       const server = await startHttpProxy(
         backend,
-        {},
+        { name: 'test-server' },
         {
           port: 0,
           path: '/mcp',
@@ -258,7 +325,12 @@ describe('startHttpProxy()', () => {
         const res = await fetch(`${baseUrl}/mcp`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {},
+          }),
         });
         expect(res.status).toBe(403);
       } finally {
@@ -270,11 +342,13 @@ describe('startHttpProxy()', () => {
       const backend = makeMockBackend();
       const server = await startHttpProxy(
         backend,
-        {},
+        { name: 'test-server' },
         {
           port: 0,
           path: '/mcp',
-          onRequest: () => { throw new Error('auth failure'); },
+          onRequest: () => {
+            throw new Error('auth failure');
+          },
         },
       );
       const baseUrl = `http://localhost:${getPort(server)}`;
@@ -283,7 +357,12 @@ describe('startHttpProxy()', () => {
         const res = await fetch(`${baseUrl}/mcp`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {},
+          }),
         });
         expect(res.status).toBe(401);
       } finally {
@@ -298,12 +377,14 @@ describe('startHttpProxy()', () => {
       const backend = makeMockBackend();
       const server = await startHttpProxy(
         backend,
-        {},
+        { name: 'test-server' },
         {
           port: 0,
           path: '/mcp',
           onError: (err) => errors.push(err),
-          onRequest: () => { throw new Error('boom'); },
+          onRequest: () => {
+            throw new Error('boom');
+          },
         },
       );
       const baseUrl = `http://localhost:${getPort(server)}`;
@@ -317,7 +398,12 @@ describe('startHttpProxy()', () => {
         await fetch(`${baseUrl}/mcp`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {},
+          }),
         });
         // The onRequest threw, which is caught internally — no onError call for that path
         // Verify onError is defined and can be called
@@ -333,11 +419,13 @@ describe('startHttpProxy()', () => {
       const errors: unknown[] = [];
       const backend = makeMockBackend();
       // Make listTools throw to trigger the catch path
-      (backend.listTools as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('backend down'));
+      (backend.listTools as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('backend down'),
+      );
 
       const server = await startHttpProxy(
         backend,
-        {},
+        { name: 'test-server' },
         { port: 0, path: '/mcp', onError: (err) => errors.push(err) },
       );
       const baseUrl = `http://localhost:${getPort(server)}`;
@@ -346,10 +434,19 @@ describe('startHttpProxy()', () => {
         // Initialize first
         const initRes = await fetch(`${baseUrl}/mcp`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+          },
           body: JSON.stringify({
-            jsonrpc: '2.0', id: 1, method: 'initialize',
-            params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '0.0.1' } },
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2024-11-05',
+              capabilities: {},
+              clientInfo: { name: 'test', version: '0.0.1' },
+            },
           }),
         });
         const sessionId = initRes.headers.get('mcp-session-id');
@@ -375,14 +472,22 @@ describe('startHttpProxy()', () => {
       return next(req);
     };
 
-    const listToolsMiddleware: ListToolsMiddleware = async (req, next, context) => {
+    const listToolsMiddleware: ListToolsMiddleware = async (
+      req,
+      next,
+      context,
+    ) => {
       seenListContext = context;
       return next(req);
     };
 
     const server = await startHttpProxy(
       backend,
-      { toolMiddleware: [toolMiddleware], listToolsMiddleware: [listToolsMiddleware] },
+      {
+        name: 'test-server',
+        toolMiddleware: [toolMiddleware],
+        listToolsMiddleware: [listToolsMiddleware],
+      },
       { port: 0, path: '/mcp' },
     );
 
@@ -474,7 +579,11 @@ describe('startHttpProxy()', () => {
     let baseUrl: string;
 
     beforeAll(async () => {
-      server = await startHttpProxy(makeMockBackend(), {}, { port: 0, path: '/mcp' });
+      server = await startHttpProxy(
+        makeMockBackend(),
+        { name: 'test-server' },
+        { port: 0, path: '/mcp' },
+      );
       baseUrl = `http://localhost:${getPort(server)}`;
     });
     afterAll(() => closeServer(server));
@@ -515,11 +624,15 @@ describe('startHttpProxy()', () => {
           clientInfo: { name: 't', version: '0' },
         },
       });
-      const server = await startHttpProxy(backend, {}, {
-        port: 0,
-        path: '/mcp',
-        maxBodyBytes: Buffer.byteLength(body),
-      });
+      const server = await startHttpProxy(
+        backend,
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          maxBodyBytes: Buffer.byteLength(body),
+        },
+      );
       const baseUrl = `http://localhost:${getPort(server)}`;
       try {
         const res = await fetch(`${baseUrl}/mcp`, {
@@ -548,11 +661,15 @@ describe('startHttpProxy()', () => {
           clientInfo: { name: 't', version: '0' },
         },
       });
-      const server = await startHttpProxy(backend, {}, {
-        port: 0,
-        path: '/mcp',
-        maxBodyBytes: Buffer.byteLength(body) - 1,
-      });
+      const server = await startHttpProxy(
+        backend,
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          maxBodyBytes: Buffer.byteLength(body) - 1,
+        },
+      );
       const baseUrl = `http://localhost:${getPort(server)}`;
       try {
         const res = await fetch(`${baseUrl}/mcp`, {
@@ -574,11 +691,15 @@ describe('startHttpProxy()', () => {
     // behavior — every initialize → 503.
     it('rejects every initialize with 503', async () => {
       const backend = makeMockBackend();
-      const server = await startHttpProxy(backend, {}, {
-        port: 0,
-        path: '/mcp',
-        maxSessions: 0,
-      });
+      const server = await startHttpProxy(
+        backend,
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          maxSessions: 0,
+        },
+      );
       const baseUrl = `http://localhost:${getPort(server)}`;
       try {
         const res = await fetch(`${baseUrl}/mcp`, {
@@ -608,7 +729,11 @@ describe('startHttpProxy()', () => {
   describe('server.close()', () => {
     it('is idempotent — calling close() twice does not throw', async () => {
       const backend = makeMockBackend();
-      const server = await startHttpProxy(backend, {}, { port: 0, path: '/mcp' });
+      const server = await startHttpProxy(
+        backend,
+        { name: 'test-server' },
+        { port: 0, path: '/mcp' },
+      );
 
       const first = new Promise<void>((res) => server.close(() => res()));
       // Second call before the first resolves; must not throw, must not double-close sessions.
@@ -619,7 +744,11 @@ describe('startHttpProxy()', () => {
 
     it('closes active sessions when called', async () => {
       const backend = makeMockBackend();
-      const server = await startHttpProxy(backend, {}, { port: 0, path: '/mcp' });
+      const server = await startHttpProxy(
+        backend,
+        { name: 'test-server' },
+        { port: 0, path: '/mcp' },
+      );
       const baseUrl = `http://localhost:${getPort(server)}`;
 
       await fetch(`${baseUrl}/mcp`, {
@@ -650,7 +779,7 @@ describe('startHttpProxy()', () => {
       const backend = makeMockBackend();
       const server = await startHttpProxy(
         backend,
-        {},
+        { name: 'test-server' },
         {
           port: 0,
           path: '/mcp',
@@ -673,7 +802,7 @@ describe('startHttpProxy()', () => {
       const backend = makeMockBackend();
       const server = await startHttpProxy(
         backend,
-        {},
+        { name: 'test-server' },
         {
           port: 0,
           path: '/mcp',
@@ -704,7 +833,7 @@ describe('startHttpProxy()', () => {
       };
       const server = await startHttpProxy(
         backend,
-        { listToolsMiddleware: [mw] },
+        { listToolsMiddleware: [mw], name: 'test-server' },
         { port: 0, path: '/mcp' },
       );
       const baseUrl = `http://localhost:${getPort(server)}`;
@@ -718,7 +847,9 @@ describe('startHttpProxy()', () => {
             Accept: 'application/json, text/event-stream',
           },
           body: JSON.stringify({
-            jsonrpc: '2.0', id: 1, method: 'initialize',
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
             params: {
               protocolVersion: '2024-11-05',
               capabilities: {},
@@ -743,11 +874,19 @@ describe('startHttpProxy()', () => {
                 'x-multi': ['one', 'two'],
               },
             },
-            (res) => { res.on('data', () => {}); res.on('end', () => resolve()); },
+            (res) => {
+              res.on('data', () => {});
+              res.on('end', () => resolve());
+            },
           );
-          req.write(JSON.stringify({
-            jsonrpc: '2.0', id: 2, method: 'tools/list', params: {},
-          }));
+          req.write(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 2,
+              method: 'tools/list',
+              params: {},
+            }),
+          );
           req.end();
         });
 

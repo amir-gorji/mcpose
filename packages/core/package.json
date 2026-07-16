@@ -1,6 +1,6 @@
 {
   "name": "mcpose",
-  "version": "2.0.2",
+  "version": "2.1.0",
   "description": "The audit and governance layer for MCP",
   "type": "module",
   "main": "./dist/index.js",
@@ -15,7 +15,10 @@
       "default": "./dist/testing.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "keywords": [
     "mcp",
     "middleware",
@@ -44,9 +47,9 @@
     "@modelcontextprotocol/sdk": ">=1.0.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "typescript": "~6.0.3",
     "@types/node": "^25.9.1",
-    "typescript": "^5.0.0",
     "vitest": "^3.0.0"
   }
 }

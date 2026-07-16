@@ -2,9 +2,13 @@
  * Backend MCP client factory.
  * Modes: stdio (spawns child process) or HTTP/SSE (connects to running server).
  */
+import { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPClientTransportOptions,
+} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 /** Backend connection config. */
 export interface BackendConfig {
@@ -14,6 +18,10 @@ export interface BackendConfig {
   args?: string[];
   /** HTTP/SSE URL of running backend. Takes precedence over stdio. */
   url?: string;
+  /** Custom HTTP headers sent on every request to the backend (HTTP/SSE only). */
+  headers?: Record<string, string>;
+  /** OAuth provdider for interactive/browser auth + transparent token refresh (HHT/SSE only). */
+  authProvider?: OAuthClientProvider;
 }
 
 export type BackendClient = Client;
@@ -37,7 +45,7 @@ export async function createBackendClient(
   );
 
   const transport = config.url
-    ? getHttpTransport(config.url)
+    ? getHttpTransport(config.url, config.headers, config.authProvider)
     : new StdioClientTransport({
         command: config.command!,
         args: config.args ?? [],
@@ -47,13 +55,23 @@ export async function createBackendClient(
   return client;
 }
 
-const getHttpTransport = (urlString: string) => {
+const getHttpTransport = (
+  urlString: string,
+  headers?: Record<string, string>,
+  authProvider?: OAuthClientProvider,
+) => {
   const url = new URL(urlString);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(
       `mcpose: unsupported URL protocol "${url.protocol}" — only http: and https: are allowed`,
     );
   }
-  return new StreamableHTTPClientTransport(url);
+  const opts: Partial<StreamableHTTPClientTransportOptions> = {};
+  if (headers) {
+    opts.requestInit = { headers };
+  }
+  if (authProvider) {
+    opts.authProvider = authProvider;
+  }
+  return new StreamableHTTPClientTransport(url, opts);
 };
-

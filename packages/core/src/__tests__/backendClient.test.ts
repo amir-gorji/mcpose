@@ -42,9 +42,9 @@ describe('createBackendClient() URL scheme validation', () => {
     await expect(
       createBackendClient({ url: 'http://localhost:3000/mcp' }),
     ).resolves.toBeDefined();
-    expect(StreamableHTTPClientTransport).toHaveBeenCalledWith(
-      expect.objectContaining({ protocol: 'http:' }),
-    );
+    const lastUrl = vi.mocked(StreamableHTTPClientTransport).mock.lastCall?.[0];
+    expect(lastUrl).toBeInstanceOf(URL);
+    expect((lastUrl as URL).protocol).toBe('http:');
   });
 
   it('passes for https: URLs', async () => {
@@ -54,9 +54,9 @@ describe('createBackendClient() URL scheme validation', () => {
     await expect(
       createBackendClient({ url: 'https://example.com/mcp' }),
     ).resolves.toBeDefined();
-    expect(StreamableHTTPClientTransport).toHaveBeenCalledWith(
-      expect.objectContaining({ protocol: 'https:' }),
-    );
+    const lastUrl = vi.mocked(StreamableHTTPClientTransport).mock.lastCall?.[0];
+    expect(lastUrl).toBeInstanceOf(URL);
+    expect((lastUrl as URL).protocol).toBe('https:');
   });
 
   it('throws when neither command nor url is provided', async () => {
@@ -82,9 +82,9 @@ describe('createBackendClient() URL scheme validation', () => {
         url: 'https://example.com/mcp',
       }),
     ).resolves.toBeDefined();
-    expect(StreamableHTTPClientTransport).toHaveBeenCalledWith(
-      expect.objectContaining({ protocol: 'https:' }),
-    );
+    const lastUrl = vi.mocked(StreamableHTTPClientTransport).mock.lastCall?.[0];
+    expect(lastUrl).toBeInstanceOf(URL);
+    expect((lastUrl as URL).protocol).toBe('https:');
   });
 
   it('normalizes uppercase URL schemes via WHATWG URL parsing', async () => {

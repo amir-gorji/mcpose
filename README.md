@@ -12,20 +12,58 @@
 
 The audit and governance layer for MCP.
 
-mcpose is a transparent middleware proxy for MCP servers. It intercepts, transforms, and governs tool calls through composable functional middleware — and with `@mcpose/audit`, produces tamper-evident, compliance-grade audit trails that satisfy DORA Article 17 and SR 11-7 requirements.
+mcpose is a transparent middleware proxy for MCP servers. It intercepts, transforms, and governs tool calls through composable functional middleware, and with `@mcpose/audit`, produces tamper-evident, compliance-grade audit trails that satisfy DORA Article 17 and SR 11-7 requirements.
+
+## Features
+
+- **Transparent proxy**: wrap any upstream MCP server without modifying it.
+- **Composable middleware** with a predictable onion model: each layer runs before *and* after the inner pipeline.
+- **Hide or gate tools and resources** per caller, with a structured `RejectionReason` in every blocked call.
+- **Per-session identity resolution**: resolve a caller once, then stamp the `Identity` on every request in the session.
+- **Compliance-grade audit trails** (DORA Art. 17, SR 11-7) via [`@mcpose/audit`](#mcposeaudit): HMAC-chained events, a Merkle `ReplayManifest`, and AES-256-GCM for high-sensitivity tiers.
+- **HTTP/SSE transport** with mTLS, session limits, and SSE reconnect replay.
+- **Production-minded**: ships ESM with first-class TypeScript types and runs on Node.js 18+.
+
+## When to use mcpose
+
+- You operate MCP servers in a regulated environment (finance, healthcare) and need PII redaction, caller identity, and a tamper-evident audit trail on every tool call.
+- You want to add cross-cutting behavior (logging, redaction, rate limiting, governance) to an MCP server you do not control.
+- You need to hide or gate specific tools and resources per caller, or stamp a resolved identity onto every request.
+
+## Table of Contents
+
+- [Features](#features)
+- [When to use mcpose](#when-to-use-mcpose)
+- [New in 2.0](#new-in-20)
+- [Background](#background)
+- [Concept](#concept)
+- [Packages](#packages)
+- [Install](#install)
+- [Quick Start](#quick-start)
+- [Proxy model](#proxy-model)
+- [Middleware model](#middleware-model)
+- [API Reference](#api-reference)
+- [@mcpose/audit](#mcposeaudit)
+- [@mcpose/testing](#mcposetesting)
+- [Recipe: PII redaction + audit](#recipe-pii-redaction--audit)
+- [Recipe: list_tools rewriting](#recipe-list_tools-rewriting)
+- [Examples](#examples)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
 ## New in 2.0
 
-- **`@mcpose/audit`** — HMAC-chained audit events, Merkle-proof `ReplayManifest`, AES-256-GCM encryption for high-sensitivity tiers, `createSensitivityResolver`, `createDefaultSigningKeyProvider`
-- **`@mcpose/testing`** — compliance assertion helpers: `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`
-- **Identity resolution** — `resolveIdentity` hook on `HttpProxyOptions`; resolved `Identity` stamped on every `ProxyContext`
-- **Agent delegation chain** — `delegatedFrom?: Identity[]` on `ProxyContext` for A2A handoff recording
-- **mTLS** — pass `tlsOptions` to `startHttpProxy` for mutual TLS
-- **SSE reconnect replay** — built-in in-memory `EventStore` with `PersistentEventStore` interface for Redis/Postgres adapters
-- **Session lifecycle hook** — `onSessionClosed` on `HttpProxyOptions`; wire `auditHandle.closeSession` here to flush `ReplayManifest` on session end
-- **Structured rejection reasons** — `RejectionReason` in MCP error `data` field on every blocked call
+- **`@mcpose/audit`**: HMAC-chained audit events, Merkle-proof `ReplayManifest`, AES-256-GCM encryption for high-sensitivity tiers, `createSensitivityResolver`, `createDefaultSigningKeyProvider`
+- **`@mcpose/testing`**: compliance assertion helpers: `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`
+- **Identity resolution**: `resolveIdentity` hook on `HttpProxyOptions`; resolved `Identity` stamped on every `ProxyContext`
+- **Agent delegation chain**: `delegatedFrom?: Identity[]` on `ProxyContext` for A2A handoff recording
+- **mTLS**: pass `tlsOptions` to `startHttpProxy` for mutual TLS
+- **SSE reconnect replay**: built-in in-memory `EventStore` with `PersistentEventStore` interface for Redis/Postgres adapters
+- **Session lifecycle hook**: `onSessionClosed` on `HttpProxyOptions`; wire `auditHandle.closeSession` here to flush `ReplayManifest` on session end
+- **Structured rejection reasons**: `RejectionReason` in MCP error `data` field on every blocked call
 
 ---
 
@@ -47,7 +85,7 @@ This is a monorepo. Each package publishes independently and has its own README 
 
 | Package | npm | What it does |
 |---|---|---|
-| [`mcpose`](./packages/core/README.md) | [![npm](https://img.shields.io/npm/v/mcpose)](https://www.npmjs.com/package/mcpose) | Proxy core — pipeline, transports, identity, governance. |
+| [`mcpose`](./packages/core/README.md) | [![npm](https://img.shields.io/npm/v/mcpose)](https://www.npmjs.com/package/mcpose) | Proxy core: pipeline, transports, identity, governance. |
 | [`@mcpose/audit`](./packages/audit/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/audit)](https://www.npmjs.com/package/@mcpose/audit) | Tamper-evident HMAC audit chain + Merkle `ReplayManifest`. |
 | [`@mcpose/testing`](./packages/testing/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/testing)](https://www.npmjs.com/package/@mcpose/testing) | Runner-agnostic compliance assertions for the audit chain. |
 
@@ -55,11 +93,17 @@ This is a monorepo. Each package publishes independently and has its own README 
 
 ## Install
 
+**Prerequisites**
+
+- Node.js 18 or newer.
+- `@modelcontextprotocol/sdk` as a peer dependency (installed separately below).
+- For compliance audit trails, also install [`@mcpose/audit`](#mcposeaudit).
+
 ```bash
 npm install mcpose
 ```
 
-**Peer dependency** — must be installed separately:
+**Peer dependency**: must be installed separately:
 
 ```bash
 npm install @modelcontextprotocol/sdk@>=1.0.0
@@ -118,7 +162,7 @@ For each supported tool or resource, mcpose picks one of three routing paths:
 | Path | Option | Behavior |
 |---|---|---|
 | **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses; rejected with `TOOL_HIDDEN` / `RESOURCE_HIDDEN` at call time |
-| **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded raw to upstream — all middleware skipped |
+| **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded raw to upstream; all middleware skipped |
 | **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline |
 
 Prompts are forwarded as-is when the upstream supports prompts.
@@ -165,13 +209,21 @@ toolMiddleware: [piiMW, auditMW]
 // 5. auditMW exit   → log already-clean data    (processes response last)
 ```
 
-`compose([outerMW, innerMW])` uses the **opposite** (outermost-first) convention — `ProxyOptions` arrays are **not** interchangeable with `compose()` arguments.
+`compose([outerMW, innerMW])` uses the **opposite** (outermost-first) convention: `ProxyOptions` arrays are **not** interchangeable with `compose()` arguments.
 
 ---
 
 ## API Reference
 
+> The canonical API reference for each package lives in its own README: [`packages/core`](./packages/core/README.md), [`@mcpose/audit`](./packages/audit/README.md), and [`@mcpose/testing`](./packages/testing/README.md).
+> The full type signatures are reproduced below, with the dense reference collapsed for scannability.
+
 ### `ProxyContext` · `Middleware<Req, Res>` · `ToolMiddleware` · `ResourceMiddleware` · `ListToolsMiddleware` · `compose()` · `createProxyContext()`
+
+The per-request `ProxyContext`, the `Identity` shape, the middleware type aliases, and the `hasToolContent` type guard.
+
+<details>
+<summary>Show type definitions</summary>
 
 ```ts
 interface ProxyContext {
@@ -182,7 +234,7 @@ interface ProxyContext {
   signal?: AbortSignal;
   /** Resolved caller identity. Present when resolveIdentity is configured. */
   identity?: Identity;
-  /** Agent delegation chain — populated from A2A handoff headers. */
+  /** Agent delegation chain: populated from A2A handoff headers. */
   delegatedFrom?: Identity[];
   /** Reserved for v3 policy engine. */
   policy?: never;
@@ -210,9 +262,11 @@ type ToolMiddleware     = Middleware<CallToolRequest, CompatibilityCallToolResul
 type ResourceMiddleware = Middleware<ReadResourceRequest, ReadResourceResult>;
 type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
 
-// Type guard — narrows CompatibilityCallToolResult to CallToolResult
+// Type guard: narrows CompatibilityCallToolResult to CallToolResult
 function hasToolContent(r: CompatibilityCallToolResult): r is CallToolResult;
 ```
+
+</details>
 
 ---
 
@@ -232,6 +286,11 @@ async function createBackendClient(config: BackendConfig): Promise<BackendClient
 
 ### `ProxyOptions` · `startProxy()` · `createProxyServer()`
 
+Middleware arrays, visibility filters (`hiddenTools` / `passThroughTools`), and the telemetry hook.
+
+<details>
+<summary>Show the <code>ProxyOptions</code> interface and entry-point signatures</summary>
+
 ```ts
 interface ProxyOptions {
   toolMiddleware?:       ReadonlyArray<ToolMiddleware>;
@@ -248,11 +307,19 @@ async function startProxy(backend: BackendClient, options?: ProxyOptions): Promi
 function createProxyServer(backend: BackendClient, options?: ProxyOptions): Server;
 ```
 
-`onTelemetry` fires after every tool call with timing, outcome, tool name, and identity. Wire it to `@mcpose/otel` or any custom sink.
+</details>
+
+`onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
+Wire it to `@mcpose/otel` or any custom sink.
 
 ---
 
 ### `HttpProxyOptions` · `startHttpProxy()`
+
+The HTTP/SSE entry point: port/host/path, body and session limits, per-session identity resolution, mTLS, and the SSE reconnect replay store.
+
+<details>
+<summary>Show the <code>HttpProxyOptions</code> interface and <code>startHttpProxy()</code> signature</summary>
 
 ```ts
 interface HttpProxyOptions {
@@ -261,12 +328,12 @@ interface HttpProxyOptions {
   path?: string;         // Default: '/mcp'
   onRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>;
   onError?: (err: unknown) => void;
-  maxBodyBytes?: number; // Default: 4 MB — returns 413 on excess
+  maxBodyBytes?: number; // Default: 4 MB; returns 413 on excess
   maxSessions?: number;  // Excess requests return 503
   sessionTtlMs?: number; // Sessions auto-close after this duration
   /** Resolves caller identity once per session. Errors abort the session with 401. */
   resolveIdentity?: (req: http.IncomingMessage) => Identity | Promise<Identity>;
-  /** mTLS — pass Node's https.ServerOptions (key, cert, ca, requestCert, rejectUnauthorized). */
+  /** mTLS: pass Node's https.ServerOptions (key, cert, ca, requestCert, rejectUnauthorized). */
   tlsOptions?: https.ServerOptions;
   /** SSE reconnect replay store. Defaults to in-memory. Pass null to disable. */
   eventStore?: PersistentEventStore | null;
@@ -281,6 +348,8 @@ function startHttpProxy(
 ): Promise<http.Server>;
 ```
 
+</details>
+
 ```ts
 import { createBackendClient, startHttpProxy } from 'mcpose';
 
@@ -294,7 +363,12 @@ On shutdown, active proxy sessions are closed before the underlying `http.Server
 
 ### `RejectionReason`
 
-Every blocked call embeds a `RejectionReason` in the MCP error `data` field. The top-level error code is unchanged, so existing clients that only inspect the code are unaffected. Audit middleware and agents can inspect `error.data.rejectionReason` for programmatic handling.
+Every blocked call embeds a `RejectionReason` in the MCP error `data` field.
+The top-level error code is unchanged, so existing clients that only inspect the code are unaffected.
+Audit middleware and agents can inspect `error.data.rejectionReason` for programmatic handling.
+
+<details>
+<summary>Show the <code>RejectionReason</code> union</summary>
 
 ```ts
 type RejectionReason =
@@ -309,6 +383,8 @@ type RejectionReason =
   | 'SESSION_LIMIT'         // max concurrent sessions reached (HTTP 503)
   | 'BODY_LIMIT';           // request body exceeded maxBodyBytes (HTTP 413)
 ```
+
+</details>
 
 ---
 
@@ -328,7 +404,7 @@ import { createMockBackendClient, runToolMiddleware } from 'mcpose/testing';
 npm install @mcpose/audit
 ```
 
-`@mcpose/audit` provides a tamper-evident, compliance-grade audit trail for every tool call. It produces an HMAC-chained log of `AuditEvent` records and a `ReplayManifest` per session — a Merkle-proof document that lets auditors verify what happened without re-executing anything.
+`@mcpose/audit` provides a tamper-evident, compliance-grade audit trail for every tool call. It produces an HMAC-chained log of `AuditEvent` records and a `ReplayManifest` per session: a Merkle-proof document that lets auditors verify what happened without re-executing anything.
 
 ### Sensitivity tiers
 
@@ -349,11 +425,11 @@ import { createAuditMiddleware, createDefaultSigningKeyProvider, createSensitivi
 import { startHttpProxy } from 'mcpose';
 
 // Supplied by your application:
-//   backend       — an mcpose BackendClient (see Quick Start above)
-//   auditLog      — your durable sink for audit events
-//   manifestStore — your durable sink for replay manifests
-//   piiMW         — an upstream redaction middleware
-//   extractJwt    — your resolveIdentity function
+//   backend: an mcpose BackendClient (see Quick Start above)
+//   auditLog: your durable sink for audit events
+//   manifestStore: your durable sink for replay manifests
+//   piiMW: an upstream redaction middleware
+//   extractJwt: your resolveIdentity function
 
 const signingKey = createDefaultSigningKeyProvider(process.env.AUDIT_SECRET!);
 
@@ -383,7 +459,7 @@ const server = await startHttpProxy(backend, {
 ```ts
 const resolver = createSensitivityResolver(
   { get_balance: 'low', search: 'medium' },
-  // Optional override fn — takes precedence over the static map
+  // Optional override fn: takes precedence over the static map
   (tool, identity, args) => identity.roles.includes('admin') ? 'low' : 'high',
 );
 ```
@@ -430,6 +506,12 @@ interface AuditMiddlewareHandle {
 
 ### `AuditEvent` schema
 
+A discriminated union on `sensitivityTier`.
+The base record every event shares (hashes, chain link, outcome, identity).
+
+<details>
+<summary>Show the <code>AuditEvent</code> schema</summary>
+
 ```ts
 // Discriminated union on sensitivityTier
 type AuditEvent = LowAuditEvent | MediumAuditEvent | HighAuditEvent;
@@ -451,9 +533,16 @@ interface AuditEventBase {
 }
 ```
 
+</details>
+
 ### `ReplayManifest`
 
-Produced at session close. Covers all audit events with a Merkle root and individual proofs, signed by the `SigningKeyProvider`. Any third party can verify a single event without access to the full log.
+Produced at session close.
+Covers all audit events with a Merkle root and individual proofs, signed by the `SigningKeyProvider`.
+Any third party can verify a single event without access to the full log.
+
+<details>
+<summary>Show the <code>ReplayManifest</code> interface</summary>
 
 ```ts
 interface ReplayManifest {
@@ -468,6 +557,8 @@ interface ReplayManifest {
   signature: string;  // signs merkleRoot
 }
 ```
+
+</details>
 
 ---
 
@@ -539,9 +630,9 @@ await startHttpProxy(backend, {
 });
 ```
 
-PII is redacted *before* the audit layer ever sees the response — no raw PII reaches a log.
+PII is redacted *before* the audit layer ever sees the response; no raw PII reaches a log.
 
-> **Reference implementation:** [`elastic-pii-proxy`](https://github.com/amir-gorji/elastic-pii-proxy) is a production example of this pattern — an Elasticsearch MCP proxy that uses mcpose with PII redaction and `@mcpose/audit` to serve financial data safely to LLM agents.
+> **Reference implementation:** [`elastic-pii-proxy`](https://github.com/amir-gorji/elastic-pii-proxy) is a production example of this pattern: an Elasticsearch MCP proxy that uses mcpose with PII redaction and `@mcpose/audit` to serve financial data safely to LLM agents.
 
 ---
 
@@ -567,19 +658,59 @@ const enrichDescriptions: ListToolsMiddleware = async (req, next, context) => {
 
 ---
 
+## Examples
+
+Runnable, well-commented examples live in [`examples/`](./examples/).
+
+| File | What it shows |
+|---|---|
+| [`pii-redaction-audit.ts`](./examples/pii-redaction-audit.ts) | The canonical mcpose pattern: PII redaction composed with audit middleware over HTTP/SSE, with per-session identity resolution. |
+| [`governance-proxy.ts`](./examples/governance-proxy.ts) | Governance features: `hiddenTools`, `passThroughTools`, and `onTelemetry`. Self-contained, uses `createMockBackendClient` so no upstream server is needed. |
+
+```bash
+# From the repository root:
+pnpm install
+cd examples
+pnpm exec tsx governance-proxy.ts      # governance (self-contained, no upstream needed)
+pnpm exec tsx pii-redaction-audit.ts   # PII redaction + audit (needs an upstream MCP server)
+```
+
+The comments in each file walk through the setup step by step and mark the values you need to supply: upstream endpoint, audit secret, identity resolver, and durable sinks.
+
+---
+
 ## Roadmap
 
-- [x] Composable middleware — `startProxy()`, `startHttpProxy()`, `createProxyServer()`
+- [x] Composable middleware: `startProxy()`, `startHttpProxy()`, `createProxyServer()`
 - [x] Streamable HTTP transport with stateful sessions and SSE reconnect replay
-- [x] Identity resolution — `resolveIdentity` hook, `Identity` on `ProxyContext`
-- [x] mTLS support — `tlsOptions` on `HttpProxyOptions`
-- [x] `@mcpose/audit` — HMAC chain, Merkle proofs, `ReplayManifest`, sensitivity tiers
-- [x] `@mcpose/testing` — compliance assertion helpers
-- [ ] `@mcpose/policy` — RBAC policy engine (v3)
-- [ ] `@mcpose/fintech-identity` — OIDC → financial identity profile (v3)
-- [ ] `@mcpose/otel` — OpenTelemetry spans adapter (v3)
-- [ ] Persistent EventStore adapters — Redis, Postgres (v3)
+- [x] Identity resolution: `resolveIdentity` hook, `Identity` on `ProxyContext`
+- [x] mTLS support: `tlsOptions` on `HttpProxyOptions`
+- [x] `@mcpose/audit`: HMAC chain, Merkle proofs, `ReplayManifest`, sensitivity tiers
+- [x] `@mcpose/testing`: compliance assertion helpers
+- [ ] `@mcpose/policy`: RBAC policy engine (v3)
+- [ ] `@mcpose/fintech-identity`: OIDC → financial identity profile (v3)
+- [ ] `@mcpose/otel`: OpenTelemetry spans adapter (v3)
+- [ ] Persistent EventStore adapters: Redis, Postgres (v3)
 - [ ] GDPR/CCPA consent middleware + cryptographic erasure (v3)
+
+---
+
+## Contributing
+
+Contributions are welcome.
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the development setup, the common `pnpm` commands, and the project conventions around `CONTEXT.md` and the ADRs.
+
+A few load-bearing rules:
+
+- The `@mcpose/audit` tamper-evidence invariants must never silently break.
+  Read [ADR-0003](./docs/adr/0003-audit-subkeys-derived-from-signing-oracle.md) before touching the chain, signing, encryption, or `ReplayManifest`.
+- Run `pnpm ts:ci` and `pnpm test` before opening a pull request.
+- Do not weaken an existing audit assertion to make a test pass.
+
+By participating you agree to uphold the [Code of Conduct](./CODE_OF_CONDUCT.md).
+
+To report a security vulnerability, follow [`SECURITY.md`](./SECURITY.md) and report it privately.
+Do not open a public issue for security reports.
 
 ---
 
