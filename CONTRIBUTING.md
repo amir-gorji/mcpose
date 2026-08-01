@@ -14,14 +14,13 @@ This is a pnpm + Turborepo monorepo.
 | `packages/core` | The `mcpose` package: proxy pipeline, transports, identity, governance. |
 | `packages/audit` | The `@mcpose/audit` package: HMAC audit chain, Merkle `ReplayManifest`, sensitivity tiers. |
 | `packages/testing` | The `@mcpose/testing` package: runner-agnostic compliance assertions. |
-| `apps/` | Internal demo and sandbox applications. |
+| `examples/` | Runnable examples (type-checked in CI). |
 | `docs/adr/` | Architecture Decision Records. |
 | `CONTEXT.md` | The ubiquitous-language glossary for the domain. |
-| `knowledge/` | Reference notes on documentation and project conventions. |
 
 ## Prerequisites
 
-- Node.js 18 or newer (CI runs on Node 22).
+- Node.js 20 or newer (CI runs on Node 20, 22, and 24).
 - pnpm 11.x (the workspace pins `pnpm@11.0.8`).
 - A git checkout of this repository.
 
@@ -93,7 +92,6 @@ See [ADR-0003](./docs/adr/0003-audit-subkeys-derived-from-signing-oracle.md) and
 ## Documentation conventions
 
 The project follows a few markdown conventions that keep the docs consistent and reviewable.
-The [`knowledge/`](./knowledge) directory has reference notes on the documentation philosophy if you want the full context.
 
 ### Prose style
 

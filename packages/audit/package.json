@@ -9,10 +9,16 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist",
+    "src",
     "README.md"
   ],
   "keywords": [
@@ -25,6 +31,10 @@
   ],
   "author": "Amir Gorji",
   "license": "MIT",
+  "homepage": "https://github.com/amir-gorji/mcpose#readme",
+  "bugs": {
+    "url": "https://github.com/amir-gorji/mcpose/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/amir-gorji/mcpose.git",
@@ -33,7 +43,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "ts:ci": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
   },
   "engines": {

@@ -1,0 +1,47 @@
+# Publishes a package when its release tag is pushed, with npm provenance.
+#
+# Tag formats (matching existing repo history):
+#   vX.Y.Z                    -> publishes mcpose (core)
+#   @mcpose/audit@X.Y.Z       -> publishes @mcpose/audit
+#   @mcpose/testing@X.Y.Z     -> publishes @mcpose/testing
+#
+# Prerequisite (one-time, npmjs.com side): configure this repository as a
+# trusted publisher for each package (or add an NPM_TOKEN secret and switch
+# the auth step accordingly). Until that is done, tag pushes will fail
+# loudly at the publish step rather than silently doing nothing.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '@mcpose/*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo build ts:ci test
+      - name: Resolve package filter from tag
+        id: pkg
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in
+            @mcpose/audit@*)   echo "filter=@mcpose/audit" >> "$GITHUB_OUTPUT" ;;
+            @mcpose/testing@*) echo "filter=@mcpose/testing" >> "$GITHUB_OUTPUT" ;;
+            v*)                echo "filter=mcpose" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unrecognized tag: $TAG" >&2; exit 1 ;;
+          esac
+      - run: pnpm publish --access public --provenance --no-git-checks --filter ${{ steps.pkg.outputs.filter }}
