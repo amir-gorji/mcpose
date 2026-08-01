@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createHash, createHmac } from 'node:crypto';
 import { createDefaultSigningKeyProvider } from '../signingKey.js';
 
 describe('createDefaultSigningKeyProvider', () => {
@@ -8,6 +9,20 @@ describe('createDefaultSigningKeyProvider', () => {
     expect(typeof provider.keyId).toBe('string');
     expect(provider.keyId.length).toBeGreaterThan(0);
     expect(typeof provider.sign).toBe('function');
+  });
+
+  it('derives keyId as HMAC(secret, mcpose/v2/keyid), never bare SHA256(secret)', () => {
+    // v1 published SHA256(secret) as keyId, enabling offline brute-force of
+    // low-entropy secrets from any manifest. Pin the v2 formula and the label.
+    const provider = createDefaultSigningKeyProvider('secret');
+    expect(provider.keyId).toBe(
+      createHmac('sha256', Buffer.from('secret'))
+        .update('mcpose/v2/keyid')
+        .digest('hex'),
+    );
+    expect(provider.keyId).not.toBe(
+      createHash('sha256').update('secret').digest('hex'),
+    );
   });
 
   it('sign returns a non-empty buffer', async () => {

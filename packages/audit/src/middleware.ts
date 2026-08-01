@@ -7,14 +7,30 @@ import type {
   LowAuditEvent,
   MediumAuditEvent,
   ReplayManifest,
+  SensitivityTier,
 } from './types.js';
-import { computeChainHash, computeMerkleProof, computeMerkleRoot, sha256hex } from './chain.js';
-import type { Identity, ProxyContext } from 'mcpose';
+import {
+  canonicalJson,
+  chainPreimageFields,
+  computeChainHash,
+  computeMerkleProof,
+  computeMerkleRoot,
+  sha256hex,
+  stableStringify,
+} from './chain.js';
+import { markPassThroughObserver } from 'mcpose';
+import type { Identity, ProxyContext, RejectionReason } from 'mcpose';
 
 // Domain-separation labels for subkey derivation. The version segment lets the
-// derivation scheme rotate without colliding with chains written under an old scheme.
-const DOMAIN_CHAIN = Buffer.from('mcpose/v1/chain');
-const DOMAIN_ENC = Buffer.from('mcpose/v1/enc');
+// derivation scheme rotate without colliding with chains written under an old
+// scheme. v1 → v2: canonical-JSON preimages, signed full manifest,
+// domain-separated Merkle, per-position event keys, AEAD-bound ciphertexts.
+// See ADR-0003 and ADR-0004.
+const DOMAIN_CHAIN = Buffer.from('mcpose/v2/chain');
+const DOMAIN_ENC = Buffer.from('mcpose/v2/enc');
+const DOMAIN_MANIFEST = 'mcpose/v2/manifest';
+const DOMAIN_EVENT_KEY = 'mcpose/v2/eventkey\0';
+const DOMAIN_AAD = 'mcpose/v2/aad\0';
 
 interface SessionState {
   events: AuditEvent[];
@@ -23,16 +39,32 @@ interface SessionState {
   identity: Identity;
 }
 
-function aesEncrypt(plaintext: string, key: Buffer): string {
+function aesEncrypt(plaintext: string, key: Buffer, aad: string): string {
+  if (key.length !== 32) {
+    throw new RangeError(`aesEncrypt: expected a 32-byte key, got ${key.length}`);
+  }
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key.subarray(0, 32), iv);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  cipher.setAAD(Buffer.from(aad));
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return Buffer.concat([iv, tag, encrypted]).toString('base64');
 }
 
-function deriveEventKey(encRoot: Buffer, eventId: string): Buffer {
-  return createHmac('sha256', encRoot).update(eventId).digest();
+/**
+ * Per-event AES key. Bound to session + position + event id so no two
+ * events can share a key even if a host reuses a ProxyContext (and with it
+ * a requestId) across calls.
+ */
+function deriveEventKey(
+  encRoot: Buffer,
+  sessionId: string | undefined,
+  position: number,
+  eventId: string,
+): Buffer {
+  return createHmac('sha256', encRoot)
+    .update(`${DOMAIN_EVENT_KEY}${sessionId ?? ''}\0${position}\0${eventId}`)
+    .digest();
 }
 
 function anonymousIdentity(): Identity {
@@ -46,8 +78,18 @@ function anonymousIdentity(): Identity {
   };
 }
 
+function getRejectionReason(err: unknown): RejectionReason | undefined {
+  const data = (err as { data?: { rejectionReason?: unknown } } | null)?.data;
+  return typeof data?.rejectionReason === 'string'
+    ? (data.rejectionReason as RejectionReason)
+    : undefined;
+}
+
 export function createAuditMiddleware(options: AuditOptions): AuditMiddlewareHandle {
   const sessions = new Map<string, SessionState>();
+  const includeRejections = options.includeRejections ?? true;
+  const onAuditError: NonNullable<AuditOptions['onAuditError']> =
+    options.onAuditError ?? ((err) => console.error(err));
 
   // Private subkeys, derived once from the signing secret THROUGH the oracle with
   // domain separation. The provider never exposes raw key bytes, and keyId must
@@ -56,85 +98,138 @@ export function createAuditMiddleware(options: AuditOptions): AuditMiddlewareHan
   // contract, hence a PRF suitable for key derivation.
   //   chainKey — keys the per-entry HMAC chain (forgery resistance)
   //   encRoot  — root for per-event AES-256 keys (high-tier confidentiality)
-  // Cache the promise so concurrent first calls share one derivation.
+  // Cache the promise so concurrent first calls share one derivation; a failed
+  // derivation clears the cache so a transient provider error is retryable.
   let subkeys: Promise<{ chainKey: Buffer; encRoot: Buffer }> | undefined;
-  const deriveSubkeys = () =>
-    (subkeys ??= (async () => {
+  const deriveSubkeys = () => {
+    subkeys ??= (async () => {
       const [chainKey, encRoot] = await Promise.all([
         options.signingKey.sign(DOMAIN_CHAIN),
         options.signingKey.sign(DOMAIN_ENC),
       ]);
       return { chainKey, encRoot };
-    })());
-
-  const middleware: AuditMiddlewareHandle['middleware'] = async (req, next, ctx) => {
-    const { chainKey, encRoot } = await deriveSubkeys();
-    const start = Date.now();
-    const identity = ctx.identity ?? anonymousIdentity();
-    const sessionId = ctx.sessionId;
-
-    if (sessionId && !sessions.has(sessionId)) {
-      sessions.set(sessionId, {
-        events: [],
-        prevChainHash: '',
-        startedAt: new Date().toISOString(),
-        identity,
-      });
-    }
-
-    const session = sessionId ? sessions.get(sessionId) : undefined;
-    const position = session?.events.length ?? 0;
-    const tool = req.params.name;
-    const args = (req.params.arguments as Record<string, unknown>) ?? {};
-    const tier = options.sensitivityResolver(tool, identity, args);
-
-    let outcome: AuditEvent['outcome'] = 'success';
-    let result: unknown;
-    let threw = false;
-
-    try {
-      result = await next(req);
-    } catch (err) {
-      outcome = 'error';
-      threw = true;
-      result = undefined;
-      const event = buildEvent({
-        ctx, identity, tool, args, result: undefined,
-        duration_ms: Date.now() - start, outcome, position,
-        prevChainHash: session?.prevChainHash ?? '',
-        tier, chainKey, encRoot,
-      });
-      advanceSession(session, event);
-      await options.onEvent(event);
-      throw err;
-    }
-
-    if (!threw) {
-      const event = buildEvent({
-        ctx, identity, tool, args, result,
-        duration_ms: Date.now() - start, outcome, position,
-        prevChainHash: session?.prevChainHash ?? '',
-        tier, chainKey, encRoot,
-      });
-      advanceSession(session, event);
-      await options.onEvent(event);
-    }
-
-    return result as Awaited<ReturnType<typeof next>>;
+    })();
+    subkeys.catch(() => {
+      subkeys = undefined;
+    });
+    return subkeys;
   };
+
+  const inner: AuditMiddlewareHandle['middleware'] = async (req, next, ctx) => {
+      // Subkey derivation runs BEFORE the upstream call: if the signing
+      // provider is unavailable the call fails fast rather than running
+      // unaudited.
+      const { chainKey, encRoot } = await deriveSubkeys();
+      const startedAt = new Date().toISOString();
+      const start = performance.now();
+      const identity = ctx.identity ?? anonymousIdentity();
+      const sessionId = ctx.sessionId;
+
+      if (sessionId && !sessions.has(sessionId)) {
+        sessions.set(sessionId, {
+          events: [],
+          prevChainHash: '',
+          startedAt,
+          identity,
+        });
+      }
+
+      const tool = req.params.name;
+      const args = (req.params.arguments as Record<string, unknown>) ?? {};
+
+      let result: unknown;
+      let thrown: unknown;
+      let threw = false;
+      try {
+        result = await next(req);
+      } catch (err) {
+        thrown = err;
+        threw = true;
+      }
+
+      // Post-call audit section. Two invariants:
+      // 1. Atomic append — no `await` between reading the position and
+      //    pushing the event, so concurrent calls in one session cannot
+      //    allocate duplicate positions (buildEvent is fully synchronous).
+      // 2. Never throws — an audit failure is reported via onAuditError and
+      //    must not fail (or mask the failure of) the tool call itself.
+      try {
+        const rejectionReason = threw ? getRejectionReason(thrown) : undefined;
+        const outcome: AuditEvent['outcome'] = !threw
+          ? 'success'
+          : rejectionReason !== undefined
+            ? 'rejected'
+            : 'error';
+
+        if (outcome !== 'rejected' || includeRejections) {
+          let tier: SensitivityTier;
+          try {
+            tier = options.sensitivityResolver(tool, identity, args);
+          } catch (err) {
+            onAuditError(err, { tool, requestId: ctx.requestId, ...(sessionId === undefined ? {} : { sessionId }) });
+            tier = 'high';
+          }
+
+          const session = sessionId ? sessions.get(sessionId) : undefined;
+          const position = session?.events.length ?? 0;
+          const event = buildEvent({
+            ctx,
+            identity,
+            tool,
+            args,
+            result: threw ? undefined : result,
+            startedAt,
+            endedAt: new Date().toISOString(),
+            duration_ms: Math.round(performance.now() - start),
+            outcome,
+            rejectionReason,
+            error:
+              outcome === 'error'
+                ? {
+                    name: thrown instanceof Error ? thrown.name : 'Error',
+                    message:
+                      thrown instanceof Error ? thrown.message : String(thrown),
+                  }
+                : undefined,
+            position,
+            prevChainHash: session?.prevChainHash ?? '',
+            tier,
+            chainKey,
+            encRoot,
+          });
+          if (session) {
+            session.events.push(event);
+            session.prevChainHash = event.chainHash;
+          }
+          await options.onEvent(event);
+        }
+      } catch (err) {
+        onAuditError(err, {
+          tool,
+          requestId: ctx.requestId,
+          ...(sessionId === undefined ? {} : { sessionId }),
+        });
+      }
+
+      if (threw) throw thrown;
+      return result as Awaited<ReturnType<typeof next>>;
+  };
+  const middleware = markPassThroughObserver(inner);
 
   const closeSession: AuditMiddlewareHandle['closeSession'] = async (sessionId) => {
     const session = sessions.get(sessionId);
-    if (!session || session.events.length === 0) return undefined;
-
+    if (!session) return undefined;
     sessions.delete(sessionId);
+    if (session.events.length === 0) return undefined;
 
     const hashes = session.events.map((e) => e.chainHash);
     const merkleRoot = computeMerkleRoot(hashes);
     const merkleProofs = hashes.map((_, i) => computeMerkleProof(hashes, i));
-    const signature = (await options.signingKey.sign(Buffer.from(merkleRoot))).toString('hex');
 
-    const manifest: ReplayManifest = {
+    // The signature covers the ENTIRE manifest (domain-separated, canonical
+    // serialization) — signing only the Merkle root would leave sessionId,
+    // identity, eventCount, and the proofs swappable after the fact.
+    const unsigned: Omit<ReplayManifest, 'signature'> = {
       sessionId,
       identity: session.identity,
       startedAt: session.startedAt,
@@ -143,8 +238,13 @@ export function createAuditMiddleware(options: AuditOptions): AuditMiddlewareHan
       merkleRoot,
       merkleProofs,
       signedBy: options.signingKey.keyId,
-      signature,
     };
+    const payload = canonicalJson({ domain: DOMAIN_MANIFEST, manifest: unsigned });
+    const signature = (
+      await options.signingKey.sign(Buffer.from(payload))
+    ).toString('hex');
+
+    const manifest: ReplayManifest = { ...unsigned, signature };
 
     await options.onManifest?.(manifest);
     return manifest;
@@ -153,13 +253,18 @@ export function createAuditMiddleware(options: AuditOptions): AuditMiddlewareHan
   return { middleware, closeSession };
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-function advanceSession(session: SessionState | undefined, event: AuditEvent): void {
-  if (!session) return;
-  session.events.push(event);
-  session.prevChainHash = event.chainHash;
+/** Rebuilds the exact signed payload for a manifest (used by verifiers). */
+export function manifestSigningPayload(
+  manifest: Omit<ReplayManifest, 'signature'>,
+): string {
+  const { sessionId, identity, startedAt, closedAt, eventCount, merkleRoot, merkleProofs, signedBy } = manifest;
+  return canonicalJson({
+    domain: DOMAIN_MANIFEST,
+    manifest: { sessionId, identity, startedAt, closedAt, eventCount, merkleRoot, merkleProofs, signedBy },
+  });
 }
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 interface BuildParams {
   ctx: ProxyContext;
@@ -167,45 +272,69 @@ interface BuildParams {
   tool: string;
   args: Record<string, unknown>;
   result: unknown;
+  startedAt: string;
+  endedAt: string;
   duration_ms: number;
   outcome: AuditEvent['outcome'];
+  rejectionReason: RejectionReason | undefined;
+  error: { name: string; message: string } | undefined;
   position: number;
   prevChainHash: string;
-  tier: 'low' | 'medium' | 'high';
+  tier: SensitivityTier;
   chainKey: Buffer;
   encRoot: Buffer;
 }
 
+/** Fully synchronous — position allocation relies on that (no await between read and append). */
 function buildEvent(p: BuildParams): AuditEvent {
-  const stableFields = {
+  const withoutChainHash = {
     id: p.ctx.requestId,
-    timestamp: new Date().toISOString(),
+    startedAt: p.startedAt,
+    endedAt: p.endedAt,
     ...(p.ctx.sessionId !== undefined ? { sessionId: p.ctx.sessionId } : {}),
     ...(p.ctx.delegatedFrom !== undefined ? { delegatedFrom: p.ctx.delegatedFrom } : {}),
     identity: p.identity,
     tool: p.tool,
     duration_ms: p.duration_ms,
     outcome: p.outcome,
-    inputHash: sha256hex(JSON.stringify(p.args)),
-    outputHash: sha256hex(JSON.stringify(p.result ?? null)),
+    ...(p.rejectionReason !== undefined ? { rejectionReason: p.rejectionReason } : {}),
+    ...(p.error !== undefined ? { error: p.error } : {}),
+    inputHash: sha256hex(stableStringify(p.args)),
+    outputHash: sha256hex(stableStringify(p.result ?? null)),
     replayManifestPosition: p.position,
   };
 
-  const chainHash = computeChainHash(stableFields, p.prevChainHash, p.chainKey);
+  const chainHash = computeChainHash(
+    chainPreimageFields(withoutChainHash as Omit<AuditEvent, 'chainHash'>),
+    p.prevChainHash,
+    p.chainKey,
+  );
 
-  const base = { ...stableFields, chainHash };
+  const base = { ...withoutChainHash, chainHash };
 
-  if (p.tier === 'high') {
-    const eventKey = deriveEventKey(p.encRoot, base.id);
+  // Fail CLOSED: only explicit low/medium get plaintext; any other tier
+  // value — including garbage from a user-supplied resolver — encrypts.
+  if (p.tier === 'low' || p.tier === 'medium') {
     return {
       ...base,
-      sensitivityTier: 'high',
-      inputEncrypted: aesEncrypt(JSON.stringify(p.args), eventKey),
-      outputEncrypted: aesEncrypt(JSON.stringify(p.result ?? null), eventKey),
-    } as HighAuditEvent;
+      sensitivityTier: p.tier,
+      inputRaw: p.args,
+      outputRaw: p.result,
+    } as LowAuditEvent | MediumAuditEvent;
   }
-  if (p.tier === 'medium') {
-    return { ...base, sensitivityTier: 'medium', inputRaw: p.args, outputRaw: p.result } as MediumAuditEvent;
-  }
-  return { ...base, sensitivityTier: 'low', inputRaw: p.args, outputRaw: p.result } as LowAuditEvent;
+  const eventKey = deriveEventKey(p.encRoot, p.ctx.sessionId, p.position, base.id);
+  return {
+    ...base,
+    sensitivityTier: 'high',
+    inputEncrypted: aesEncrypt(
+      stableStringify(p.args),
+      eventKey,
+      `${DOMAIN_AAD}${base.id}\0input`,
+    ),
+    outputEncrypted: aesEncrypt(
+      stableStringify(p.result ?? null),
+      eventKey,
+      `${DOMAIN_AAD}${base.id}\0output`,
+    ),
+  } as HighAuditEvent;
 }
