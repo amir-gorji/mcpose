@@ -2,13 +2,14 @@
  * Backend MCP client factory.
  * Modes: stdio (spawns child process) or HTTP/SSE (connects to running server).
  */
-import { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
   StreamableHTTPClientTransport,
-  StreamableHTTPClientTransportOptions,
+  type StreamableHTTPClientTransportOptions,
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { VERSION } from './version.js';
 
 /** Backend connection config. */
 export interface BackendConfig {
@@ -40,7 +41,7 @@ export async function createBackendClient(
   }
 
   const client = new Client(
-    { name: 'mcpose-backend', version: '1.1.1' },
+    { name: 'mcpose-backend', version: VERSION },
     { capabilities: {} },
   );
 

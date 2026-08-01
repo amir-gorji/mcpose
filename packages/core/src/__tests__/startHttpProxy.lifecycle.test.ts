@@ -277,6 +277,130 @@ describe('startHttpProxy() session lifecycle', () => {
     });
   });
 
+  describe('validateSession', () => {
+    it('rejects a routed request with 401 when validateSession returns false', async () => {
+      let allow = true;
+      const server = await startHttpProxy(
+        makeMockBackend(),
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          validateSession: () => allow,
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      try {
+        const sessionId = await initSession(baseUrl);
+        const listBody = JSON.stringify({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/list',
+          params: {},
+        });
+
+        const ok = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: { ...MCP_HEADERS, 'mcp-session-id': sessionId },
+          body: listBody,
+        });
+        expect(ok.status).not.toBe(401);
+
+        allow = false;
+        const denied = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: { ...MCP_HEADERS, 'mcp-session-id': sessionId },
+          body: listBody,
+        });
+        expect(denied.status).toBe(401);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it('treats a throwing validateSession as rejection', async () => {
+      const server = await startHttpProxy(
+        makeMockBackend(),
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          validateSession: () => {
+            throw new Error('token expired');
+          },
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      try {
+        const sessionId = await initSession(baseUrl);
+        const res = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: { ...MCP_HEADERS, 'mcp-session-id': sessionId },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/list',
+            params: {},
+          }),
+        });
+        expect(res.status).toBe(401);
+      } finally {
+        await closeServer(server);
+      }
+    });
+  });
+
+  describe('header redaction', () => {
+    it('strips credential headers from the middleware context', async () => {
+      let seenHeaders: Readonly<Record<string, string>> | undefined;
+      const server = await startHttpProxy(
+        makeMockBackend(),
+        {
+          name: 'test-server',
+          listToolsMiddleware: [
+            async (req, next, context) => {
+              seenHeaders = context.headers;
+              return next(req);
+            },
+          ],
+        },
+        { port: 0, path: '/mcp' },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      try {
+        const sessionId = await initSession(baseUrl);
+        await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            ...MCP_HEADERS,
+            'mcp-session-id': sessionId,
+            authorization: 'Bearer secret-token',
+            cookie: 'session=abc',
+            'x-api-key': 'key-123',
+            'x-tenant-id': 'bank-42',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/list',
+            params: {},
+          }),
+        });
+
+        expect(seenHeaders).toBeDefined();
+        expect(seenHeaders).not.toHaveProperty('authorization');
+        expect(seenHeaders).not.toHaveProperty('cookie');
+        expect(seenHeaders).not.toHaveProperty('x-api-key');
+        expect(seenHeaders!['x-tenant-id']).toBe('bank-42');
+      } finally {
+        await closeServer(server);
+      }
+    });
+  });
+
   describe('server shutdown', () => {
     it('flushes onSessionClosed for active sessions on close()', async () => {
       const closed: string[] = [];

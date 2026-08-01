@@ -12,7 +12,7 @@ export interface ProxyContext {
   identity?: Identity;
   /** Agent delegation chain — populated when an upstream A2A agent delegates through mcpose. */
   delegatedFrom?: Identity[];
-  /** @stable Reserved for v3 policy engine. */
+  /** @experimental Reserved for the v3 policy engine — do not depend on it. */
   policy?: never;
 }
 
@@ -21,6 +21,8 @@ export function createProxyContext(
   overrides: Partial<ProxyContext> = {},
 ): ProxyContext {
   return {
+    // Deliberately `||`, not `??`: an empty-string requestId is useless for
+    // correlation, so it is regenerated like a missing one.
     requestId: overrides.requestId || randomUUID(),
     transport: overrides.transport ?? 'stdio',
     ...(overrides.sessionId === undefined ? {} : { sessionId: overrides.sessionId }),

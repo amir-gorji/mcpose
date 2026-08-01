@@ -88,11 +88,14 @@ export function createMockBackendClient(
     prompts: {},
   };
 
+  // Fixtures are cloned per call so a mutating middleware cannot corrupt
+  // them across calls.
   return {
-    getServerCapabilities: (): ServerCapabilities => capabilities,
+    getServerCapabilities: (): ServerCapabilities =>
+      structuredClone(capabilities),
 
     listTools: async (): Promise<ListToolsResult> => ({
-      tools: options.tools ?? [],
+      tools: structuredClone(options.tools ?? []),
     }),
 
     callTool: async (
@@ -100,28 +103,32 @@ export function createMockBackendClient(
     ): Promise<CallToolResult> => {
       const resp = options.callToolResponse;
       if (typeof resp === 'function') return resp(params);
-      return resp ?? { content: [{ type: 'text', text: 'mock response' }] };
+      return structuredClone(
+        resp ?? { content: [{ type: 'text', text: 'mock response' }] },
+      );
     },
 
     listResources: async (): Promise<ListResourcesResult> => ({
-      resources: options.resources ?? [],
+      resources: structuredClone(options.resources ?? []),
     }),
 
     readResource: async (
       _params: ReadResourceRequestParams,
     ): Promise<ReadResourceResult> =>
-      options.readResourceResponse ?? {
-        contents: [{ uri: '', text: 'mock resource' }],
-      },
+      structuredClone(
+        options.readResourceResponse ?? {
+          contents: [{ uri: '', text: 'mock resource' }],
+        },
+      ),
 
     listPrompts: async (): Promise<ListPromptsResult> => ({
-      prompts: options.prompts ?? [],
+      prompts: structuredClone(options.prompts ?? []),
     }),
 
     getPrompt: async (
       _params: GetPromptRequestParams,
     ): Promise<GetPromptResult> =>
-      options.getPromptResponse ?? { messages: [] },
+      structuredClone(options.getPromptResponse ?? { messages: [] }),
 
     setNotificationHandler: () => undefined,
     removeNotificationHandler: () => undefined,

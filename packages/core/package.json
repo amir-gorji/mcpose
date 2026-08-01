@@ -1,6 +1,6 @@
 {
   "name": "mcpose",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "The audit and governance layer for MCP",
   "type": "module",
   "main": "./dist/index.js",
@@ -43,8 +43,11 @@
     "test": "vitest run --passWithNoTests",
     "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
-    "@modelcontextprotocol/sdk": ">=1.0.0"
+    "@modelcontextprotocol/sdk": "^1.17.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",

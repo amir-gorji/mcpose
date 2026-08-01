@@ -8,11 +8,11 @@ import {
   type ToolMiddleware,
 } from '../core.js';
 import type { BackendClient } from '../backendClient.js';
+import { markPassThroughObserver } from '../middleware.js';
 import type { ProxyContext } from '../proxyContext.js';
 import {
   ErrorCode,
   PromptListChangedNotificationSchema,
-  ResourceListChangedNotificationSchema,
   ToolListChangedNotificationSchema,
   type ServerCapabilities,
 } from '@modelcontextprotocol/sdk/types.js';
@@ -696,5 +696,171 @@ describe('createProxyServer() — server identity', () => {
     const server = createProxyServer(backend, { version: '9.9.9' });
 
     expect(serverInfo(server).version).toBe('9.9.9');
+  });
+});
+
+// ── rejection + pass-through observation ────────────────────────────────────
+
+describe('createProxyServer() — rejection and pass-through observation', () => {
+  it('lets tool middleware observe a TOOL_HIDDEN rejection in-chain', async () => {
+    const backend = makeMockBackend();
+    let observed: unknown;
+    const mw: ToolMiddleware = async (req, next) => {
+      try {
+        return await next(req);
+      } catch (err) {
+        observed = err;
+        throw err;
+      }
+    };
+    const server = createProxyServer(backend, {
+      hiddenTools: ['sensitive_tool'],
+      toolMiddleware: [mw],
+      name: 'test-server',
+    });
+
+    await expect(
+      invokeHandler(server, 'tools/call', {
+        name: 'sensitive_tool',
+        arguments: {},
+      }),
+    ).rejects.toMatchObject({ code: ErrorCode.MethodNotFound });
+
+    expect(observed).toMatchObject({
+      data: { rejectionReason: 'TOOL_HIDDEN' },
+    });
+    // The backend must never be called for a hidden tool.
+    expect(backend.callTool).not.toHaveBeenCalled();
+  });
+
+  it('runs marked observer middleware for pass-through tools, skips unmarked', async () => {
+    const backend = makeMockBackend();
+    const calls: string[] = [];
+    const observer: ToolMiddleware = markPassThroughObserver(
+      async (req, next) => {
+        calls.push('observer');
+        return next(req);
+      },
+    );
+    const transformer: ToolMiddleware = async (req, next) => {
+      calls.push('transformer');
+      return next(req);
+    };
+    const server = createProxyServer(backend, {
+      passThroughTools: ['pass_tool'],
+      toolMiddleware: [transformer, observer],
+      name: 'test-server',
+    });
+
+    await invokeHandler(server, 'tools/call', {
+      name: 'pass_tool',
+      arguments: {},
+    });
+    expect(calls).toEqual(['observer']);
+    expect(backend.callTool).toHaveBeenCalledTimes(1);
+
+    // A non-pass-through tool runs both.
+    calls.length = 0;
+    await invokeHandler(server, 'tools/call', {
+      name: 'normal_tool',
+      arguments: {},
+    });
+    expect(calls).toEqual(['observer', 'transformer']);
+  });
+
+  it('keeps hidden precedence over passThrough, observed by marked middleware', async () => {
+    const backend = makeMockBackend();
+    let observed: unknown;
+    const observer: ToolMiddleware = markPassThroughObserver(
+      async (req, next) => {
+        try {
+          return await next(req);
+        } catch (err) {
+          observed = err;
+          throw err;
+        }
+      },
+    );
+    const server = createProxyServer(backend, {
+      hiddenTools: ['pass_tool'],
+      passThroughTools: ['pass_tool'],
+      toolMiddleware: [observer],
+      name: 'test-server',
+    });
+
+    await expect(
+      invokeHandler(server, 'tools/call', { name: 'pass_tool', arguments: {} }),
+    ).rejects.toMatchObject({ code: ErrorCode.MethodNotFound });
+    expect(observed).toMatchObject({ data: { rejectionReason: 'TOOL_HIDDEN' } });
+    expect(backend.callTool).not.toHaveBeenCalled();
+  });
+});
+
+// ── telemetry outcomes ──────────────────────────────────────────────────────
+
+describe('createProxyServer() — telemetry outcomes', () => {
+  it('reports isError tool results as outcome error', async () => {
+    const backend = makeMockBackend();
+    (backend.callTool as ReturnType<typeof vi.fn>).mockResolvedValue({
+      content: [{ type: 'text', text: 'tool-level failure' }],
+      isError: true,
+    });
+    const events: { outcome: string }[] = [];
+    const server = createProxyServer(backend, {
+      onTelemetry: (e) => events.push(e),
+      name: 'test-server',
+    });
+
+    await invokeHandler(server, 'tools/call', {
+      name: 'normal_tool',
+      arguments: {},
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('error');
+  });
+
+  it('emits rejected telemetry with TOOL_HIDDEN for hidden tools', async () => {
+    const backend = makeMockBackend();
+    const events: { outcome: string; rejectionReason?: string }[] = [];
+    const server = createProxyServer(backend, {
+      hiddenTools: ['sensitive_tool'],
+      onTelemetry: (e) => events.push(e),
+      name: 'test-server',
+    });
+
+    await expect(
+      invokeHandler(server, 'tools/call', {
+        name: 'sensitive_tool',
+        arguments: {},
+      }),
+    ).rejects.toMatchObject({ code: ErrorCode.MethodNotFound });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      outcome: 'rejected',
+      rejectionReason: 'TOOL_HIDDEN',
+    });
+  });
+
+  it('does not fail the call when onTelemetry throws', async () => {
+    const backend = makeMockBackend();
+    const consoleSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const server = createProxyServer(backend, {
+      onTelemetry: () => {
+        throw new Error('sink down');
+      },
+      name: 'test-server',
+    });
+
+    const result = await invokeHandler(server, 'tools/call', {
+      name: 'normal_tool',
+      arguments: {},
+    });
+    expect(result).toMatchObject({
+      content: [{ type: 'text', text: 'raw upstream response' }],
+    });
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 });

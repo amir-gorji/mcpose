@@ -49,7 +49,7 @@ export function compose<Req, Res>(
       index = i;
 
       const fn: Middleware<Req, Res> =
-        i < middlewares.length ? middlewares[i]! : (_r, n) => next(_r);
+        i < middlewares.length ? middlewares[i]! : (r) => next(r);
 
       return Promise.resolve(fn(currentReq, (r) => dispatch(i + 1, r), context));
     };
@@ -67,4 +67,33 @@ export function pipe<Req, Res>(
   middlewares: ReadonlyArray<Middleware<Req, Res>>,
 ): MiddlewarePipeline<Req, Res> {
   return compose([...middlewares].reverse());
+}
+
+const PASS_THROUGH_OBSERVER = Symbol.for('mcpose.passThroughObserver');
+
+/**
+ * Marks a middleware as a pass-through observer: it still runs for tools
+ * listed in `ProxyOptions.passThroughTools`, which skip all other middleware.
+ *
+ * Use for middleware that must see every call regardless of pass-through
+ * status — audit logging, telemetry — never for middleware that transforms
+ * requests or responses (pass-through means "forward upstream as-is").
+ *
+ * Returns a new middleware; the input is not mutated.
+ */
+export function markPassThroughObserver<Req, Res>(
+  mw: Middleware<Req, Res>,
+): Middleware<Req, Res> {
+  const marked: Middleware<Req, Res> = (req, next, context) =>
+    mw(req, next, context);
+  Object.defineProperty(marked, PASS_THROUGH_OBSERVER, {
+    value: true,
+    enumerable: false,
+  });
+  return marked;
+}
+
+/** True when the middleware was wrapped by {@link markPassThroughObserver}. */
+export function isPassThroughObserver(mw: unknown): boolean {
+  return typeof mw === 'function' && PASS_THROUGH_OBSERVER in mw;
 }
