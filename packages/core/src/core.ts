@@ -3,7 +3,6 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import { randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -16,7 +15,6 @@ import {
   type ListToolsRequest,
   type ListToolsResult,
   ListToolsRequestSchema,
-  McpError,
   PromptListChangedNotificationSchema,
   ReadResourceRequestSchema,
   ResourceListChangedNotificationSchema,
@@ -28,7 +26,7 @@ import {
   type ReadResourceResult,
   type ServerCapabilities,
 } from '@modelcontextprotocol/sdk/types.js';
-import { pipe, type Middleware } from './middleware.js';
+import { pipe, isPassThroughObserver, type Middleware } from './middleware.js';
 import type { BackendClient } from './backendClient.js';
 import { createProxyContext, type ProxyContext } from './proxyContext.js';
 import type { Identity } from './identity.js';
@@ -37,12 +35,7 @@ import { createInMemoryEventStore } from './eventStore.js';
 import type { EventStore } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { rejectionMcpError } from './rejection.js';
 import type { RejectionReason } from './rejection.js';
-
-// Source our own package version once at module load. `createRequire` works under
-// ESM on Node 18+ without the `--experimental-json-modules` flag and avoids the
-// tsconfig and runtime caveats of a static JSON import.
-const readPackageJson = createRequire(import.meta.url);
-const pkg = readPackageJson('../package.json') as { version: string };
+import { VERSION } from './version.js';
 
 /** Name the proxy advertises when `ProxyOptions.name` is omitted. */
 const DEFAULT_PROXY_NAME = 'mcpose';
@@ -135,14 +128,37 @@ export interface HttpProxyOptions {
    */
   eventStore?: EventStore | null;
   /**
-   * Called when a session is closed (client DELETE or TTL expiry).
-   * Wire {@link AuditMiddlewareHandle.closeSession} here to flush the
-   * ReplayManifest for the session.
+   * Called when a session is closed (client DELETE, TTL expiry, or server
+   * shutdown). Wire {@link AuditMiddlewareHandle.closeSession} here to flush
+   * the ReplayManifest for the session.
    *
    * @example
    * onSessionClosed: (sessionId) => auditHandle.closeSession(sessionId)
    */
   onSessionClosed?: (sessionId: string) => void;
+  /**
+   * Re-validates an existing session on every routed request. Return `false`
+   * (or throw) to reject with 401. Use to bind sessions to their original
+   * credential — e.g. re-check the bearer token — so a leaked
+   * `mcp-session-id` alone cannot take over a session.
+   */
+  validateSession?: (
+    req: http.IncomingMessage,
+    session: { sessionId: string; identity?: Identity },
+  ) => boolean | Promise<boolean>;
+  /**
+   * Hosts allowed in the `Host` header when
+   * {@link enableDnsRebindingProtection} is on. Forwarded to the SDK
+   * transport.
+   */
+  allowedHosts?: string[];
+  /** Origins allowed in the `Origin` header. Forwarded to the SDK transport. */
+  allowedOrigins?: string[];
+  /**
+   * Enables the SDK transport's DNS-rebinding protection (Host/Origin
+   * checks). Recommended for proxies bound to localhost.
+   */
+  enableDnsRebindingProtection?: boolean;
 }
 
 /** Proxy server options. */
@@ -173,22 +189,32 @@ export interface ProxyOptions {
   /** Tool-list middleware in response-processing order (first = innermost). */
   listToolsMiddleware?: ReadonlyArray<ListToolsMiddleware>;
 
-  /** Tools that skip middleware — upstream response forwarded as-is. */
+  /**
+   * Tools that skip transforming middleware — upstream response forwarded
+   * as-is. Middleware wrapped in `markPassThroughObserver()` (e.g. audit)
+   * still runs for these tools.
+   */
   passThroughTools?: ReadonlyArray<string>;
 
   /** Resources that skip middleware — upstream response forwarded as-is. */
   passThroughResources?: ReadonlyArray<string>;
 
-  /** Tools hidden from list_tools and rejected at runtime with MethodNotFound. */
+  /**
+   * Tools hidden from list_tools and rejected at runtime with
+   * MethodNotFound. Precedence: a tool listed here AND in
+   * `passThroughTools` stays hidden. Hidden filtering is applied both
+   * before and after `listToolsMiddleware`, so list middleware cannot
+   * re-expose a hidden tool.
+   */
   hiddenTools?: ReadonlyArray<string>;
 
   /** Resources hidden from list_resources and rejected at runtime with InvalidRequest. */
   hiddenResources?: ReadonlyArray<string>;
 
   /**
-   * Called after every tool call with timing and outcome data.
-   * Wire to {@link https://www.npmjs.com/package/@mcpose/otel | @mcpose/otel}
-   * or any custom telemetry sink.
+   * Called after every tool call with timing and outcome data. Wire to any
+   * custom telemetry sink (an OpenTelemetry adapter is planned for v3).
+   * A throwing sink is logged and never fails the tool call.
    */
   onTelemetry?: (event: TelemetryEvent) => void;
 }
@@ -242,8 +268,9 @@ function createRequestOptions(
   extra: ProxyRequestExtra = {},
 ): BackendRequestOptions {
   const progressToken = extra._meta?.progressToken;
+  // `0` and `''` are legitimate progress tokens — only undefined disables.
   const onprogress =
-    progressToken && extra.sendNotification
+    progressToken !== undefined && extra.sendNotification
       ? ({
           progress,
           total,
@@ -253,15 +280,19 @@ function createRequestOptions(
           total?: number;
           message?: string;
         }) => {
-          void extra.sendNotification?.({
-            method: 'notifications/progress',
-            params: {
-              progressToken,
-              progress,
-              ...(total === undefined ? {} : { total }),
-              ...(message === undefined ? {} : { message }),
-            },
-          });
+          // A client that disconnected mid-call makes sendNotification
+          // reject; dropping the progress tick is the correct outcome.
+          void extra.sendNotification
+            ?.({
+              method: 'notifications/progress',
+              params: {
+                progressToken,
+                progress,
+                ...(total === undefined ? {} : { total }),
+                ...(message === undefined ? {} : { message }),
+              },
+            })
+            .catch(() => {});
         }
       : undefined;
 
@@ -273,11 +304,25 @@ function createRequestOptions(
   };
 }
 
+/**
+ * Credential-bearing headers are stripped before headers reach
+ * `ProxyContext` (and through it, audit logs). Identity resolution reads
+ * the raw `http.IncomingMessage`, so `resolveIdentity` still sees them.
+ */
+const SENSITIVE_HEADERS: ReadonlySet<string> = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'set-cookie',
+  'x-api-key',
+]);
+
 function normalizeHeaders(
   headers: http.IncomingHttpHeaders,
 ): Readonly<Record<string, string>> | undefined {
   const normalized = Object.entries(headers).reduce<Record<string, string>>(
     (acc, [key, value]) => {
+      if (SENSITIVE_HEADERS.has(key)) return acc;
       if (typeof value === 'string') {
         acc[key] = value;
         return acc;
@@ -298,6 +343,13 @@ function getMiddlewareContext(signal?: AbortSignal): ProxyContext {
     ...httpProxyContext.getStore(),
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+function getRejectionReason(err: unknown): RejectionReason | undefined {
+  const data = (err as { data?: { rejectionReason?: unknown } } | null)?.data;
+  return typeof data?.rejectionReason === 'string'
+    ? (data.rejectionReason as RejectionReason)
+    : undefined;
 }
 
 function filterHiddenTools(
@@ -361,16 +413,28 @@ function registerListChangedForwarders(
 
   bus.servers.add(server);
 
-  const prevOnClose = server.onclose;
   let active = true;
-
-  server.onclose = () => {
+  const removeFromBus = () => {
     if (!active) return;
     active = false;
     bus.servers.delete(server);
     if (!bus.servers.size) listChangedBuses.delete(backend);
-    prevOnClose?.();
   };
+
+  // Accessor instead of plain assignment: a consumer setting `server.onclose`
+  // after createProxyServer() must not clobber the bus cleanup (which would
+  // leak this server into the fan-out set forever).
+  let consumerOnClose: (() => void) | undefined;
+  Object.defineProperty(server, 'onclose', {
+    configurable: true,
+    get: () => () => {
+      removeFromBus();
+      consumerOnClose?.();
+    },
+    set: (fn: (() => void) | undefined) => {
+      consumerOnClose = fn;
+    },
+  });
 }
 
 /**
@@ -390,8 +454,19 @@ export function createProxyServer(
   backend: BackendClient,
   options: ProxyOptions = {},
 ): Server {
+  if (backend.getServerCapabilities() === undefined) {
+    throw new Error(
+      'mcpose: backend is not connected (getServerCapabilities() returned undefined). Connect the backend before calling createProxyServer().',
+    );
+  }
+
   const capabilities = createProxyCapabilities(backend);
   const toolPipeline = pipe(options.toolMiddleware ?? []);
+  // Pass-through tools skip transforming middleware but are still seen by
+  // observers (audit, telemetry) marked via markPassThroughObserver().
+  const passThroughToolPipeline = pipe(
+    (options.toolMiddleware ?? []).filter(isPassThroughObserver),
+  );
   const resourcePipeline = pipe(options.resourceMiddleware ?? []);
   const listToolsPipeline = pipe(options.listToolsMiddleware ?? []);
 
@@ -403,7 +478,7 @@ export function createProxyServer(
   const server = new Server(
     {
       name: options.name ?? DEFAULT_PROXY_NAME,
-      version: options.version ?? pkg.version,
+      version: options.version ?? VERSION,
     },
     { capabilities },
   );
@@ -433,60 +508,65 @@ export function createProxyServer(
       const name = req.params.name;
       const requestOptions = createRequestOptions(extra);
       const context = getMiddlewareContext(extra.signal);
-      const start = Date.now();
+      const start = performance.now();
 
       const emitTelemetry = (
         outcome: TelemetryEvent['outcome'],
         rejectionReason?: RejectionReason,
       ) => {
-        options.onTelemetry?.({
-          type: 'tool_call',
-          requestId: context.requestId,
-          ...(context.sessionId === undefined
-            ? {}
-            : { sessionId: context.sessionId }),
-          tool: name,
-          duration_ms: Date.now() - start,
-          outcome,
-          ...(rejectionReason === undefined ? {} : { rejectionReason }),
-          ...(context.identity === undefined
-            ? {}
-            : { identity: context.identity }),
-        });
+        try {
+          options.onTelemetry?.({
+            type: 'tool_call',
+            requestId: context.requestId,
+            ...(context.sessionId === undefined
+              ? {}
+              : { sessionId: context.sessionId }),
+            tool: name,
+            duration_ms: Math.round(performance.now() - start),
+            outcome,
+            ...(rejectionReason === undefined ? {} : { rejectionReason }),
+            ...(context.identity === undefined
+              ? {}
+              : { identity: context.identity }),
+          });
+        } catch (err) {
+          // A throwing telemetry sink must never fail the tool call.
+          console.error(err);
+        }
       };
 
-      if (hiddenToolSet.has(name)) {
-        emitTelemetry('rejected', 'TOOL_HIDDEN');
-        throw rejectionMcpError(
-          'TOOL_HIDDEN',
-          ErrorCode.MethodNotFound,
-          `Tool not found: ${name}`,
-        );
-      }
-      if (passThroughToolSet.has(name)) {
-        try {
-          const result = await backend.callTool(
-            req.params,
-            undefined,
-            requestOptions,
-          );
-          emitTelemetry('success');
-          return result;
-        } catch (err) {
-          emitTelemetry('error');
-          throw err;
-        }
-      }
+      // Hidden beats pass-through. The rejection is thrown by the innermost
+      // `next` INSIDE the pipeline so middleware (audit) observes it in-chain;
+      // the backend is never called for hidden tools.
+      const isHidden = hiddenToolSet.has(name);
+      const pipeline =
+        !isHidden && passThroughToolSet.has(name)
+          ? passThroughToolPipeline
+          : toolPipeline;
+      const callBackend = isHidden
+        ? async (): Promise<CompatibilityCallToolResult> => {
+            throw rejectionMcpError(
+              'TOOL_HIDDEN',
+              ErrorCode.MethodNotFound,
+              `Tool not found: ${name}`,
+            );
+          }
+        : (r: CallToolRequest) =>
+            backend.callTool(r.params, undefined, requestOptions);
+
       try {
-        const result = await toolPipeline(
-          req,
-          (r) => backend.callTool(r.params, undefined, requestOptions),
-          context,
+        const result = await pipeline(req, callBackend, context);
+        // MCP signals tool-level failures in-band via isError, not by throwing.
+        emitTelemetry(
+          hasToolContent(result) && result.isError === true
+            ? 'error'
+            : 'success',
         );
-        emitTelemetry('success');
         return result;
       } catch (err) {
-        emitTelemetry('error');
+        const reason = getRejectionReason(err);
+        if (reason === undefined) emitTelemetry('error');
+        else emitTelemetry('rejected', reason);
         throw err;
       }
     });
@@ -560,31 +640,72 @@ export async function startProxy(
   await server.connect(new StdioServerTransport());
 }
 
+/**
+ * Enforces `maxBodyBytes`.
+ *
+ * Fast path: a declared `Content-Length` over the limit is rejected before
+ * any body is read. Chunked/streamed bodies are counted as they arrive.
+ *
+ * @returns `true` when the request was already rejected (caller must stop).
+ */
 function applyBodySizeLimit(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   maxBodyBytes: number,
-): void {
+): boolean {
+  const reject413 = (): void => {
+    if (!res.headersSent) {
+      res.writeHead(413, { 'content-type': 'application/json' }).end(
+        JSON.stringify({
+          error: {
+            message: 'Request body too large',
+            data: { rejectionReason: 'BODY_LIMIT' },
+          },
+        }),
+      );
+    }
+  };
+
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > maxBodyBytes) {
+    reject413();
+    req.destroy();
+    return true;
+  }
+
   let total = 0;
   const originalPush = req.push.bind(req);
   (req as unknown as { push: typeof req.push }).push = (
-    chunk: Buffer | null,
+    chunk: Buffer | string | null,
     enc?: BufferEncoding,
   ): boolean => {
-    if (chunk !== null && total + chunk.length > maxBodyBytes) {
-      if (!res.headersSent) res.writeHead(413).end();
-      // Mute the response for downstream writers (the SDK transport will
-      // observe the destroyed request and try to send its own error).
-      const muted = res as unknown as Record<string, unknown>;
-      muted.writeHead = () => res;
-      muted.write = () => true;
-      muted.end = () => res;
+    const chunkBytes =
+      chunk === null
+        ? 0
+        : typeof chunk === 'string'
+          ? Buffer.byteLength(chunk, enc)
+          : chunk.length;
+    if (chunk !== null && total + chunkBytes > maxBodyBytes) {
+      reject413();
+      if (res.headersSent) {
+        // Too late for a clean 413 — sever the connection instead of
+        // leaving the client on a hung socket.
+        res.destroy();
+      } else {
+        // Mute the response for downstream writers (the SDK transport will
+        // observe the destroyed request and try to send its own error).
+        const muted = res as unknown as Record<string, unknown>;
+        muted.writeHead = () => res;
+        muted.write = () => true;
+        muted.end = () => res;
+      }
       req.destroy(new Error('Request body too large'));
       return false;
     }
-    if (chunk !== null) total += chunk.length;
+    total += chunkBytes;
     return originalPush(chunk, enc);
   };
+  return false;
 }
 
 /**
@@ -611,15 +732,44 @@ export function startHttpProxy(
       ? undefined
       : (httpOptions.eventStore ?? createInMemoryEventStore());
 
-  // session ID → { transport, proxyServer, identity }
+  // session ID → { transport, proxyServer, identity, ttlTimer }
   const sessions = new Map<
     string,
     {
       transport: StreamableHTTPServerTransport;
       proxyServer: Server;
       identity?: Identity;
+      ttlTimer?: NodeJS.Timeout;
     }
   >();
+
+  // Sessions being initialized (identity resolution in flight) — counted so
+  // concurrent initializes cannot overshoot maxSessions.
+  let pendingSessions = 0;
+
+  const reportError = (err: unknown): void => {
+    (httpOptions.onError ?? console.error)(err);
+  };
+
+  /**
+   * Single teardown path for every way a session can end: client DELETE,
+   * TTL expiry, and server shutdown. Clears the TTL timer, fires
+   * `onSessionClosed` (guarded — a throwing hook must not break teardown),
+   * and closes the proxy server so it leaves the listChanged fan-out bus.
+   * Idempotent: a second call for the same id is a no-op.
+   */
+  const destroySession = (id: string): Promise<void> => {
+    const session = sessions.get(id);
+    if (!session) return Promise.resolve();
+    sessions.delete(id);
+    if (session.ttlTimer !== undefined) clearTimeout(session.ttlTimer);
+    try {
+      httpOptions.onSessionClosed?.(id);
+    } catch (err) {
+      reportError(err);
+    }
+    return session.proxyServer.close().catch(reportError);
+  };
 
   const requestHandler = (
     req: http.IncomingMessage,
@@ -649,94 +799,159 @@ export function startHttpProxy(
       }
 
       if (method === 'POST') {
-        applyBodySizeLimit(
+        const rejected = applyBodySizeLimit(
           req,
           res,
           httpOptions.maxBodyBytes ?? 4 * 1024 * 1024,
         );
+        if (rejected) return;
       }
 
       const sessionId = req.headers['mcp-session-id'];
       const headers = normalizeHeaders(req.headers);
 
-      await httpProxyContext.run(
-        // Base context — requestId added per-request by getMiddlewareContext()
-        { transport: 'http' } as Omit<ProxyContext, 'requestId'>,
-        async () => {
-          if (typeof sessionId === 'string') {
-            // Route to existing session — stamp its resolved identity into context
-            const session = sessions.get(sessionId);
-            if (!session) {
-              res.writeHead(404).end();
-              return;
-            }
-            const requestContext: Omit<ProxyContext, 'requestId'> = {
-              transport: 'http',
+      if (typeof sessionId === 'string') {
+        // Route to existing session — stamp its resolved identity into context
+        const session = sessions.get(sessionId);
+        if (!session) {
+          res.writeHead(404).end();
+          return;
+        }
+        if (httpOptions.validateSession !== undefined) {
+          let valid: boolean;
+          try {
+            valid = await httpOptions.validateSession(req, {
               sessionId,
-              ...(headers === undefined ? {} : { headers }),
               ...(session.identity === undefined
                 ? {}
                 : { identity: session.identity }),
-            };
-            await httpProxyContext.run(requestContext, () =>
-              session.transport.handleRequest(req, res),
-            );
-          } else {
-            // New session (initialize request)
-            if (
-              httpOptions.maxSessions !== undefined &&
-              sessions.size >= httpOptions.maxSessions
-            ) {
-              res.writeHead(503).end();
+            });
+          } catch {
+            valid = false;
+          }
+          if (!valid) {
+            if (!res.headersSent) res.writeHead(401).end();
+            return;
+          }
+        }
+        const requestContext: Omit<ProxyContext, 'requestId'> = {
+          transport: 'http',
+          sessionId,
+          ...(headers === undefined ? {} : { headers }),
+          ...(session.identity === undefined
+            ? {}
+            : { identity: session.identity }),
+        };
+        await httpProxyContext.run(requestContext, () =>
+          session.transport.handleRequest(req, res),
+        );
+      } else {
+        // New session — only an initialize POST may create one. A
+        // session-less GET/DELETE can never initialize, so reject it
+        // before constructing a Server/transport (which would otherwise
+        // leak into the listChanged fan-out bus).
+        if (method !== 'POST') {
+          res.writeHead(400, { 'content-type': 'application/json' }).end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              error: {
+                code: -32000,
+                message: 'Bad Request: no valid session ID provided',
+              },
+              id: null,
+            }),
+          );
+          return;
+        }
+
+        // Count this initialize as pending so concurrent initializes
+        // cannot overshoot maxSessions while identity resolution awaits.
+        if (
+          httpOptions.maxSessions !== undefined &&
+          sessions.size + pendingSessions >= httpOptions.maxSessions
+        ) {
+          res.writeHead(503, { 'content-type': 'application/json' }).end(
+            JSON.stringify({
+              error: {
+                message: 'Session limit reached',
+                data: { rejectionReason: 'SESSION_LIMIT' },
+              },
+            }),
+          );
+          return;
+        }
+        pendingSessions += 1;
+
+        try {
+          // Resolve identity once for the lifetime of this session
+          let identity: Identity | undefined;
+          if (httpOptions.resolveIdentity !== undefined) {
+            try {
+              identity = await httpOptions.resolveIdentity(req);
+            } catch {
+              if (!res.headersSent) res.writeHead(401).end();
               return;
             }
+          }
 
-            // Resolve identity once for the lifetime of this session
-            let identity: Identity | undefined;
-            if (httpOptions.resolveIdentity !== undefined) {
-              try {
-                identity = await httpOptions.resolveIdentity(req);
-              } catch {
-                if (!res.headersSent) res.writeHead(401).end();
-                return;
+          const proxyServer = createProxyServer(backend, options);
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: randomUUID,
+            ...(eventStore ? { eventStore } : {}),
+            ...(httpOptions.allowedHosts
+              ? { allowedHosts: httpOptions.allowedHosts }
+              : {}),
+            ...(httpOptions.allowedOrigins
+              ? { allowedOrigins: httpOptions.allowedOrigins }
+              : {}),
+            ...(httpOptions.enableDnsRebindingProtection === undefined
+              ? {}
+              : {
+                  enableDnsRebindingProtection:
+                    httpOptions.enableDnsRebindingProtection,
+                }),
+            onsessioninitialized: (id) => {
+              let ttlTimer: NodeJS.Timeout | undefined;
+              if (httpOptions.sessionTtlMs !== undefined) {
+                ttlTimer = setTimeout(() => {
+                  void destroySession(id);
+                }, httpOptions.sessionTtlMs);
+                ttlTimer.unref();
               }
-            }
+              sessions.set(id, {
+                transport,
+                proxyServer,
+                identity,
+                ...(ttlTimer === undefined ? {} : { ttlTimer }),
+              });
+            },
+            onsessionclosed: (id) => {
+              void destroySession(id);
+            },
+          });
 
-            const proxyServer = createProxyServer(backend, options);
-            const transport = new StreamableHTTPServerTransport({
-              sessionIdGenerator: randomUUID,
-              ...(eventStore ? { eventStore } : {}),
-              onsessioninitialized: (id) => {
-                sessions.set(id, { transport, proxyServer, identity });
-                if (httpOptions.sessionTtlMs !== undefined) {
-                  const timer = setTimeout(() => {
-                    const session = sessions.get(id);
-                    if (session) {
-                      sessions.delete(id);
-                      void session.proxyServer.close();
-                    }
-                  }, httpOptions.sessionTtlMs);
-                  timer.unref();
-                }
-              },
-              onsessionclosed: (id) => {
-                sessions.delete(id);
-                httpOptions.onSessionClosed?.(id);
-              },
-            });
-
-            const requestContext: Omit<ProxyContext, 'requestId'> = {
-              transport: 'http',
-              ...(headers === undefined ? {} : { headers }),
-              ...(identity === undefined ? {} : { identity }),
-            };
-            await proxyServer.connect(transport);
+          const requestContext: Omit<ProxyContext, 'requestId'> = {
+            transport: 'http',
+            ...(headers === undefined ? {} : { headers }),
+            ...(identity === undefined ? {} : { identity }),
+          };
+          await proxyServer.connect(transport);
+          try {
             await httpProxyContext.run(requestContext, () =>
               transport.handleRequest(req, res),
             );
+          } finally {
+            // Non-initialize body: the transport rejected the request and
+            // no session was created — close the orphaned proxy server so
+            // it does not leak (memory + listChanged fan-out).
+            if (transport.sessionId === undefined) {
+              void proxyServer.close().catch(reportError);
+            }
           }
-        },
-      );
+        } finally {
+          pendingSessions -= 1;
+        }
+      }
     };
 
     handle().catch((err) => {
@@ -756,13 +971,15 @@ export function startHttpProxy(
     if (shuttingDown) return rawClose(callback as never);
     shuttingDown = true;
 
-    const activeSessions = [...sessions.values()];
-    sessions.clear();
-
+    // Tear down every session through the single teardown path (clears TTL
+    // timers, fires onSessionClosed so audit manifests flush on shutdown).
     void Promise.allSettled(
-      activeSessions.map(({ proxyServer }) => proxyServer.close()),
+      [...sessions.keys()].map((id) => destroySession(id)),
     ).finally(() => {
       rawClose(callback as never);
+      // Idle keep-alive and lingering SSE sockets would otherwise keep the
+      // close callback pending indefinitely.
+      server.closeAllConnections();
     });
 
     return server;
@@ -772,6 +989,9 @@ export function startHttpProxy(
     server.once('error', reject);
     server.listen(port, ...(host ? [host] : []), () => {
       server.off('error', reject);
+      // Route post-listen server errors (e.g. EMFILE) to onError instead of
+      // crashing the process with an unhandled 'error' event.
+      server.on('error', reportError);
       resolve(server);
     });
   });

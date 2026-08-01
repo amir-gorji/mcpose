@@ -205,21 +205,34 @@ describe('createAuditMiddleware — Merkle proof', () => {
   });
 });
 
-function aesGcmDecrypt(b64: string, key: Buffer): string {
+function aesGcmDecrypt(b64: string, key: Buffer, aad: string): string {
   const buf = Buffer.from(b64, 'base64');
   const iv = buf.subarray(0, 12);
   const tag = buf.subarray(12, 28);
   const ciphertext = buf.subarray(28);
   const decipher = createDecipheriv('aes-256-gcm', key.subarray(0, 32), iv);
+  decipher.setAAD(Buffer.from(aad));
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+}
+
+/** Reproduces the documented v2 event-key derivation (see ADR-0004). */
+function deriveEventKey(
+  encRoot: Buffer,
+  sessionId: string | undefined,
+  position: number,
+  eventId: string,
+): Buffer {
+  return createHmac('sha256', encRoot)
+    .update(`mcpose/v2/eventkey\0${sessionId ?? ''}\0${position}\0${eventId}`)
+    .digest();
 }
 
 describe('createAuditMiddleware — subkey confidentiality (regression)', () => {
   // Guards the fix for the keyId-as-key-material footgun: subkeys must derive
   // from the SECRET via the sign() oracle, never from the public keyId (which is
   // published in ReplayManifest.signedBy). If this regresses, a manifest-holder
-  // can decrypt high-tier payloads. See ADR-0003.
+  // can decrypt high-tier payloads. See ADR-0003 and ADR-0004.
   it('high-tier payload is NOT decryptable from the public keyId, but IS from the secret-derived key', async () => {
     const events: AuditEvent[] = [];
     const signingKey = createDefaultSigningKeyProvider('test-secret');
@@ -235,17 +248,76 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
 
     const event = events[0];
     if (event.sensitivityTier !== 'high') throw new Error('expected high tier');
+    const aad = `mcpose/v2/aad\0${event.id}\0input`;
 
     // Attacker path: keyId is public (== manifest.signedBy). The OLD scheme keyed
     // encryption off SHA256(keyIdBytes ‖ id). Prove that path no longer decrypts.
     const publicKeyId = Buffer.from(signingKey.keyId, 'hex');
     const forgedKey = createHash('sha256').update(publicKeyId).update(event.id).digest();
-    expect(() => aesGcmDecrypt(event.inputEncrypted, forgedKey)).toThrow();
+    expect(() => aesGcmDecrypt(event.inputEncrypted, forgedKey, aad)).toThrow();
 
     // Legitimate path: encRoot is derived from the secret through the oracle and
     // is never published; only a secret-holder can reproduce it.
-    const encRoot = await signingKey.sign(Buffer.from('mcpose/v1/enc'));
-    const realKey = createHmac('sha256', encRoot).update(event.id).digest();
-    expect(JSON.parse(aesGcmDecrypt(event.inputEncrypted, realKey))).toEqual({ acct: 'secret-acct' });
+    const encRoot = await signingKey.sign(Buffer.from('mcpose/v2/enc'));
+    const realKey = deriveEventKey(encRoot, undefined, 0, event.id);
+    expect(JSON.parse(aesGcmDecrypt(event.inputEncrypted, realKey, aad))).toEqual({ acct: 'secret-acct' });
+  });
+
+  it('input and output ciphertexts are not swappable within an event (AAD binding)', async () => {
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware } = createAuditMiddleware(
+      makeOptions({ signingKey, onEvent: (e) => { events.push(e); } }),
+    );
+
+    await middleware(
+      makeReq('transfer', { acct: 'in' }),
+      async () => ({ content: [{ type: 'text', text: 'out' }] }),
+      makeCtx(),
+    );
+
+    const event = events[0];
+    if (event.sensitivityTier !== 'high') throw new Error('expected high tier');
+    const encRoot = await signingKey.sign(Buffer.from('mcpose/v2/enc'));
+    const key = deriveEventKey(encRoot, undefined, 0, event.id);
+
+    // Correct AAD decrypts; the OTHER field's AAD must not authenticate.
+    const inputAad = `mcpose/v2/aad\0${event.id}\0input`;
+    const outputAad = `mcpose/v2/aad\0${event.id}\0output`;
+    expect(() => aesGcmDecrypt(event.inputEncrypted, key, inputAad)).not.toThrow();
+    expect(() => aesGcmDecrypt(event.inputEncrypted, key, outputAad)).toThrow();
+    expect(() => aesGcmDecrypt(event.outputEncrypted, key, inputAad)).toThrow();
+  });
+
+  it('events at different positions get distinct keys even with a reused requestId', async () => {
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware } = createAuditMiddleware(
+      makeOptions({
+        signingKey,
+        sensitivityResolver: () => 'high',
+        onEvent: (e) => { events.push(e); },
+      }),
+    );
+
+    // Deliberately reuse ONE context (and therefore one requestId).
+    const ctx = makeCtx('reused-ctx-session');
+    await middleware(makeReq('transfer', { n: 1 }), async () => ({ content: [] }), ctx);
+    await middleware(makeReq('transfer', { n: 2 }), async () => ({ content: [] }), ctx);
+
+    expect(events[0].id).toBe(events[1].id);
+    const encRoot = await signingKey.sign(Buffer.from('mcpose/v2/enc'));
+    const key0 = deriveEventKey(encRoot, 'reused-ctx-session', 0, events[0].id);
+    const key1 = deriveEventKey(encRoot, 'reused-ctx-session', 1, events[1].id);
+    expect(key0.equals(key1)).toBe(false);
+
+    // Each event decrypts only under its own positional key.
+    const [first, second] = events;
+    if (first.sensitivityTier !== 'high' || second.sensitivityTier !== 'high') {
+      throw new Error('expected high tier');
+    }
+    const aad0 = `mcpose/v2/aad\0${first.id}\0input`;
+    expect(JSON.parse(aesGcmDecrypt(first.inputEncrypted, key0, aad0))).toEqual({ n: 1 });
+    expect(() => aesGcmDecrypt(second.inputEncrypted, key0, aad0)).toThrow();
   });
 });

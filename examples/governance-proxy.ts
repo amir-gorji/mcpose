@@ -23,7 +23,7 @@
 
 import { createProxyServer } from 'mcpose';
 import { createMockBackendClient } from 'mcpose/testing';
-import type { ToolMiddleware, Identity } from 'mcpose';
+import type { ToolMiddleware, Identity, TelemetryEvent } from 'mcpose';
 
 // ---------------------------------------------------------------------------
 // 1. Mock backend: define the tools our proxy will govern.
@@ -35,10 +35,10 @@ import type { ToolMiddleware, Identity } from 'mcpose';
 
 const backend = createMockBackendClient({
   tools: [
-    { name: 'get_balance',    description: 'Return the account balance.' },
-    { name: 'search_trades',   description: 'Search trade history.' },
-    { name: 'wire_transfer',   description: 'Initiate a wire transfer.' },
-    { name: 'health_check',    description: 'Internal health check.' },
+    { name: 'get_balance', description: 'Return the account balance.', inputSchema: { type: 'object' } },
+    { name: 'search_trades', description: 'Search trade history.', inputSchema: { type: 'object' } },
+    { name: 'wire_transfer', description: 'Initiate a wire transfer.', inputSchema: { type: 'object' } },
+    { name: 'health_check', description: 'Internal health check.', inputSchema: { type: 'object' } },
   ],
   callToolResponse: (params) => ({
     content: [{ type: 'text' as const, text: `mock response for ${params.name}` }],
@@ -75,9 +75,9 @@ const passThroughTools = ['health_check'];
 //    Wire it to your observability backend.
 // ---------------------------------------------------------------------------
 
-const telemetryEvents: Record<string, unknown>[] = [];
+const telemetryEvents: TelemetryEvent[] = [];
 
-function onTelemetry(event: Record<string, unknown>) {
+function onTelemetry(event: TelemetryEvent) {
   telemetryEvents.push(event);
   console.log('[telemetry]', JSON.stringify(event));
 }
@@ -149,7 +149,7 @@ console.error('or createBackendClient({ url: ... }) for HTTP/SSE.');
 // Graceful shutdown.
 const shutdown = () => {
   console.error('\nShutting down...');
-  server.close();
+  void server.close();
   process.exit(0);
 };
 

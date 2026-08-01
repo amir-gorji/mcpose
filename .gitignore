@@ -49,3 +49,9 @@ Thumbs.db
 
 # pnpm
 .pnpm-store/
+
+# Claude Code local settings
+**/.claude/settings.local.json
+
+# Agent run artifacts
+.gnhf/

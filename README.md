@@ -6,8 +6,8 @@
 
 [![npm](https://img.shields.io/npm/v/mcpose)](https://www.npmjs.com/package/mcpose)
 [![license](https://img.shields.io/npm/l/mcpose)](./LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
-[![CI](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml/badge.svg)](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)](https://www.typescriptlang.org/)
+[![CI](https://github.com/amir-gorji/mcpose/actions/workflows/ci.yml/badge.svg)](https://github.com/amir-gorji/mcpose/actions/workflows/ci.yml)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-025E8C?logo=dependabot)](https://github.com/amir-gorji/mcpose/blob/main/.github/dependabot.yml)
 
 The audit and governance layer for MCP.
@@ -22,7 +22,7 @@ mcpose is a transparent middleware proxy for MCP servers. It intercepts, transfo
 - **Per-session identity resolution**: resolve a caller once, then stamp the `Identity` on every request in the session.
 - **Compliance-grade audit trails** (DORA Art. 17, SR 11-7) via [`@mcpose/audit`](#mcposeaudit): HMAC-chained events, a Merkle `ReplayManifest`, and AES-256-GCM for high-sensitivity tiers.
 - **HTTP/SSE transport** with mTLS, session limits, and SSE reconnect replay.
-- **Production-minded**: ships ESM with first-class TypeScript types and runs on Node.js 18+.
+- **Production-minded**: ships ESM with first-class TypeScript types and runs on Node.js 20+.
 
 ## When to use mcpose
 
@@ -61,7 +61,7 @@ mcpose is a transparent middleware proxy for MCP servers. It intercepts, transfo
 - **Identity resolution**: `resolveIdentity` hook on `HttpProxyOptions`; resolved `Identity` stamped on every `ProxyContext`
 - **Agent delegation chain**: `delegatedFrom?: Identity[]` on `ProxyContext` for A2A handoff recording
 - **mTLS**: pass `tlsOptions` to `startHttpProxy` for mutual TLS
-- **SSE reconnect replay**: built-in in-memory `EventStore` with `PersistentEventStore` interface for Redis/Postgres adapters
+- **SSE reconnect replay**: built-in in-memory `EventStore` with the `PersistentEventStore` type (an alias of the SDK's `EventStore`) for Redis/Postgres adapters
 - **Session lifecycle hook**: `onSessionClosed` on `HttpProxyOptions`; wire `auditHandle.closeSession` here to flush `ReplayManifest` on session end
 - **Structured rejection reasons**: `RejectionReason` in MCP error `data` field on every blocked call
 
@@ -95,7 +95,7 @@ This is a monorepo. Each package publishes independently and has its own README 
 
 **Prerequisites**
 
-- Node.js 18 or newer.
+- Node.js 20 or newer.
 - `@modelcontextprotocol/sdk` as a peer dependency (installed separately below).
 - For compliance audit trails, also install [`@mcpose/audit`](#mcposeaudit).
 
@@ -162,9 +162,12 @@ For each supported tool or resource, mcpose picks one of three routing paths:
 | Path | Option | Behavior |
 |---|---|---|
 | **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses; rejected with `TOOL_HIDDEN` / `RESOURCE_HIDDEN` at call time |
-| **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded raw to upstream; all middleware skipped |
+| **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded raw to upstream; transforming middleware skipped |
 | **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline |
 
+For hidden tools, the rejection is thrown inside the middleware pipeline, so middleware such as audit observes the rejected call; the backend is never called.
+A tool listed in both `hiddenTools` and `passThroughTools` stays hidden.
+Pass-through skips transforming middleware only: middleware wrapped in `markPassThroughObserver()` (audit, telemetry) still runs for pass-through tools.
 Prompts are forwarded as-is when the upstream supports prompts.
 
 The proxy preserves core request semantics end to end:
@@ -173,7 +176,7 @@ The proxy preserves core request semantics end to end:
 - abort signals are forwarded to upstream tool, resource, and prompt calls
 - upstream progress updates are relayed back to the downstream client
 - list-changed notifications are advertised and fanned out when the upstream supports them
-- `list_tools` responses can be transformed through `listToolsMiddleware` without weakening local `hiddenTools` guarantees
+- `list_tools` responses can be transformed through `listToolsMiddleware` without weakening local `hiddenTools` guarantees (hidden filtering is applied both before and after the middleware)
 
 ---
 
@@ -211,6 +214,19 @@ toolMiddleware: [piiMW, auditMW]
 
 `compose([outerMW, innerMW])` uses the **opposite** (outermost-first) convention: `ProxyOptions` arrays are **not** interchangeable with `compose()` arguments.
 
+Middleware that must observe every call regardless of pass-through status (audit, telemetry) can be wrapped in `markPassThroughObserver(mw)`.
+A wrapped middleware still runs for tools listed in `passThroughTools`, which skip all other middleware.
+Never use it for middleware that transforms requests or responses: pass-through means "forward upstream as-is".
+
+```ts
+import { markPassThroughObserver } from 'mcpose';
+
+toolMiddleware: [piiMW, markPassThroughObserver(metricsMW)]
+// piiMW is skipped for passThroughTools; metricsMW still sees every call.
+```
+
+The middleware returned by `createAuditMiddleware` in `@mcpose/audit` is already wrapped, so pass-through tools stay audited without extra setup.
+
 ---
 
 ## API Reference
@@ -218,7 +234,7 @@ toolMiddleware: [piiMW, auditMW]
 > The canonical API reference for each package lives in its own README: [`packages/core`](./packages/core/README.md), [`@mcpose/audit`](./packages/audit/README.md), and [`@mcpose/testing`](./packages/testing/README.md).
 > The full type signatures are reproduced below, with the dense reference collapsed for scannability.
 
-### `ProxyContext` · `Middleware<Req, Res>` · `ToolMiddleware` · `ResourceMiddleware` · `ListToolsMiddleware` · `compose()` · `createProxyContext()`
+### `ProxyContext` · `Middleware<Req, Res>` · `ToolMiddleware` · `ResourceMiddleware` · `ListToolsMiddleware` · `compose()` · `markPassThroughObserver()` · `createProxyContext()`
 
 The per-request `ProxyContext`, the `Identity` shape, the middleware type aliases, and the `hasToolContent` type guard.
 
@@ -264,6 +280,10 @@ type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
 
 // Type guard: narrows CompatibilityCallToolResult to CallToolResult
 function hasToolContent(r: CompatibilityCallToolResult): r is CallToolResult;
+
+// Wraps a middleware so it still runs for passThroughTools (returns a new
+// middleware; the input is not mutated). Use for observers, never transformers.
+function markPassThroughObserver<Req, Res>(mw: Middleware<Req, Res>): Middleware<Req, Res>;
 ```
 
 </details>
@@ -315,7 +335,10 @@ function createProxyServer(backend: BackendClient, options?: ProxyOptions): Serv
 Both are optional: `name` defaults to `'mcpose'`, and `version` defaults to the mcpose library version, so set your own when you ship a proxy.
 
 `onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
-Wire it to `@mcpose/otel` or any custom sink.
+Wire it to any custom sink; an OpenTelemetry adapter (`@mcpose/otel`) is planned for v3.
+Results with `isError: true` are reported as outcome `'error'`, and a throwing sink is logged but never fails the tool call.
+
+`createProxyServer` throws if the backend is not connected, so a mis-wired proxy fails at startup instead of on the first call.
 
 ---
 
@@ -338,12 +361,24 @@ interface HttpProxyOptions {
   sessionTtlMs?: number; // Sessions auto-close after this duration
   /** Resolves caller identity once per session. Errors abort the session with 401. */
   resolveIdentity?: (req: http.IncomingMessage) => Identity | Promise<Identity>;
+  /** Re-validates an existing session on every routed request. Return false (or throw) for a 401. */
+  validateSession?: (
+    req: http.IncomingMessage,
+    session: { sessionId: string; identity?: Identity },
+  ) => boolean | Promise<boolean>;
   /** mTLS: pass Node's https.ServerOptions (key, cert, ca, requestCert, rejectUnauthorized). */
   tlsOptions?: https.ServerOptions;
-  /** SSE reconnect replay store. Defaults to in-memory. Pass null to disable. */
+  /** SSE reconnect replay store. Defaults to in-memory. Pass null to disable.
+   *  PersistentEventStore is an alias of the SDK's EventStore type. */
   eventStore?: PersistentEventStore | null;
-  /** Called when a session closes. Wire auditHandle.closeSession here to flush ReplayManifest. */
+  /** Called when a session closes: client DELETE, TTL expiry, or server shutdown. */
   onSessionClosed?: (sessionId: string) => void;
+  /** Hosts allowed in the Host header when DNS-rebinding protection is on. Forwarded to the SDK transport. */
+  allowedHosts?: string[];
+  /** Origins allowed in the Origin header. Forwarded to the SDK transport. */
+  allowedOrigins?: string[];
+  /** Enables the SDK transport's Host/Origin checks. Recommended for localhost proxies. */
+  enableDnsRebindingProtection?: boolean;
 }
 
 function startHttpProxy(
@@ -363,14 +398,26 @@ const server = await startHttpProxy(backend, { toolMiddleware: [loggingMW] }, { 
 ```
 
 On shutdown, active proxy sessions are closed before the underlying `http.Server` finishes closing.
+`onSessionClosed` fires on every session-end path: client DELETE, TTL expiry, and server shutdown, so audit manifests flush in all three cases.
+
+Only an `initialize` POST can create a session; a session-less GET or DELETE returns 400.
+Use `validateSession` to bind a session to its original credential (for example, re-check the bearer token) so a leaked `mcp-session-id` alone cannot take over a session.
+
+Credential-bearing headers (`authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`) are stripped from `ProxyContext.headers` before middleware (and through it, audit logs) can see them; `resolveIdentity` reads the raw `http.IncomingMessage`, so it still sees them.
+
+503 (session limit) and 413 (body limit) responses carry a JSON body with `error.data.rejectionReason` set to `SESSION_LIMIT` / `BODY_LIMIT`.
+
+SSE reconnect replay is scoped per stream: the in-memory store replays only events from the reconnecting stream, and an unknown or already-evicted `Last-Event-ID` replays nothing.
 
 ---
 
-### `RejectionReason`
+### `RejectionReason` · `rejectionMcpError()`
 
 Every blocked call embeds a `RejectionReason` in the MCP error `data` field.
 The top-level error code is unchanged, so existing clients that only inspect the code are unaffected.
 Audit middleware and agents can inspect `error.data.rejectionReason` for programmatic handling.
+
+`rejectionMcpError(reason, code, message)` builds an `McpError` with the reason embedded in `error.data`, so custom middleware can reject calls in the same structured shape the proxy uses.
 
 <details>
 <summary>Show the <code>RejectionReason</code> union</summary>
@@ -410,6 +457,14 @@ npm install @mcpose/audit
 ```
 
 `@mcpose/audit` provides a tamper-evident, compliance-grade audit trail for every tool call. It produces an HMAC-chained log of `AuditEvent` records and a `ReplayManifest` per session: a Merkle-proof document that lets auditors verify what happened without re-executing anything.
+
+Detecting tampering requires the signing secret: `verifyAuditChain(events, signingKey)` recomputes every chain hash, and `verifyManifestSignature(manifest, signingKey)` checks the manifest signature.
+The keyless assertions in [`@mcpose/testing`](#mcposetesting) catch structural tampering (reordering, renumbering, duplication) only.
+
+`@mcpose/audit` 3.0.0 writes audit format v2, a breaking format change: archives written by a 2.x release verify only with a pinned 2.x.
+See [ADR-0004](./docs/adr/0004-audit-format-v2-canonical-serialization.md) for the canonical-serialization and full-manifest-signature rationale.
+
+The audit layer never throws into the tool-call path: its own failures (event serialization, a throwing `onEvent` sink) are reported to the `onAuditError` hook instead.
 
 ### Sensitivity tiers
 
@@ -464,11 +519,15 @@ const server = await startHttpProxy(backend, {
 ```ts
 const resolver = createSensitivityResolver(
   { get_balance: 'low', search: 'medium' },
-  // Optional override fn: takes precedence over the static map
-  (tool, identity, args) => identity.roles.includes('admin') ? 'low' : 'high',
+  // Optional override fn: takes precedence over the static map.
+  // The 4th argument is the map's resolution (already defaulted to 'high'
+  // for unknown tools), so the override can fall back to it.
+  (tool, identity, args, mapTier) =>
+    identity.roles.includes('admin') ? 'low' : mapTier,
 );
 ```
 
+The override function type is exported as `SensitivityOverrideFn`.
 Unknown tools not in the map always resolve to `'high'` unless the override fn returns otherwise.
 
 ### `createDefaultSigningKeyProvider(secret)`
@@ -485,7 +544,6 @@ HMAC-SHA256 in-process signing. For production, implement `SigningKeyProvider` a
 ```ts
 interface AuditOptions {
   signingKey: SigningKeyProvider;
-  hashAlgorithm?: 'SHA-256';           // default: SHA-256
   sensitivityResolver: SensitivityResolverFn;
   onEvent: (event: AuditEvent) => void | Promise<void>;
   /**
@@ -497,8 +555,17 @@ interface AuditOptions {
    * is the push-based delivery mechanism for the resulting manifest.
    */
   onManifest?: (manifest: ReplayManifest) => void | Promise<void>;
-  includeRejections?: boolean;         // default: true
-  includeCost?: boolean;               // default: true
+  /** Record events for rejected calls (hidden tools etc.). Default: true. */
+  includeRejections?: boolean;
+  /**
+   * Called when the audit layer itself fails (event serialization, a
+   * throwing onEvent sink). The audit layer NEVER throws into the
+   * tool-call path. Default: console.error.
+   */
+  onAuditError?: (
+    err: unknown,
+    info: { tool: string; requestId: string; sessionId?: string },
+  ) => void;
 }
 
 interface AuditMiddlewareHandle {
@@ -508,6 +575,7 @@ interface AuditMiddlewareHandle {
 ```
 
 `closeSession` returns `undefined` if the session had no events or is unknown. Wire it to `HttpProxyOptions.onSessionClosed`.
+The returned `middleware` is already marked as a pass-through observer, so tools listed in `passThroughTools` stay audited.
 
 ### `AuditEvent` schema
 
@@ -523,14 +591,18 @@ type AuditEvent = LowAuditEvent | MediumAuditEvent | HighAuditEvent;
 
 interface AuditEventBase {
   id: string;                    // = ProxyContext.requestId
-  timestamp: string;             // ISO 8601 microsecond
+  startedAt: string;             // ISO timestamp captured before the upstream call started
+  endedAt: string;               // ISO timestamp captured after the upstream call settled
   sessionId?: string;
   identity: Identity;
   delegatedFrom?: Identity[];
   tool: string;
   duration_ms: number;
   outcome: 'success' | 'rejected' | 'error';
+  /** Present when outcome is 'rejected' (from the MCP error's data field). */
   rejectionReason?: RejectionReason;
+  /** Present when outcome is 'error': what the upstream call threw. */
+  error?: { name: string; message: string };
   inputHash: string;             // SHA-256
   outputHash: string;
   chainHash: string;             // HMAC(entry || prevChainHash)
@@ -544,6 +616,7 @@ interface AuditEventBase {
 
 Produced at session close.
 Covers all audit events with a Merkle root and individual proofs, signed by the `SigningKeyProvider`.
+The signature covers the canonical serialization of the entire manifest (every field, domain-separated), not just the Merkle root; verify it with `verifyManifestSignature(manifest, signingKey)`.
 Any third party can verify a single event without access to the full log.
 
 <details>
@@ -559,11 +632,22 @@ interface ReplayManifest {
   merkleRoot: string;
   merkleProofs: MerkleProof[];
   signedBy: string;   // keyId
-  signature: string;  // signs merkleRoot
+  signature: string;  // HMAC over the canonical serialization of the ENTIRE manifest
 }
 ```
 
 </details>
+
+### Verifiers and canonical serialization
+
+`@mcpose/audit` exports the keyed verifiers and the canonical serialization helpers they build on:
+
+| Export | Purpose |
+|---|---|
+| `verifyAuditChain(events, signingKey)` | Recomputes every event's `chainHash` with the chain key; reports the first bad index. An empty event list is invalid. |
+| `verifyManifestSignature(manifest, signingKey)` | Constant-time check of the full-manifest signature. |
+| `canonicalJson(value)` | Strict canonical JSON (keys sorted at every depth); the hash/signature preimage format. |
+| `stableStringify(value)` | Total, key-order-independent serialization used for `inputHash`/`outputHash`. |
 
 ---
 
@@ -586,10 +670,14 @@ import {
 
 | Function | What it checks |
 |---|---|
-| `assertAuditChainIntegrity(events)` | Sequential positions, non-empty chain hashes, no duplicates (tamper detection) |
-| `assertReplayManifestValid(events, manifest)` | Event count matches; Merkle proof verifies for every event |
-| `assertPiiRedacted(event, patterns)` | No pattern matches in plaintext fields; passes automatically for high-tier (encrypted) events |
-| `assertDelegationHonored(chain)` | Non-empty chain; every entry has a `sub` |
+| `assertAuditChainIntegrity(events)` | Sequential positions, non-empty and distinct chain hashes; throws on an empty chain (a log truncated to zero events must not pass) |
+| `assertReplayManifestValid(events, manifest)` | Event count matches; the Merkle root recomputes from the events under test; one proof per event, each verifying at its own index |
+| `assertPiiRedacted(event, patterns)` | Low/medium: no pattern matches the plaintext fields. High: the event is structurally encrypted (no plaintext `inputRaw`/`outputRaw` present, encrypted payloads present) |
+| `assertDelegationHonored(event)` | The event's `delegatedFrom` chain is non-empty and every entry has a `sub` |
+
+These assertions are deliberately keyless: the signing secret is not available to tests.
+They catch structural tampering (reordering, renumbering, duplication, a swapped Merkle root), but not a forgery rewritten consistently by a key-holder, and they do not verify the manifest signature.
+For keyed verification, use `verifyAuditChain(events, signingKey)` and `verifyManifestSignature(manifest, signingKey)` from `@mcpose/audit`.
 
 ---
 
@@ -671,13 +759,16 @@ Runnable, well-commented examples live in [`examples/`](./examples/).
 |---|---|
 | [`pii-redaction-audit.ts`](./examples/pii-redaction-audit.ts) | The canonical mcpose pattern: PII redaction composed with audit middleware over HTTP/SSE, with per-session identity resolution. |
 | [`governance-proxy.ts`](./examples/governance-proxy.ts) | Governance features: `hiddenTools`, `passThroughTools`, and `onTelemetry`. Self-contained, uses `createMockBackendClient` so no upstream server is needed. |
+| [`oauth-upstream-client.ts`](./examples/oauth-upstream-client.ts) | Connecting to an OAuth-protected remote MCP server from Node: dynamic client registration, PKCE, browser authorization, and persisted tokens with automatic refresh. |
+
+The examples resolve the workspace packages directly, so they run against your checkout:
 
 ```bash
 # From the repository root:
 pnpm install
-cd examples
-pnpm exec tsx governance-proxy.ts      # governance (self-contained, no upstream needed)
-pnpm exec tsx pii-redaction-audit.ts   # PII redaction + audit (needs an upstream MCP server)
+pnpm --filter mcpose-examples governance-proxy        # governance (self-contained, no upstream needed)
+pnpm --filter mcpose-examples pii-redaction-audit     # PII redaction + audit (needs an upstream MCP server)
+pnpm --filter mcpose-examples oauth-upstream-client   # OAuth against a remote MCP server
 ```
 
 The comments in each file walk through the setup step by step and mark the values you need to supply: upstream endpoint, audit secret, identity resolver, and durable sinks.
@@ -708,7 +799,7 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the development setup, the common
 A few load-bearing rules:
 
 - The `@mcpose/audit` tamper-evidence invariants must never silently break.
-  Read [ADR-0003](./docs/adr/0003-audit-subkeys-derived-from-signing-oracle.md) before touching the chain, signing, encryption, or `ReplayManifest`.
+  Read [ADR-0003](./docs/adr/0003-audit-subkeys-derived-from-signing-oracle.md) and [ADR-0004](./docs/adr/0004-audit-format-v2-canonical-serialization.md) before touching the chain, signing, encryption, or `ReplayManifest`.
 - Run `pnpm ts:ci` and `pnpm test` before opening a pull request.
 - Do not weaken an existing audit assertion to make a test pass.
 

@@ -35,15 +35,21 @@ export function createInMemoryEventStore(maxEvents = 1000): EventStore {
     },
 
     async replayEventsAfter(lastEventId, { send }) {
-      const afterSeq = parseInt(lastEventId as string, 10) || 0;
-      let latestStreamId: StreamId = '' as StreamId;
+      // Unknown or malformed Last-Event-ID (or one already evicted): replay
+      // nothing rather than the whole buffer.
+      const origin = store.get(lastEventId);
+      if (!origin) return '' as StreamId;
+
+      const afterSeq = parseInt(lastEventId as string, 10);
       for (const [id, { streamId, message }] of store) {
-        if (parseInt(id as string, 10) > afterSeq) {
+        if (
+          streamId === origin.streamId &&
+          parseInt(id as string, 10) > afterSeq
+        ) {
           await send(id, message);
-          latestStreamId = streamId;
         }
       }
-      return latestStreamId;
+      return origin.streamId;
     },
   };
 }

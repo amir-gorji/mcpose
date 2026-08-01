@@ -1,6 +1,6 @@
 {
   "name": "mcpose",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "The audit and governance layer for MCP",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,10 +13,13 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "sideEffects": false,
   "files": [
     "dist",
+    "src",
     "README.md"
   ],
   "keywords": [
@@ -32,6 +35,10 @@
   ],
   "author": "Amir Gorji",
   "license": "MIT",
+  "homepage": "https://github.com/amir-gorji/mcpose#readme",
+  "bugs": {
+    "url": "https://github.com/amir-gorji/mcpose/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/amir-gorji/mcpose.git",
@@ -40,11 +47,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "ts:ci": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
-    "@modelcontextprotocol/sdk": ">=1.0.0"
+    "@modelcontextprotocol/sdk": "^1.17.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",

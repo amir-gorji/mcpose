@@ -20,6 +20,7 @@
  *   npx tsx pii-redaction-audit.ts
  */
 
+import type * as http from 'node:http';
 import { createBackendClient, startHttpProxy, hasToolContent } from 'mcpose';
 import type { ToolMiddleware, Identity } from 'mcpose';
 import {
@@ -57,7 +58,7 @@ const PII_PATTERNS: RegExp[] = [
 ];
 
 function createPiiMiddleware(patterns: RegExp[]): ToolMiddleware {
-  return async (req, next, ctx) => {
+  return async (req, next) => {
     const result = await next(req);
 
     // Narrow to a tool-call result (skip protocol-level results).
@@ -126,7 +127,7 @@ const auditHandle = createAuditMiddleware({
 // ---------------------------------------------------------------------------
 
 async function resolveIdentity(
-  req: Parameters<NonNullable<Parameters<typeof startHttpProxy>[2]>['resolveIdentity']>[0],
+  _req: http.IncomingMessage,
 ): Promise<Identity> {
   // In production, extract and verify a JWT from the Authorization header,
   // or use mTLS client certificate details.  This is a placeholder.

@@ -1,9 +1,8 @@
 export type {
   SensitivityTier,
   SensitivityResolverFn,
-  HashAlgorithm,
+  SensitivityOverrideFn,
   SigningKeyProvider,
-  CostMetadata,
   AuditEventBase,
   LowAuditEvent,
   MediumAuditEvent,
@@ -18,4 +17,12 @@ export type {
 export { createSensitivityResolver } from './sensitivity.js';
 export { createDefaultSigningKeyProvider } from './signingKey.js';
 export { createAuditMiddleware } from './middleware.js';
-export { computeMerkleRoot, computeMerkleProof, verifyMerkleProof } from './chain.js';
+export {
+  computeMerkleRoot,
+  computeMerkleProof,
+  verifyMerkleProof,
+  canonicalJson,
+  stableStringify,
+} from './chain.js';
+export type { ChainVerification } from './verify.js';
+export { verifyAuditChain, verifyManifestSignature } from './verify.js';

@@ -12,9 +12,19 @@ export type SensitivityResolverFn = (
   args: Record<string, unknown>,
 ) => SensitivityTier;
 
-// ── Signing ────────────────────────────────────────────────────────────────────
+/**
+ * Override passed to `createSensitivityResolver`. Receives the static map's
+ * resolution as `mapTier` (already defaulted to `'high'` for unknown tools)
+ * so it can fall back: `(tool, id, args, mapTier) => mapTier`.
+ */
+export type SensitivityOverrideFn = (
+  tool: string,
+  identity: Identity,
+  args: Record<string, unknown>,
+  mapTier: SensitivityTier,
+) => SensitivityTier;
 
-export type HashAlgorithm = 'SHA-256';
+// ── Signing ────────────────────────────────────────────────────────────────────
 
 export interface SigningKeyProvider {
   sign(data: Buffer): Promise<Buffer>;
@@ -22,29 +32,25 @@ export interface SigningKeyProvider {
   algorithm: 'HMAC-SHA256';
 }
 
-// ── Cost ───────────────────────────────────────────────────────────────────────
-
-export interface CostMetadata {
-  inputTokens?: number;
-  outputTokens?: number;
-  totalCostUsd?: number;
-}
-
 // ── Audit events ───────────────────────────────────────────────────────────────
 
 export interface AuditEventBase {
   /** Equals the ProxyContext requestId. */
   id: string;
-  timestamp: string;
+  /** ISO timestamp captured before the upstream call started. */
+  startedAt: string;
+  /** ISO timestamp captured after the upstream call settled. */
+  endedAt: string;
   sessionId?: string;
   identity: Identity;
   delegatedFrom?: Identity[];
   tool: string;
   duration_ms: number;
-  streamedChunkCount?: number;
   outcome: 'success' | 'rejected' | 'error';
+  /** Present when outcome is 'rejected' (from the MCP error's data field). */
   rejectionReason?: RejectionReason;
-  cost?: CostMetadata;
+  /** Present when outcome is 'error': what the upstream call threw. */
+  error?: { name: string; message: string };
   inputHash: string;
   outputHash: string;
   chainHash: string;
@@ -88,6 +94,11 @@ export interface ReplayManifest {
   merkleRoot: string;
   merkleProofs: MerkleProof[];
   signedBy: string;
+  /**
+   * HMAC over the canonical serialization of the ENTIRE manifest (every
+   * field above, domain-separated) — not just the Merkle root. Verify with
+   * `verifyManifestSignature`.
+   */
   signature: string;
 }
 
@@ -95,7 +106,6 @@ export interface ReplayManifest {
 
 export interface AuditOptions {
   signingKey: SigningKeyProvider;
-  hashAlgorithm?: HashAlgorithm;
   sensitivityResolver: SensitivityResolverFn;
   onEvent: (event: AuditEvent) => void | Promise<void>;
   /**
@@ -110,19 +120,30 @@ export interface AuditOptions {
    * the audit layer reacts.
    */
   onManifest?: (manifest: ReplayManifest) => void | Promise<void>;
-  /** @default true */
+  /**
+   * Record events for rejected calls (hidden tools etc.).
+   * @default true
+   */
   includeRejections?: boolean;
-  /** @default true */
-  includeCost?: boolean;
+  /**
+   * Called when the audit layer itself fails (event serialization, a
+   * throwing onEvent sink). The audit layer NEVER throws into the tool-call
+   * path; failures are reported here instead.
+   * @default console.error
+   */
+  onAuditError?: (
+    err: unknown,
+    info: { tool: string; requestId: string; sessionId?: string },
+  ) => void;
 }
 
 export interface AuditMiddlewareHandle {
   middleware: ToolMiddleware;
   /**
    * Signal that a session has ended. Computes the Merkle tree over all audit
-   * events for the session, signs the root, fires onManifest, and returns the
-   * ReplayManifest. Returns undefined if the session had no events or is
-   * unknown.
+   * events for the session, signs the full manifest, fires onManifest, and
+   * returns the ReplayManifest. Returns undefined if the session had no
+   * events or is unknown.
    */
   closeSession(sessionId: string): Promise<ReplayManifest | undefined>;
 }

@@ -78,28 +78,17 @@ async function invoke(
   return handler({ method, params }, extra);
 }
 
-function hasHandler(
-  server: ReturnType<typeof createProxyServer>,
-  method: string,
-): boolean {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ((server as any)._requestHandlers as Map<string, unknown>).has(method);
-}
-
 // ── capability mirroring ──────────────────────────────────────────────────
 
 describe('createProxyServer() — capability edge cases', () => {
-  it('builds a server even when upstream returns undefined capabilities', () => {
+  it('throws when the backend is not connected (undefined capabilities)', () => {
     const backend = makeRichBackend(undefined);
 
-    const server = createProxyServer(backend, { name: 'test-server' });
-
-    expect(hasHandler(server, 'tools/list')).toBe(false);
-    expect(hasHandler(server, 'tools/call')).toBe(false);
-    expect(hasHandler(server, 'resources/list')).toBe(false);
-    expect(hasHandler(server, 'resources/read')).toBe(false);
-    expect(hasHandler(server, 'prompts/list')).toBe(false);
-    expect(hasHandler(server, 'prompts/get')).toBe(false);
+    // A disconnected backend would otherwise produce a proxy that silently
+    // answers nothing — fail loudly instead.
+    expect(() => createProxyServer(backend, { name: 'test-server' })).toThrow(
+      /backend is not connected/,
+    );
     expect(backend.setNotificationHandler).not.toHaveBeenCalled();
   });
 

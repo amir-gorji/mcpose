@@ -2,8 +2,8 @@
 
 [![npm](https://img.shields.io/npm/v/mcpose)](https://www.npmjs.com/package/mcpose)
 [![license](https://img.shields.io/npm/l/mcpose)](https://github.com/amir-gorji/mcpose/blob/main/LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
-[![CI](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml/badge.svg)](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)](https://www.typescriptlang.org/)
+[![CI](https://github.com/amir-gorji/mcpose/actions/workflows/ci.yml/badge.svg)](https://github.com/amir-gorji/mcpose/actions/workflows/ci.yml)
 
 **The composable middleware proxy for MCP.**
 
@@ -45,7 +45,7 @@ If you only need the audit chain or the compliance test helpers, see the ecosyst
 npm install mcpose
 ```
 
-Requires Node.js 18+. Ships ESM with TypeScript types.
+Requires Node.js 20+. Ships ESM with TypeScript types.
 
 ## Quick start
 
@@ -95,6 +95,11 @@ await startHttpProxy(
 );
 ```
 
+`HttpProxyOptions` also accepts `validateSession(req, { sessionId, identity })` to re-validate an existing session on every routed request (return `false` or throw to reject with 401), plus `allowedHosts`, `allowedOrigins`, and `enableDnsRebindingProtection`, which are forwarded to the SDK transport.
+`onSessionClosed` fires on client DELETE, TTL expiry, and server shutdown.
+Only an `initialize` POST can create a session; a session-less GET or DELETE returns 400.
+Credential-bearing headers (`authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`) are stripped from `ProxyContext.headers` before middleware sees them; `resolveIdentity` still reads the raw request.
+
 ## Core concepts
 
 - **Middleware**: a single function `(req, next, ctx) => Promise<result>`. Call `next(req)` to delegate downstream; transform the request before, or the response after. Middlewares nest onion-style.
@@ -108,11 +113,16 @@ await startHttpProxy(
 | `createBackendClient(config)` | Connect to an upstream over stdio (`command`/`args`) or HTTP (`url`). |
 | `startProxy(backend, options?)` | Serve the proxy over **stdio**. |
 | `startHttpProxy(backend, proxyOptions?, httpOptions?)` | Serve over **HTTP/SSE**: identity, mTLS, sessions, reconnect replay. |
-| `createProxyServer(backend, options?)` | Build the underlying `Server` without binding a transport. |
+| `createProxyServer(backend, options?)` | Build the underlying `Server` without binding a transport. Throws if the backend is not connected. |
 | `compose(middlewares)` | Compose middlewares into one (outermost-first). |
+| `markPassThroughObserver(mw)` | Mark a middleware (audit, telemetry) to still run for `passThroughTools`. |
+| `rejectionMcpError(reason, code, message)` | Build an `McpError` with a `RejectionReason` in `error.data`. |
 | `createProxyContext(overrides?)` | Construct a `ProxyContext` (useful in tests). |
 | `createInMemoryEventStore()` | Default SSE reconnect event store; swap for a `PersistentEventStore`. |
 | `hasToolContent(result)` | Type guard for tool-call results. |
+
+`PersistentEventStore` is an alias of the SDK's `EventStore` type, so any SDK-compatible store plugs in directly.
+The in-memory store replays events per stream; an unknown or already-evicted `Last-Event-ID` replays nothing.
 
 **Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
 
@@ -157,7 +167,11 @@ const backend = await createBackendClient({
 
 ### Governance options (`ProxyOptions`)
 
-`hiddenTools` / `hiddenResources` reject calls with a structured [`RejectionReason`](https://github.com/amir-gorji/mcpose#rejectionreason) in the MCP error `data` field; `passThroughTools` skip the pipeline entirely; `onTelemetry` emits per-call timing and outcome.
+`name` and `version` set the MCP server identity returned in `initialize`: `name` defaults to `'mcpose'` and `version` defaults to the mcpose library version, so set your own when you ship a proxy.
+`hiddenTools` / `hiddenResources` reject calls with a structured [`RejectionReason`](https://github.com/amir-gorji/mcpose#rejectionreason) in the MCP error `data` field.
+The hidden-tool rejection is thrown inside the middleware pipeline, so middleware such as audit observes it; the backend is never called.
+`passThroughTools` skip transforming middleware, but middleware wrapped in `markPassThroughObserver()` still runs for them; a tool that is both hidden and pass-through stays hidden.
+`onTelemetry` emits per-call timing and outcome; results with `isError: true` are reported as outcome `'error'`, and a throwing sink never fails the call.
 
 ### Test helpers: `mcpose/testing`
 

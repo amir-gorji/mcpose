@@ -1,7 +1,7 @@
 {
   "name": "@mcpose/testing",
-  "version": "2.0.3",
-  "description": "Compliance testing utilities for mcpose — audit chain assertions, scenario harness",
+  "version": "3.0.0",
+  "description": "Compliance testing utilities for mcpose — audit chain, manifest, redaction, and delegation assertions",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,10 +9,16 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist",
+    "src",
     "README.md"
   ],
   "keywords": [
@@ -24,6 +30,10 @@
   ],
   "author": "Amir Gorji",
   "license": "MIT",
+  "homepage": "https://github.com/amir-gorji/mcpose#readme",
+  "bugs": {
+    "url": "https://github.com/amir-gorji/mcpose/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/amir-gorji/mcpose.git",
@@ -32,12 +42,15 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "ts:ci": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
-    "mcpose": ">=2.0.0",
-    "@mcpose/audit": ">=2.0.0"
+    "mcpose": ">=2.2.0 <4",
+    "@mcpose/audit": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

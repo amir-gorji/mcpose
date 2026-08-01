@@ -2,12 +2,14 @@
 
 [![npm](https://img.shields.io/npm/v/@mcpose/testing)](https://www.npmjs.com/package/@mcpose/testing)
 [![license](https://img.shields.io/npm/l/@mcpose/testing)](https://github.com/amir-gorji/mcpose/blob/main/LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
-[![CI](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml/badge.svg)](https://github.com/amir-gorji/mcpose/actions/workflows/deploy.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)](https://www.typescriptlang.org/)
+[![CI](https://github.com/amir-gorji/mcpose/actions/workflows/ci.yml/badge.svg)](https://github.com/amir-gorji/mcpose/actions/workflows/ci.yml)
 
 **Compliance assertions for [`@mcpose/audit`](https://www.npmjs.com/package/@mcpose/audit) audit chains.**
 
 A small set of assertion functions that verify the tamper-evidence guarantees of an mcpose audit trail: chain integrity, Merkle-proof validity, PII redaction, and delegation handling. Each throws a descriptive `Error` on failure and returns `void` on success.
+
+**These assertions are deliberately keyless** — the signing secret is not available to tests. They catch structural tampering (reordering, renumbering, duplicated or missing entries, doctored roots), but a key-holder forging a consistent chain can only be caught by the keyed verifiers in `@mcpose/audit`: `verifyAuditChain` and `verifyManifestSignature`.
 
 **Runner-agnostic.** These are plain functions with no test-framework dependency; use them with Vitest, Jest, `node:test`, or any runner.
 
@@ -19,10 +21,10 @@ You have an `@mcpose/audit` audit trail and need to verify in your test suite th
 
 ## Features
 
-- **Chain integrity verification**: `assertAuditChainIntegrity` detects insertion, deletion, or reordering in the audit trail by checking sequential positions, non-empty chain hashes, and duplicate events.
-- **Merkle-proof validation**: `assertReplayManifestValid` verifies every event's Merkle proof against the signed manifest root, confirming the event count matches.
-- **PII redaction checks**: `assertPiiRedacted` confirms no sensitive patterns appear in plaintext audit fields; high-tier (encrypted) events pass automatically.
-- **Delegation chain validation**: `assertDelegationHonored` ensures every agent delegation entry has a valid identity with a `sub` claim.
+- **Chain structure verification**: `assertAuditChainIntegrity` checks sequential positions and distinct, non-empty chain hashes (catches reordering, renumbering, duplicates; throws on an empty chain). It does not recompute HMACs — use `verifyAuditChain` for that.
+- **Manifest consistency**: `assertReplayManifestValid` recomputes the Merkle root from the events under test, requires one proof per event, and verifies every proof at its index. It does not check the manifest signature — use `verifyManifestSignature`.
+- **PII redaction checks**: `assertPiiRedacted` confirms no sensitive patterns appear in plaintext low/medium events; high-tier events are structurally checked (no plaintext fields, encrypted payloads present) — their content is ciphertext and is not pattern-scanned.
+- **Delegation chain validation**: `assertDelegationHonored(event)` ensures the event carries a non-empty `delegatedFrom` chain whose entries have a `sub`. Signatures and continuity are v3.
 - **Runner-agnostic**: plain functions with no test-framework dependency; use with Vitest, Jest, `node:test`, or any runner.
 
 ## Table of Contents
@@ -70,12 +72,12 @@ test('transfer flow produces a verifiable audit trail', async () => {
 
 ## API
 
-| Function | What it checks |
-|---|---|
-| `assertAuditChainIntegrity(events)` | Sequential `replayManifestPosition`s, non-empty `chainHash`es, no duplicates; detects insertion, deletion, or reordering. |
-| `assertReplayManifestValid(events, manifest)` | `eventCount` matches, and every event's Merkle proof verifies against `merkleRoot`. |
-| `assertPiiRedacted(event, patterns)` | No `RegExp` pattern matches the plaintext input/output fields. High-tier (encrypted) events pass automatically. |
-| `assertDelegationHonored(chain)` | The delegation chain is non-empty and every `Identity` has a `sub`. |
+| Function | Proves | Does NOT prove |
+|---|---|---|
+| `assertAuditChainIntegrity(events)` | Positions sequential; `chainHash`es distinct and non-empty; non-empty log | HMAC validity (no key) — a key-consistent forgery passes |
+| `assertReplayManifestValid(events, manifest)` | Root recomputes from the events; one proof per event; every proof verifies at its index | The manifest **signature** — use `verifyManifestSignature` |
+| `assertPiiRedacted(event, patterns)` | low/medium: no pattern matches plaintext; high: no plaintext fields, encrypted payloads present | Anything about what is inside high-tier ciphertext |
+| `assertDelegationHonored(event)` | `delegatedFrom` present, non-empty, entries have a `sub` | Delegation signatures or chain continuity (v3) |
 
 Re-exports `AuditEvent` and `ReplayManifest` types from `@mcpose/audit` for convenience.
 

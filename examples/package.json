@@ -4,16 +4,18 @@
   "type": "module",
   "description": "Runnable examples for mcpose",
   "scripts": {
+    "ts:ci": "tsc --noEmit",
     "pii-redaction-audit": "tsx pii-redaction-audit.ts",
-    "governance-proxy": "tsx governance-proxy.ts"
+    "governance-proxy": "tsx governance-proxy.ts",
+    "oauth-upstream-client": "tsx oauth-upstream-client.ts"
   },
   "dependencies": {
-    "@mcpose/audit": "^2.0.0",
-    "@modelcontextprotocol/sdk": ">=1.0.0",
-    "mcpose": "^2.0.0"
+    "@mcpose/audit": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "mcpose": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^25.9.1",
     "tsx": "^4.0.0",
     "typescript": "~6.0.3"
   }
