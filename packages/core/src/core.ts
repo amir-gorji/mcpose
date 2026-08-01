@@ -611,15 +611,44 @@ export function startHttpProxy(
       ? undefined
       : (httpOptions.eventStore ?? createInMemoryEventStore());
 
-  // session ID → { transport, proxyServer, identity }
+  // session ID → { transport, proxyServer, identity, ttlTimer }
   const sessions = new Map<
     string,
     {
       transport: StreamableHTTPServerTransport;
       proxyServer: Server;
       identity?: Identity;
+      ttlTimer?: NodeJS.Timeout;
     }
   >();
+
+  // Sessions being initialized (identity resolution in flight) — counted so
+  // concurrent initializes cannot overshoot maxSessions.
+  let pendingSessions = 0;
+
+  const reportError = (err: unknown): void => {
+    (httpOptions.onError ?? console.error)(err);
+  };
+
+  /**
+   * Single teardown path for every way a session can end: client DELETE,
+   * TTL expiry, and server shutdown. Clears the TTL timer, fires
+   * `onSessionClosed` (guarded — a throwing hook must not break teardown),
+   * and closes the proxy server so it leaves the listChanged fan-out bus.
+   * Idempotent: a second call for the same id is a no-op.
+   */
+  const destroySession = (id: string): Promise<void> => {
+    const session = sessions.get(id);
+    if (!session) return Promise.resolve();
+    sessions.delete(id);
+    if (session.ttlTimer !== undefined) clearTimeout(session.ttlTimer);
+    try {
+      httpOptions.onSessionClosed?.(id);
+    } catch (err) {
+      reportError(err);
+    }
+    return session.proxyServer.close().catch(reportError);
+  };
 
   const requestHandler = (
     req: http.IncomingMessage,
@@ -682,58 +711,103 @@ export function startHttpProxy(
               session.transport.handleRequest(req, res),
             );
           } else {
-            // New session (initialize request)
-            if (
-              httpOptions.maxSessions !== undefined &&
-              sessions.size >= httpOptions.maxSessions
-            ) {
-              res.writeHead(503).end();
+            // New session — only an initialize POST may create one. A
+            // session-less GET/DELETE can never initialize, so reject it
+            // before constructing a Server/transport (which would otherwise
+            // leak into the listChanged fan-out bus).
+            if (method !== 'POST') {
+              res
+                .writeHead(400, { 'content-type': 'application/json' })
+                .end(
+                  JSON.stringify({
+                    jsonrpc: '2.0',
+                    error: {
+                      code: -32000,
+                      message: 'Bad Request: no valid session ID provided',
+                    },
+                    id: null,
+                  }),
+                );
               return;
             }
 
-            // Resolve identity once for the lifetime of this session
-            let identity: Identity | undefined;
-            if (httpOptions.resolveIdentity !== undefined) {
-              try {
-                identity = await httpOptions.resolveIdentity(req);
-              } catch {
-                if (!res.headersSent) res.writeHead(401).end();
-                return;
-              }
+            // Count this initialize as pending so concurrent initializes
+            // cannot overshoot maxSessions while identity resolution awaits.
+            if (
+              httpOptions.maxSessions !== undefined &&
+              sessions.size + pendingSessions >= httpOptions.maxSessions
+            ) {
+              res
+                .writeHead(503, { 'content-type': 'application/json' })
+                .end(
+                  JSON.stringify({
+                    error: {
+                      message: 'Session limit reached',
+                      data: { rejectionReason: 'SESSION_LIMIT' },
+                    },
+                  }),
+                );
+              return;
             }
+            pendingSessions += 1;
 
-            const proxyServer = createProxyServer(backend, options);
-            const transport = new StreamableHTTPServerTransport({
-              sessionIdGenerator: randomUUID,
-              ...(eventStore ? { eventStore } : {}),
-              onsessioninitialized: (id) => {
-                sessions.set(id, { transport, proxyServer, identity });
-                if (httpOptions.sessionTtlMs !== undefined) {
-                  const timer = setTimeout(() => {
-                    const session = sessions.get(id);
-                    if (session) {
-                      sessions.delete(id);
-                      void session.proxyServer.close();
-                    }
-                  }, httpOptions.sessionTtlMs);
-                  timer.unref();
+            try {
+              // Resolve identity once for the lifetime of this session
+              let identity: Identity | undefined;
+              if (httpOptions.resolveIdentity !== undefined) {
+                try {
+                  identity = await httpOptions.resolveIdentity(req);
+                } catch {
+                  if (!res.headersSent) res.writeHead(401).end();
+                  return;
                 }
-              },
-              onsessionclosed: (id) => {
-                sessions.delete(id);
-                httpOptions.onSessionClosed?.(id);
-              },
-            });
+              }
 
-            const requestContext: Omit<ProxyContext, 'requestId'> = {
-              transport: 'http',
-              ...(headers === undefined ? {} : { headers }),
-              ...(identity === undefined ? {} : { identity }),
-            };
-            await proxyServer.connect(transport);
-            await httpProxyContext.run(requestContext, () =>
-              transport.handleRequest(req, res),
-            );
+              const proxyServer = createProxyServer(backend, options);
+              const transport = new StreamableHTTPServerTransport({
+                sessionIdGenerator: randomUUID,
+                ...(eventStore ? { eventStore } : {}),
+                onsessioninitialized: (id) => {
+                  let ttlTimer: NodeJS.Timeout | undefined;
+                  if (httpOptions.sessionTtlMs !== undefined) {
+                    ttlTimer = setTimeout(() => {
+                      void destroySession(id);
+                    }, httpOptions.sessionTtlMs);
+                    ttlTimer.unref();
+                  }
+                  sessions.set(id, {
+                    transport,
+                    proxyServer,
+                    identity,
+                    ...(ttlTimer === undefined ? {} : { ttlTimer }),
+                  });
+                },
+                onsessionclosed: (id) => {
+                  void destroySession(id);
+                },
+              });
+
+              const requestContext: Omit<ProxyContext, 'requestId'> = {
+                transport: 'http',
+                ...(headers === undefined ? {} : { headers }),
+                ...(identity === undefined ? {} : { identity }),
+              };
+              await proxyServer.connect(transport);
+              try {
+                await httpProxyContext.run(requestContext, () =>
+                  transport.handleRequest(req, res),
+                );
+              } finally {
+                // Non-initialize body: the transport rejected the request and
+                // no session was created — close the orphaned proxy server so
+                // it does not leak (memory + listChanged fan-out).
+                if (transport.sessionId === undefined) {
+                  void proxyServer.close().catch(reportError);
+                }
+              }
+            } finally {
+              pendingSessions -= 1;
+            }
           }
         },
       );
@@ -756,13 +830,15 @@ export function startHttpProxy(
     if (shuttingDown) return rawClose(callback as never);
     shuttingDown = true;
 
-    const activeSessions = [...sessions.values()];
-    sessions.clear();
-
+    // Tear down every session through the single teardown path (clears TTL
+    // timers, fires onSessionClosed so audit manifests flush on shutdown).
     void Promise.allSettled(
-      activeSessions.map(({ proxyServer }) => proxyServer.close()),
+      [...sessions.keys()].map((id) => destroySession(id)),
     ).finally(() => {
       rawClose(callback as never);
+      // Idle keep-alive and lingering SSE sockets would otherwise keep the
+      // close callback pending indefinitely.
+      server.closeAllConnections();
     });
 
     return server;
@@ -772,6 +848,9 @@ export function startHttpProxy(
     server.once('error', reject);
     server.listen(port, ...(host ? [host] : []), () => {
       server.off('error', reject);
+      // Route post-listen server errors (e.g. EMFILE) to onError instead of
+      // crashing the process with an unhandled 'error' event.
+      server.on('error', reportError);
       resolve(server);
     });
   });
