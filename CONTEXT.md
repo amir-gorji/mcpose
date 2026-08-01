@@ -14,7 +14,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **mcpose**: The core proxy library — pipeline, transport adapters, ProxyContext. Published as `mcpose` on npm (`packages/core`). _Avoid_: using to mean the full ecosystem
 
-**mcpose ecosystem**: The full suite — `mcpose` core plus `@mcpose/audit`, `@mcpose/otel`, `@mcpose/testing`, and future packages.
+**mcpose ecosystem**: The full suite — `mcpose` core plus `@mcpose/audit`, `@mcpose/testing`, and future packages (`@mcpose/otel` is planned for v3; it does not exist yet).
 
 ### Middleware
 
@@ -30,7 +30,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Delegation**: A single link in an agent-to-agent handoff — one `Identity` in the `delegatedFrom` array.
 
-**Delegation chain**: The full sequence of agents that handed off the request before reaching mcpose. `delegatedFrom?: Identity[]` on `ProxyContext`. _Avoid_: "agent chain", "call chain"
+**Delegation chain**: The full sequence of agents that handed off the request before reaching mcpose. `delegatedFrom?: Identity[]` on `ProxyContext`. Core does not populate it yet (no delegation header spec until v3); it is stamped on audit events only when the host places it on the context. _Avoid_: "agent chain", "call chain"
 
 ### Sessions
 
@@ -46,7 +46,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Replay manifest**: A session-level proof document — Merkle root over all audit events plus individual proofs, signed by the `SigningKeyProvider`. Proves what happened; does not re-execute until v4. _Avoid_: implying it replays anything
 
-**Rejection**: A call mcpose refuses to forward. Every rejection produces an audit event and an MCP error.
+**Rejection**: A call mcpose refuses to forward. The rejection is thrown inside the middleware pipeline, so the audit middleware records an `outcome: 'rejected'` event (unless `includeRejections: false`) and the client receives an MCP error.
 
 **Rejection reason**: The `RejectionReason` value in the MCP error `data` field, identifying why a call was rejected. _Avoid_: "error code", "block reason"
 
@@ -58,7 +58,9 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Chain key**: The private HMAC key for the per-entry audit chain, derived from the signing secret via the oracle — never from the key id. _Avoid_: conflating with key id
 
-**Event key**: A per-event AES-256 key protecting a high-tier payload, derived from a private encryption root and the event id — never from any public value.
+**Event key**: A per-event AES-256 key protecting a high-tier payload, derived from a private encryption root plus the session id, chain position, and event id — never from any public value. Distinct per event even when a request id is reused.
+
+**Audit format version**: The `mcpose/v2/...` domain labels versioning the chain preimage, key derivations, Merkle tags, and manifest signature. Changing any of them is a format break and follows the ritual in `.claude/skills/mcpose-audit-invariants` (ADR-0004).
 
 ### Events and replay
 
@@ -76,12 +78,12 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 - A **session** groups **audit events** and closes with a **replay manifest**
 - An **audit event**'s **sensitivity tier** determines whether it stores plaintext or encrypted payload
 - A **delegation chain** on `ProxyContext` records which agents delegated to which before reaching mcpose
-- **Tamper-evidence** is anchored by the **signed Merkle root**; the per-entry HMAC **chain** links events under a private **chain key**, while the **key id** is public and identifies the signer only
+- **Tamper-evidence** is anchored by the **signed replay manifest** (the signature covers every manifest field, not just the Merkle root); the per-entry HMAC **chain** links events under a private **chain key**, while the **key id** is public and identifies the signer only
 
 ## Example dialogue
 
 > **Dev:** "When an agent delegates a call through mcpose, does the audit event capture the whole delegation chain?"
-> **Domain expert:** "Yes — `delegatedFrom` on `ProxyContext` carries each delegation. The audit middleware reads it and stamps it on the audit event."
+> **Domain expert:** "If the host stamps `delegatedFrom` on the `ProxyContext`, the audit middleware records it on the event and it is covered by the chain. Core itself does not extract delegation from requests yet — that lands with the v3 delegation spec."
 
 ## Flagged ambiguities
 
