@@ -1,20 +1,27 @@
 import type { AuditEvent, ReplayManifest } from '@mcpose/audit';
-import { verifyMerkleProof } from '@mcpose/audit';
-import type { Identity } from 'mcpose';
+import { computeMerkleRoot, verifyMerkleProof } from '@mcpose/audit';
 
 export type { AuditEvent, ReplayManifest };
 
 /**
- * Asserts that an ordered sequence of audit events forms a valid HMAC chain.
- * Verifies that each event's chainHash is consistent with its position
- * (i.e. that no entry has been inserted, removed, or tampered).
+ * Asserts structural integrity of an ordered audit event sequence:
+ * positions are sequential and every chainHash is non-empty and distinct.
+ * Throws on an empty sequence — a log truncated to zero events must not
+ * pass a compliance assertion.
  *
- * Does NOT re-compute the HMAC (the signing key is not available here) —
- * instead checks that the chainHash changes with each entry (chain is live)
- * and that the `replayManifestPosition` values are sequential.
+ * This check is deliberately KEYLESS (the signing secret is not available
+ * to tests): it catches reordering, renumbering, and duplicated entries,
+ * but NOT a forgery rewritten consistently by a key-holder — for that,
+ * recompute the chain with `verifyAuditChain(events, signingKey)` from
+ * `@mcpose/audit`.
  */
 export function assertAuditChainIntegrity(events: AuditEvent[]): void {
-  if (events.length === 0) return;
+  if (events.length === 0) {
+    throw new Error(
+      'Audit chain is empty — a truncated-to-zero log must not pass. ' +
+        'If an empty session is expected, assert that explicitly.',
+    );
+  }
 
   const seen = new Set<string>();
   for (let i = 0; i < events.length; i++) {
@@ -40,7 +47,13 @@ export function assertAuditChainIntegrity(events: AuditEvent[]): void {
 }
 
 /**
- * Asserts that every Merkle proof in a ReplayManifest verifies against the root.
+ * Asserts that a ReplayManifest is consistent with its event sequence:
+ * the Merkle root recomputes from the events' chainHashes, there is
+ * exactly one proof per event, and every proof verifies against the root
+ * at its own index.
+ *
+ * Keyless: does NOT verify the manifest signature — use
+ * `verifyManifestSignature(manifest, signingKey)` from `@mcpose/audit`.
  */
 export function assertReplayManifestValid(
   events: AuditEvent[],
@@ -51,41 +64,82 @@ export function assertReplayManifestValid(
       `ReplayManifest eventCount (${manifest.eventCount}) does not match events array length (${events.length})`,
     );
   }
+  if (manifest.merkleProofs.length !== events.length) {
+    throw new Error(
+      `ReplayManifest has ${manifest.merkleProofs.length} Merkle proofs for ${events.length} events`,
+    );
+  }
+
+  // The root must recompute from the events under test — a root swapped to
+  // match a doctored event set fails here even without the signing key.
+  const recomputedRoot = computeMerkleRoot(events.map((e) => e.chainHash));
+  if (recomputedRoot !== manifest.merkleRoot) {
+    throw new Error(
+      'ReplayManifest merkleRoot does not recompute from the events under test',
+    );
+  }
 
   for (let i = 0; i < events.length; i++) {
-    const valid = verifyMerkleProof(
-      events[i].chainHash,
-      manifest.merkleProofs[i],
-      manifest.merkleRoot,
-    );
-    if (!valid) {
+    const proof = manifest.merkleProofs[i];
+    if (proof.index !== i) {
+      throw new Error(
+        `Merkle proof at index ${i} claims index ${proof.index}`,
+      );
+    }
+    if (!verifyMerkleProof(events[i].chainHash, proof, manifest.merkleRoot)) {
       throw new Error(`Merkle proof for event at index ${i} does not verify against root`);
     }
   }
 }
 
 /**
- * Asserts that a high-sensitivity audit event does not contain plaintext
- * input or output matching any of the given patterns.
+ * Asserts sensitivity handling on a single event.
+ *
+ * - low/medium: no given PII pattern matches the plaintext
+ *   `inputRaw`/`outputRaw`.
+ * - high: the event is structurally encrypted — `inputRaw`/`outputRaw`
+ *   are ABSENT and `inputEncrypted`/`outputEncrypted` are present. The
+ *   patterns are NOT checked against high events (the payload is
+ *   ciphertext); this assertion cannot prove what is inside it.
  */
 export function assertPiiRedacted(event: AuditEvent, patterns: RegExp[]): void {
-  if (event.sensitivityTier !== 'high') {
-    const lowOrMed = event as { inputRaw?: unknown; outputRaw?: unknown };
-    const raw = JSON.stringify({ inputRaw: lowOrMed.inputRaw, outputRaw: lowOrMed.outputRaw });
-    for (const pattern of patterns) {
-      if (pattern.test(raw)) {
-        throw new Error(`PII pattern ${pattern} found in audit event for tool "${event.tool}"`);
-      }
+  if (event.sensitivityTier === 'high') {
+    const leaked = event as { inputRaw?: unknown; outputRaw?: unknown };
+    if (leaked.inputRaw !== undefined || leaked.outputRaw !== undefined) {
+      throw new Error(
+        `High-sensitivity audit event for tool "${event.tool}" carries plaintext inputRaw/outputRaw`,
+      );
+    }
+    if (!event.inputEncrypted || !event.outputEncrypted) {
+      throw new Error(
+        `High-sensitivity audit event for tool "${event.tool}" is missing encrypted payloads`,
+      );
+    }
+    return;
+  }
+
+  const raw = JSON.stringify({ inputRaw: event.inputRaw, outputRaw: event.outputRaw });
+  for (const pattern of patterns) {
+    if (pattern.test(raw)) {
+      throw new Error(`PII pattern ${pattern} found in audit event for tool "${event.tool}"`);
     }
   }
 }
 
 /**
- * Asserts that a delegation chain is non-empty and each entry has a valid sub.
+ * Asserts that an audit event carries a delegation chain: `delegatedFrom`
+ * is present, non-empty, and every entry has a `sub`.
+ *
+ * Does NOT verify delegation signatures or chain continuity (v3).
+ * Note: mcpose core does not populate `delegatedFrom` yet — it is stamped
+ * only when the host places it on the ProxyContext.
  */
-export function assertDelegationHonored(chain: Identity[]): void {
-  if (chain.length === 0) {
-    throw new Error('Delegation chain is empty — expected at least one delegating identity');
+export function assertDelegationHonored(event: AuditEvent): void {
+  const chain = event.delegatedFrom;
+  if (chain === undefined || chain.length === 0) {
+    throw new Error(
+      `Audit event for tool "${event.tool}" has no delegation chain — expected at least one delegating identity`,
+    );
   }
   for (let i = 0; i < chain.length; i++) {
     if (!chain[i].sub) {
