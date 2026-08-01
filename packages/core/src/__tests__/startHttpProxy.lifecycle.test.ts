@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { startHttpProxy } from '../core.js';
-import { makeMockBackend, getPort, closeServer } from './_helpers.js';
+import {
+  makeMockBackend,
+  getPort,
+  closeServer,
+  postOnFreshConnection,
+} from './_helpers.js';
 
 const MCP_HEADERS = {
   'Content-Type': 'application/json',
@@ -55,17 +60,17 @@ describe('startHttpProxy() session lifecycle', () => {
         expect(closed).toEqual([sessionId]);
 
         // Session is gone
-        const after = await fetch(`${baseUrl}/mcp`, {
-          method: 'POST',
-          headers: { ...MCP_HEADERS, 'mcp-session-id': sessionId },
-          body: JSON.stringify({
+        const after = await postOnFreshConnection(
+          `${baseUrl}/mcp`,
+          { ...MCP_HEADERS, 'mcp-session-id': sessionId },
+          JSON.stringify({
             jsonrpc: '2.0',
             id: 2,
             method: 'tools/list',
             params: {},
           }),
-        });
-        expect(after.status).toBe(404);
+        );
+        expect(after).toBe(404);
 
         // No double-fire later
         await vi.advanceTimersByTimeAsync(10_000);
@@ -97,17 +102,17 @@ describe('startHttpProxy() session lifecycle', () => {
         await vi.advanceTimersByTimeAsync(1001);
 
         // Session torn down despite the throwing hook, error routed to onError
-        const after = await fetch(`${baseUrl}/mcp`, {
-          method: 'POST',
-          headers: { ...MCP_HEADERS, 'mcp-session-id': sessionId },
-          body: JSON.stringify({
+        const after = await postOnFreshConnection(
+          `${baseUrl}/mcp`,
+          { ...MCP_HEADERS, 'mcp-session-id': sessionId },
+          JSON.stringify({
             jsonrpc: '2.0',
             id: 2,
             method: 'tools/list',
             params: {},
           }),
-        });
-        expect(after.status).toBe(404);
+        );
+        expect(after).toBe(404);
         expect(errors).toHaveLength(1);
         expect((errors[0] as Error).message).toBe('flush failed');
       } finally {
