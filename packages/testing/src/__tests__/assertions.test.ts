@@ -85,6 +85,12 @@ describe('assertAuditChainIntegrity', () => {
   });
 });
 
+// Corrupt a hex hash so the result always differs from the input — replacing
+// the last char with a constant would be a no-op 1 in 16 times.
+function corruptHash(hash: string): string {
+  return `${hash.slice(0, -1)}${hash.endsWith('0') ? '1' : '0'}`;
+}
+
 describe('assertReplayManifestValid', () => {
   it('passes for a valid manifest', async () => {
     const { events, manifest } = await collectEvents(5);
@@ -102,7 +108,7 @@ describe('assertReplayManifestValid', () => {
     // Doctor one event AND renumber consistently — keyless chain checks
     // pass, but the root recomputation must catch it.
     const doctored = events.map((e, i) =>
-      i === 1 ? { ...e, chainHash: `${e.chainHash.slice(0, -1)}0` } : e,
+      i === 1 ? { ...e, chainHash: corruptHash(e.chainHash) } : e,
     );
     expect(() => assertReplayManifestValid(doctored, manifest!)).toThrow(/does not recompute/);
   });
@@ -110,7 +116,7 @@ describe('assertReplayManifestValid', () => {
   it('throws when the manifest root was swapped to match doctored events', async () => {
     const { events, manifest } = await collectEvents(3);
     const doctored = events.map((e, i) =>
-      i === 1 ? { ...e, chainHash: `${e.chainHash.slice(0, -1)}0` } : e,
+      i === 1 ? { ...e, chainHash: corruptHash(e.chainHash) } : e,
     );
     // Attacker recomputes a matching root but cannot regenerate the proofs
     // for the untouched leaves.
