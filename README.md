@@ -676,7 +676,8 @@ import {
 | `assertDelegationHonored(event)` | The event's `delegatedFrom` chain is non-empty and every entry has a `sub` |
 
 These assertions are deliberately keyless: the signing secret is not available to tests.
-They catch structural tampering (reordering, renumbering, duplication, a swapped Merkle root), but not a forgery rewritten consistently by a key-holder, and they do not verify the manifest signature.
+They prove the artifact is internally consistent: they catch reordering, renumbering, duplication, head or middle deletion, and a swapped Merkle root.
+They do not prove it is authentic. A forger who rewrites every event and regenerates the root and proofs produces a document these assertions accept, and does not need the signing secret to do it. Deleting from the tail also leaves a valid prefix, so `assertAuditChainIntegrity` alone accepts it; `manifest.eventCount` is what catches that.
 For keyed verification, use `verifyAuditChain(events, signingKey)` and `verifyManifestSignature(manifest, signingKey)` from `@mcpose/audit`.
 
 ---

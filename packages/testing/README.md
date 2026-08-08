@@ -64,7 +64,7 @@ test('transfer flow produces a verifiable audit trail', async () => {
   const events = await captureAuditEvents(/* run your scenario */);
   const manifest = await auditHandle.closeSession('session-123');
 
-  assertAuditChainIntegrity(events);                 // no insert/delete/reorder
+  assertAuditChainIntegrity(events);                 // positions sequential, hashes distinct, non-empty
   assertReplayManifestValid(events, manifest!);      // every Merkle proof verifies
   assertPiiRedacted(events[0], [/\d{16}/]);          // no card numbers in plaintext
 });
@@ -74,7 +74,7 @@ test('transfer flow produces a verifiable audit trail', async () => {
 
 | Function | Proves | Does NOT prove |
 |---|---|---|
-| `assertAuditChainIntegrity(events)` | Positions sequential; `chainHash`es distinct and non-empty; non-empty log | HMAC validity (no key) — a key-consistent forgery passes |
+| `assertAuditChainIntegrity(events)` | Positions sequential; `chainHash`es distinct and non-empty; non-empty log | Authenticity. No HMAC is recomputed, so any self-consistent rewrite passes — and it does not have to be key-consistent, because the forger supplies the hashes. Tail truncation also passes; the manifest's `eventCount` is what catches it |
 | `assertReplayManifestValid(events, manifest)` | Root recomputes from the events; one proof per event; every proof verifies at its index | The manifest **signature** — use `verifyManifestSignature` |
 | `assertPiiRedacted(event, patterns)` | low/medium: no pattern matches plaintext; high: no plaintext fields, encrypted payloads present | Anything about what is inside high-tier ciphertext |
 | `assertDelegationHonored(event)` | `delegatedFrom` present, non-empty, entries have a `sub` | Delegation signatures or chain continuity (v3) |
