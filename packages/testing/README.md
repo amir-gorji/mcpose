@@ -9,7 +9,7 @@
 
 A small set of assertion functions that verify the tamper-evidence guarantees of an mcpose audit trail: chain integrity, Merkle-proof validity, PII redaction, and delegation handling. Each throws a descriptive `Error` on failure and returns `void` on success.
 
-**These assertions are deliberately keyless** — the signing secret is not available to tests. They catch structural tampering (reordering, renumbering, duplicated or missing entries, doctored roots), but a key-holder forging a consistent chain can only be caught by the keyed verifiers in `@mcpose/audit`: `verifyAuditChain` and `verifyManifestSignature`.
+**These assertions are deliberately keyless** — the signing secret is not available to tests. They prove the artifact is internally consistent: they catch reordering, renumbering, duplication, head or middle deletion, and a swapped Merkle root. They do not prove it is authentic. A forger who rewrites every event and regenerates the root and proofs produces a document these assertions accept, and does not need the signing secret to do it. Deleting from the tail also leaves a valid prefix, so `assertAuditChainIntegrity` alone accepts it; `manifest.eventCount` is what catches that. For keyed verification, use `verifyAuditChain(events, signingKey)` and `verifyManifestSignature(manifest, signingKey)` from `@mcpose/audit`.
 
 **Runner-agnostic.** These are plain functions with no test-framework dependency; use them with Vitest, Jest, `node:test`, or any runner.
 

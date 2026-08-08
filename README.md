@@ -459,7 +459,7 @@ npm install @mcpose/audit
 `@mcpose/audit` provides a tamper-evident, compliance-grade audit trail for every tool call. It produces an HMAC-chained log of `AuditEvent` records and a `ReplayManifest` per session: a Merkle-proof document that lets auditors verify what happened without re-executing anything.
 
 Detecting tampering requires the signing secret: `verifyAuditChain(events, signingKey)` recomputes every chain hash, and `verifyManifestSignature(manifest, signingKey)` checks the manifest signature.
-The keyless assertions in [`@mcpose/testing`](#mcposetesting) catch structural tampering (reordering, renumbering, duplication) only.
+The keyless assertions in [`@mcpose/testing`](#mcposetesting) prove internal consistency — reordering, renumbering, duplication, head or middle deletion, and a swapped Merkle root — but not authenticity: a self-consistent forgery with regenerated proofs passes, and tail truncation passes `assertAuditChainIntegrity` (the manifest's `eventCount` catches it). See the [@mcpose/testing README](#mcposetesting) for the limits of each assertion.
 
 `@mcpose/audit` 3.0.0 writes audit format v2, a breaking format change: archives written by a 2.x release verify only with a pinned 2.x.
 See [ADR-0004](./docs/adr/0004-audit-format-v2-canonical-serialization.md) for the canonical-serialization and full-manifest-signature rationale.

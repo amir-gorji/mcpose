@@ -99,7 +99,7 @@ await startHttpProxy(
 
 ## Security model
 
-The append-only HMAC chain makes insertion, deletion, or reordering of events detectable **by a holder of the signing secret** (use `verifyAuditChain`); without the secret, the keyless assertions in `@mcpose/testing` catch only structural tampering. The signed manifest anchors the whole session; high-tier payloads are encrypted at rest with AAD binding each ciphertext to its event and direction.
+The append-only HMAC chain makes insertion, deletion, or reordering of events detectable **by a holder of the signing secret** (use `verifyAuditChain`); without the secret, the keyless assertions in `@mcpose/testing` prove internal consistency — reordering, renumbering, duplication, head or middle deletion, and a swapped Merkle root — but not authenticity (see the [`@mcpose/testing` README](https://www.npmjs.com/package/@mcpose/testing) for the limits). The signed manifest anchors the whole session; high-tier payloads are encrypted at rest with AAD binding each ciphertext to its event and direction.
 
 > **The signing secret is the root of all of it.** The per-entry **chain key** and the per-event AES **encryption root** are derived from the secret *through* the `SigningKeyProvider.sign()` oracle with domain separation, never from the public **key id**. The key id (`ReplayManifest.signedBy`) is a public identifier only; **never use it as key material**, and never hand-roll the chain or encryption keys. See **[ADR-0003](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0003-audit-subkeys-derived-from-signing-oracle.md)** for the reasoning and the attack it closes.
 
