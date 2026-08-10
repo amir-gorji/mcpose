@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+Merged on `main`, not yet published to npm. The current published releases are
+`mcpose@2.1.1`, `@mcpose/audit@2.0.3`, and `@mcpose/testing@2.0.3`.
+
+Note that `packages/audit` declares a peer dependency on `mcpose >= 2.2.0`, so
+this working tree is not installable against the registry until all three are
+released together.
+
+### Changed
+
+- **`@mcpose/audit` 3.0.0 — audit format v2.** BREAKING. Canonical preimages via `canonicalJson`, a signature covering the whole `ReplayManifest` rather than only the Merkle root, domain-separated Merkle leaves and nodes (`mcpose/v2/leaf`, `mcpose/v2/node`), `keyId` no longer derived as `SHA256(secret)`, and per-event ciphertext keys bound to session, position and event with AES-GCM AAD. Chains, manifests, key ids and ciphertexts written under v1 do not verify under v2, and the reverse is also true. There is deliberately no dual-format mode: v1 chains are forgeable by a manifest-holder with a guessable secret, so continuing to attest them would lend the new verifier's credibility to artifacts that do not deserve it. Operators with v1 archives keep verifying them with a pinned `@mcpose/audit` 2.x. See ADR-0004.
+- **`@mcpose/testing` 3.0.0 — strengthened assertions.** BREAKING. `assertAuditChainIntegrity` now throws on an empty chain instead of returning cleanly. `assertReplayManifestValid` recomputes the Merkle root from the events under test and checks that each proof carries its own index. `assertPiiRedacted` structurally checks high-tier events rather than skipping them. `assertDelegationHonored` now takes an `AuditEvent`; it previously took an `Identity[]`, which meant passing an event to it silently passed regardless of the event's contents.
+- **`mcpose` 2.2.0** — audit-visible rejections, pass-through observers.
+
+### Added
+
+- **`@mcpose/audit`** — `verifyAuditChain(events, signingKey)` and `verifyManifestSignature(manifest, signingKey)`, the keyed verifiers. Keyless assertions prove internal consistency; these prove authenticity.
+
 ## [2.1.1] - 2026-07-16
 
 ### Changed

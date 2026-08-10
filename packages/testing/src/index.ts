@@ -10,10 +10,13 @@ export type { AuditEvent, ReplayManifest };
  * pass a compliance assertion.
  *
  * This check is deliberately KEYLESS (the signing secret is not available
- * to tests): it catches reordering, renumbering, and duplicated entries,
- * but NOT a forgery rewritten consistently by a key-holder — for that,
- * recompute the chain with `verifyAuditChain(events, signingKey)` from
- * `@mcpose/audit`.
+ * to tests): it catches reordering, renumbering, duplicated entries, and
+ * head or middle deletion. It does NOT prove authenticity — a forger who
+ * rewrites every event and regenerates the chain hashes produces a document
+ * these checks accept without needing the signing secret at all. Tail
+ * truncation also passes this check alone; the manifest's `eventCount`
+ * is what catches it. For keyed verification, use
+ * `verifyAuditChain(events, signingKey)` from `@mcpose/audit`.
  */
 export function assertAuditChainIntegrity(events: AuditEvent[]): void {
   if (events.length === 0) {
