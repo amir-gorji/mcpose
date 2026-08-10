@@ -58,8 +58,8 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
-    "typescript": "~6.0.3",
-    "@types/node": "^25.9.1",
-    "vitest": "^3.0.0"
+    "typescript": "~7.0.2",
+    "@types/node": "^26.2.0",
+    "vitest": "^4.1.10"
   }
 }
