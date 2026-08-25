@@ -5,9 +5,12 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "ts:ci": "turbo run ts:ci",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "prepublishOnly": "echo 'Publish individual packages from packages/*'"
   },
   "devDependencies": {
+    "prettier": "3.9.6",
     "turbo": "^2.9.16"
   },
   "packageManager": "pnpm@11.0.8"
