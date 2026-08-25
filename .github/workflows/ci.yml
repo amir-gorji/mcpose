@@ -35,3 +35,4 @@ jobs:
       - run: pnpm lint
       - run: pnpm turbo ts:ci
       - run: pnpm turbo test
+      - run: pnpm check:publish
