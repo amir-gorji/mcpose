@@ -72,11 +72,7 @@ function serialize(
       return `[${obj.map((item) => serialize(item, seen, opts)).join(',')}]`;
     }
     if (typeof (obj as { toJSON?: unknown }).toJSON === 'function') {
-      return serialize(
-        (obj as { toJSON: () => unknown }).toJSON(),
-        seen,
-        opts,
-      );
+      return serialize((obj as { toJSON: () => unknown }).toJSON(), seen, opts);
     }
     const entries = Object.entries(obj)
       .filter(([, v]) => v !== undefined)

@@ -282,8 +282,8 @@ function createRequestOptions(
         }) => {
           // A client that disconnected mid-call makes sendNotification
           // reject; dropping the progress tick is the correct outcome.
-          void extra.sendNotification
-            ?.({
+          void extra
+            .sendNotification?.({
               method: 'notifications/progress',
               params: {
                 progressToken,

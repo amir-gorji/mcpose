@@ -1,0 +1,24 @@
+# Dependencies
+node_modules
+
+# Build output
+lib
+dist
+build
+
+# Testing
+coverage
+
+# Lockfiles
+pnpm-lock.yaml
+
+# Agent run artifacts
+.gnhf
+
+# Generated/cache
+*.tsbuildinfo
+.turbo
+.tsup
+
+# Markdown intentionally out of scope (avoid churn in CHANGELOG/README/docs)
+*.md

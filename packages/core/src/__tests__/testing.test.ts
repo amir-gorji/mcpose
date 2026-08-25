@@ -30,7 +30,7 @@ describe('runToolMiddleware()', () => {
 
   it('throws when middleware returns the legacy { toolResult } shape', async () => {
     const legacy: ToolMiddleware = async () =>
-      ({ toolResult: 'old' } as unknown as CallToolResult);
+      ({ toolResult: 'old' }) as unknown as CallToolResult;
 
     await expect(
       runToolMiddleware(legacy, callReq, async () => ({ content: [] })),
@@ -44,12 +44,10 @@ describe('runToolMiddleware()', () => {
       return next(req);
     };
 
-    await runToolMiddleware(
-      capture,
-      callReq,
-      async () => ({ content: [] }),
-      { requestId: 'abc-123', transport: 'stdio' },
-    );
+    await runToolMiddleware(capture, callReq, async () => ({ content: [] }), {
+      requestId: 'abc-123',
+      transport: 'stdio',
+    });
 
     expect(seenRequestId).toBe('abc-123');
   });
@@ -61,7 +59,9 @@ describe('createMockBackendClient()', () => {
       callToolResponse: { content: [{ type: 'text', text: 'static' }] },
     });
     const result = await backend.callTool({ name: 'x', arguments: {} });
-    expect((result.content as { text: string }[])[0]).toMatchObject({ text: 'static' });
+    expect((result.content as { text: string }[])[0]).toMatchObject({
+      text: 'static',
+    });
   });
 
   it('passes the call params to a factory callToolResponse', async () => {
@@ -73,11 +73,16 @@ describe('createMockBackendClient()', () => {
       },
     });
 
-    const result = await backend.callTool({ name: 'echo', arguments: { a: 1 } });
+    const result = await backend.callTool({
+      name: 'echo',
+      arguments: { a: 1 },
+    });
 
     expect(seen?.name).toBe('echo');
     expect(seen?.arguments).toEqual({ a: 1 });
-    expect((result.content as { text: string }[])[0]).toMatchObject({ text: 'got:echo' });
+    expect((result.content as { text: string }[])[0]).toMatchObject({
+      text: 'got:echo',
+    });
   });
 
   it('defaults capabilities to all three scopes', () => {
@@ -91,7 +96,13 @@ describe('createMockBackendClient()', () => {
 
   it('exposes user-supplied tools verbatim', async () => {
     const backend = createMockBackendClient({
-      tools: [{ name: 't', description: 'd', inputSchema: { type: 'object', properties: {} } }],
+      tools: [
+        {
+          name: 't',
+          description: 'd',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
     });
     const result = await backend.listTools();
     expect(result.tools).toHaveLength(1);

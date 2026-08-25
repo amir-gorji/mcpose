@@ -85,12 +85,12 @@ export function assertReplayManifestValid(
   for (let i = 0; i < events.length; i++) {
     const proof = manifest.merkleProofs[i];
     if (proof.index !== i) {
-      throw new Error(
-        `Merkle proof at index ${i} claims index ${proof.index}`,
-      );
+      throw new Error(`Merkle proof at index ${i} claims index ${proof.index}`);
     }
     if (!verifyMerkleProof(events[i].chainHash, proof, manifest.merkleRoot)) {
-      throw new Error(`Merkle proof for event at index ${i} does not verify against root`);
+      throw new Error(
+        `Merkle proof for event at index ${i} does not verify against root`,
+      );
     }
   }
 }
@@ -121,10 +121,15 @@ export function assertPiiRedacted(event: AuditEvent, patterns: RegExp[]): void {
     return;
   }
 
-  const raw = JSON.stringify({ inputRaw: event.inputRaw, outputRaw: event.outputRaw });
+  const raw = JSON.stringify({
+    inputRaw: event.inputRaw,
+    outputRaw: event.outputRaw,
+  });
   for (const pattern of patterns) {
     if (pattern.test(raw)) {
-      throw new Error(`PII pattern ${pattern} found in audit event for tool "${event.tool}"`);
+      throw new Error(
+        `PII pattern ${pattern} found in audit event for tool "${event.tool}"`,
+      );
     }
   }
 }
