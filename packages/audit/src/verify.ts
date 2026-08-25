@@ -38,8 +38,7 @@ export async function verifyAuditChain(
   const chainKey = await signingKey.sign(DOMAIN_CHAIN);
   let prevChainHash = '';
 
-  for (let i = 0; i < events.length; i++) {
-    const event = events[i];
+  for (const [i, event] of events.entries()) {
     if (event.replayManifestPosition !== i) {
       return {
         valid: false,

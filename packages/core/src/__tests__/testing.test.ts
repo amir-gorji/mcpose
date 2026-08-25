@@ -61,7 +61,9 @@ describe('createMockBackendClient()', () => {
   });
 
   it('passes the call params to a factory callToolResponse', async () => {
-    let seen: { name: string; arguments?: Record<string, unknown> } | undefined;
+    let seen:
+      | { name: string; arguments?: Record<string, unknown> | undefined }
+      | undefined;
     const backend = createMockBackendClient({
       callToolResponse: (params) => {
         seen = params;

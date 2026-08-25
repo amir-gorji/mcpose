@@ -606,7 +606,7 @@ describe('createProxyServer() — onTelemetry', () => {
       tool: 'echo',
       outcome: 'success',
     });
-    expect(typeof events[0].duration_ms).toBe('number');
+    expect(typeof events[0]!.duration_ms).toBe('number');
   });
 
   it('emits a rejected event with TOOL_HIDDEN when a hidden tool is called', async () => {
@@ -820,7 +820,7 @@ describe('createProxyServer() — telemetry outcomes', () => {
       arguments: {},
     });
     expect(events).toHaveLength(1);
-    expect(events[0].outcome).toBe('error');
+    expect(events[0]!.outcome).toBe('error');
   });
 
   it('emits rejected telemetry with TOOL_HIDDEN for hidden tools', async () => {

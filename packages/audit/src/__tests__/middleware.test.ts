@@ -48,7 +48,7 @@ describe('createAuditMiddleware — tracer bullet', () => {
     await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
 
     expect(onEvent).toHaveBeenCalledOnce();
-    const event: AuditEvent = onEvent.mock.calls[0][0];
+    const event: AuditEvent = onEvent.mock.calls[0]![0];
     expect(event.tool).toBe('search');
     expect(event.outcome).toBe('success');
     expect(event.identity.sub).toBe('user-1');
@@ -70,7 +70,7 @@ describe('createAuditMiddleware — tracer bullet', () => {
       ),
     ).rejects.toThrow('upstream down');
 
-    const event: AuditEvent = onEvent.mock.calls[0][0];
+    const event: AuditEvent = onEvent.mock.calls[0]![0];
     expect(event.outcome).toBe('error');
   });
 
@@ -108,8 +108,8 @@ describe('createAuditMiddleware — HMAC chain', () => {
       async () => ({ content: [] }),
       makeCtx('s1'),
     );
-    expect(events[0].chainHash).toBeTruthy();
-    expect(events[0].chainHash.length).toBeGreaterThan(0);
+    expect(events[0]!.chainHash).toBeTruthy();
+    expect(events[0]!.chainHash.length).toBeGreaterThan(0);
   });
 
   it('each chainHash differs from the previous (chain advances)', async () => {
@@ -146,7 +146,7 @@ describe('createAuditMiddleware — sensitivity tiers', () => {
       async () => ({ content: [{ type: 'text', text: 'result' }] }),
       makeCtx(),
     );
-    const event = events[0];
+    const event = events[0]!;
     expect(event.sensitivityTier).toBe('low');
     if (event.sensitivityTier === 'low') {
       expect(event.inputRaw).toEqual({ q: 'hello' });
@@ -167,7 +167,7 @@ describe('createAuditMiddleware — sensitivity tiers', () => {
       async () => ({ content: [] }),
       makeCtx(),
     );
-    const event = events[0];
+    const event = events[0]!;
     expect(event.sensitivityTier).toBe('high');
     if (event.sensitivityTier === 'high') {
       expect(typeof event.inputEncrypted).toBe('string');
@@ -209,7 +209,7 @@ describe('createAuditMiddleware — closeSession', () => {
     expect(manifest!.signature).toBeTruthy();
     expect(manifest!.signedBy).toBeTruthy();
     expect(onManifest).toHaveBeenCalledOnce();
-    expect(onManifest.mock.calls[0][0]).toEqual(manifest);
+    expect(onManifest.mock.calls[0]![0]).toEqual(manifest);
   });
 });
 
@@ -233,8 +233,8 @@ describe('createAuditMiddleware — Merkle proof', () => {
 
     for (let i = 0; i < events.length; i++) {
       const valid = verifyMerkleProof(
-        events[i].chainHash,
-        manifest!.merkleProofs[i],
+        events[i]!.chainHash,
+        manifest!.merkleProofs[i]!,
         manifest!.merkleRoot,
       );
       expect(valid).toBe(true);
@@ -291,7 +291,7 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
       makeCtx(),
     );
 
-    const event = events[0];
+    const event = events[0]!;
     if (event.sensitivityTier !== 'high') throw new Error('expected high tier');
     const aad = `mcpose/v2/aad\0${event.id}\0input`;
 
@@ -331,7 +331,7 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
       makeCtx(),
     );
 
-    const event = events[0];
+    const event = events[0]!;
     if (event.sensitivityTier !== 'high') throw new Error('expected high tier');
     const encRoot = await signingKey.sign(Buffer.from('mcpose/v2/enc'));
     const key = deriveEventKey(encRoot, undefined, 0, event.id);
@@ -372,15 +372,28 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
       ctx,
     );
 
-    expect(events[0].id).toBe(events[1].id);
+    expect(events[0]!.id).toBe(events[1]!.id);
     const encRoot = await signingKey.sign(Buffer.from('mcpose/v2/enc'));
-    const key0 = deriveEventKey(encRoot, 'reused-ctx-session', 0, events[0].id);
-    const key1 = deriveEventKey(encRoot, 'reused-ctx-session', 1, events[1].id);
+    const key0 = deriveEventKey(
+      encRoot,
+      'reused-ctx-session',
+      0,
+      events[0]!.id,
+    );
+    const key1 = deriveEventKey(
+      encRoot,
+      'reused-ctx-session',
+      1,
+      events[1]!.id,
+    );
     expect(key0.equals(key1)).toBe(false);
 
     // Each event decrypts only under its own positional key.
     const [first, second] = events;
-    if (first.sensitivityTier !== 'high' || second.sensitivityTier !== 'high') {
+    if (
+      first?.sensitivityTier !== 'high' ||
+      second?.sensitivityTier !== 'high'
+    ) {
       throw new Error('expected high tier');
     }
     const aad0 = `mcpose/v2/aad\0${first.id}\0input`;

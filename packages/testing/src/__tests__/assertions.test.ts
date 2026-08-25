@@ -78,7 +78,7 @@ describe('assertAuditChainIntegrity', () => {
   it('throws when replayManifestPosition is out of order', async () => {
     const { events } = await collectEvents(3);
     const tampered = [...events];
-    tampered[0] = { ...tampered[0], replayManifestPosition: 99 };
+    tampered[0] = { ...tampered[0]!, replayManifestPosition: 99 };
     expect(() => assertAuditChainIntegrity(tampered)).toThrow(
       /replayManifestPosition/,
     );
@@ -87,7 +87,7 @@ describe('assertAuditChainIntegrity', () => {
   it('throws when a chainHash is duplicated (tampered/replayed entry)', async () => {
     const { events } = await collectEvents(3);
     const tampered = [...events];
-    tampered[2] = { ...tampered[1], replayManifestPosition: 2 };
+    tampered[2] = { ...tampered[1]!, replayManifestPosition: 2 };
     expect(() => assertAuditChainIntegrity(tampered)).toThrow(
       /duplicate chainHash/,
     );
@@ -156,7 +156,7 @@ describe('assertReplayManifestValid', () => {
   it('throws when a proof claims the wrong index', async () => {
     const { events, manifest } = await collectEvents(3);
     const proofs = [...manifest!.merkleProofs];
-    [proofs[0], proofs[1]] = [proofs[1], proofs[0]];
+    [proofs[0], proofs[1]] = [proofs[1]!, proofs[0]!];
     const shuffled = { ...manifest!, merkleProofs: proofs };
     expect(() => assertReplayManifestValid(events, shuffled)).toThrow(
       /claims index/,
@@ -169,7 +169,7 @@ describe('assertPiiRedacted', () => {
 
   it('passes when no PII pattern matches a low-tier event', async () => {
     const { events } = await collectEvents(1, { args: { q: 'hello' } });
-    expect(() => assertPiiRedacted(events[0], [SSN])).not.toThrow();
+    expect(() => assertPiiRedacted(events[0]!, [SSN])).not.toThrow();
   });
 
   it('throws when PII pattern matches plaintext in a low-tier event', async () => {
@@ -177,7 +177,7 @@ describe('assertPiiRedacted', () => {
       resolver: () => 'low',
       args: { ssn: '123-45-6789' },
     });
-    expect(() => assertPiiRedacted(events[0], [SSN])).toThrow(/PII pattern/);
+    expect(() => assertPiiRedacted(events[0]!, [SSN])).toThrow(/PII pattern/);
   });
 
   it('passes for a well-formed high-tier event (payload encrypted)', async () => {
@@ -185,7 +185,7 @@ describe('assertPiiRedacted', () => {
       resolver: () => 'high',
       args: { ssn: '123-45-6789' },
     });
-    expect(() => assertPiiRedacted(events[0], [SSN])).not.toThrow();
+    expect(() => assertPiiRedacted(events[0]!, [SSN])).not.toThrow();
   });
 
   it('throws for a high-tier event that leaks plaintext fields', async () => {
@@ -216,12 +216,12 @@ describe('assertDelegationHonored', () => {
 
   it('passes for an event with a delegation chain', async () => {
     const { events } = await collectEvents(1, { delegatedFrom: [delegator] });
-    expect(() => assertDelegationHonored(events[0])).not.toThrow();
+    expect(() => assertDelegationHonored(events[0]!)).not.toThrow();
   });
 
   it('throws for an event without a delegation chain', async () => {
     const { events } = await collectEvents(1);
-    expect(() => assertDelegationHonored(events[0])).toThrow(
+    expect(() => assertDelegationHonored(events[0]!)).toThrow(
       /no delegation chain/,
     );
   });
@@ -230,6 +230,6 @@ describe('assertDelegationHonored', () => {
     const { events } = await collectEvents(1, {
       delegatedFrom: [{ ...delegator, sub: '' }],
     });
-    expect(() => assertDelegationHonored(events[0])).toThrow(/no sub/);
+    expect(() => assertDelegationHonored(events[0]!)).toThrow(/no sub/);
   });
 });

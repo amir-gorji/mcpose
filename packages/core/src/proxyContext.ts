@@ -16,9 +16,16 @@ export interface ProxyContext {
   policy?: never;
 }
 
-/** Creates a middleware context with a fresh request ID. */
+/**
+ * Creates a middleware context with a fresh request ID.
+ *
+ * Every override may be passed explicitly as `undefined` — it means "not
+ * provided" and the key is dropped from the result, which is why the
+ * parameter is not a plain `Partial<ProxyContext>` under
+ * `exactOptionalPropertyTypes`.
+ */
 export function createProxyContext(
-  overrides: Partial<ProxyContext> = {},
+  overrides: { [K in keyof ProxyContext]?: ProxyContext[K] | undefined } = {},
 ): ProxyContext {
   return {
     // Deliberately `||`, not `??`: an empty-string requestId is useless for

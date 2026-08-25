@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -221,9 +222,12 @@ export interface ProxyOptions {
 
 type ProgressToken = string | number;
 type BackendRequestOptions = Parameters<BackendClient['listTools']>[1];
+// Structural mirror of the SDK's `RequestHandlerExtra`. The SDK declares its
+// optional members as `?: T | undefined`, so this type has to as well to stay
+// assignable under `exactOptionalPropertyTypes`.
 type ProxyRequestExtra = {
-  signal?: AbortSignal;
-  _meta?: { progressToken?: ProgressToken };
+  signal?: AbortSignal | undefined;
+  _meta?: { progressToken?: ProgressToken | undefined } | undefined;
   sendNotification?: (notification: {
     method: 'notifications/progress';
     params: {
@@ -277,8 +281,8 @@ function createRequestOptions(
           message,
         }: {
           progress: number;
-          total?: number;
-          message?: string;
+          total?: number | undefined;
+          message?: string | undefined;
         }) => {
           // A client that disconnected mid-call makes sendNotification
           // reject; dropping the progress tick is the correct outcome.
@@ -921,7 +925,7 @@ export function startHttpProxy(
               sessions.set(id, {
                 transport,
                 proxyServer,
-                identity,
+                ...(identity === undefined ? {} : { identity }),
                 ...(ttlTimer === undefined ? {} : { ttlTimer }),
               });
             },
@@ -935,7 +939,10 @@ export function startHttpProxy(
             ...(headers === undefined ? {} : { headers }),
             ...(identity === undefined ? {} : { identity }),
           };
-          await proxyServer.connect(transport);
+          // See backendClient.ts: the SDK's transports are not assignable to
+          // its own `Transport` interface under `exactOptionalPropertyTypes`
+          // (here `onclose?: () => void` vs `onclose: (() => void) | undefined`).
+          await proxyServer.connect(transport as Transport);
           try {
             await httpProxyContext.run(requestContext, () =>
               transport.handleRequest(req, res),

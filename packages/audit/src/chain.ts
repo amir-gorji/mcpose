@@ -169,11 +169,14 @@ function nodeHash(left: string, right: string): string {
 }
 
 function nextLayer(layer: string[]): string[] {
-  const padded =
-    layer.length % 2 === 1 ? [...layer, layer[layer.length - 1]] : layer;
   const next: string[] = [];
-  for (let i = 0; i < padded.length; i += 2) {
-    next.push(nodeHash(padded[i], padded[i + 1]));
+  for (let i = 0; i < layer.length; i += 2) {
+    // `i < layer.length` guarantees `left`; a missing right sibling means an
+    // odd layer, whose last node is duplicated (ADR-0004) — same padding as
+    // `computeMerkleProof`, which must stay identical.
+    const left = layer[i]!;
+    const right = layer[i + 1] ?? left;
+    next.push(nodeHash(left, right));
   }
   return next;
 }
@@ -185,7 +188,8 @@ export function computeMerkleRoot(hashes: string[]): string {
   while (layer.length > 1) {
     layer = nextLayer(layer);
   }
-  return layer[0];
+  // `hashes` is non-empty here and the loop exits only at length 1.
+  return layer[0]!;
 }
 
 export function computeMerkleProof(
@@ -205,10 +209,11 @@ export function computeMerkleProof(
   let idx = index;
 
   while (layer.length > 1) {
-    const padded =
-      layer.length % 2 === 1 ? [...layer, layer[layer.length - 1]] : layer;
     const siblingIdx = idx % 2 === 0 ? idx + 1 : idx - 1;
-    siblings.push(padded[siblingIdx]);
+    // A sibling past the end means an odd layer whose last node is
+    // duplicated, and `idx` is then that last node — same padding as
+    // `nextLayer`, which must stay identical. `idx` is always in range.
+    siblings.push(layer[siblingIdx] ?? layer[idx]!);
     directions.push(idx % 2 === 0 ? 'right' : 'left');
     layer = nextLayer(layer);
     idx = Math.floor(idx / 2);
@@ -244,6 +249,8 @@ export function verifyMerkleProof(
     const expectedDir = idx % 2 === 0 ? 'right' : 'left';
     if (proof.directions[i] !== expectedDir) return false;
     const sibling = proof.siblings[i];
+    // A hole in a caller-supplied `siblings` array is a malformed proof.
+    if (sibling === undefined) return false;
     current =
       expectedDir === 'right'
         ? nodeHash(current, sibling)
