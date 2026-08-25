@@ -37,6 +37,13 @@ pnpm check:publish  # publint + attw --pack --profile esm-only
 
 `pnpm lint` and `pnpm ts:ci` need `pnpm build` first: type-aware linting resolves cross-package types from the emitted `.d.ts`.
 
+Mutation testing is the one gate that is deliberately outside that chain, because a full run takes minutes rather than seconds.
+
+```bash
+pnpm --filter @mcpose/audit mutation   # stryker run, packages/audit
+pnpm --filter mcpose mutation          # stryker run, packages/core
+```
+
 Which layer enforces what:
 
 | Gate | Per-edit hook | pre-commit | pre-push | CI |
@@ -45,9 +52,14 @@ Which layer enforces what:
 | eslint | yes, blocking, per `.ts` file | no | yes | yes |
 | build / ts:ci / test / knip / check:publish | no | no | yes | yes |
 | gitleaks, osv-scan | no | no | no | yes |
+| mutation (stryker) | no | no | no | separate lane: push to main, paths-filtered, plus workflow_dispatch; ratcheted `thresholds.break` |
 
 The per-edit layer is the Claude Code `PostToolUse` hook in [`.claude/hooks/ts-quality.sh`](./.claude/hooks/ts-quality.sh): it runs `prettier --write` then `eslint --fix` on every `.ts` file an agent edits and blocks the tool result on failure.
 CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs the whole chain on a Node 20 / 22 / 24 matrix, plus gitleaks and osv-scan, with all actions SHA-pinned.
+The mutation lane ([`.github/workflows/mutation.yml`](./.github/workflows/mutation.yml)) is a separate workflow, so the pre-push chain still matches the `ci.yml` matrix exactly.
+It runs on pushes to `main` that touch `packages/audit/**`, `packages/core/**`, a Stryker config, or the workflow itself, and on `workflow_dispatch`.
+There is no cron: a nightly run would re-mutate unchanged code for no new information, and GitHub disables schedules on quiet repositories.
+Because it only reports after a merge, run it locally before landing a change that reshapes test assertions in either package.
 `git push --no-verify` is the emergency escape hatch and is not a normal workflow.
 
 ## Policies
@@ -56,6 +68,7 @@ CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs the whole cha
 They live in each `packages/*/vitest.config.ts`.
 Raising one is routine; lowering one needs ADR-level justification in the PR.
 Thresholds are Node-version-sensitive and are set from the cross-version worst case, so a number that passes locally on one Node can still fail the matrix.
+The same rule governs `thresholds.break` in each `packages/*/stryker.config.mjs`, set to the measured mutation score rounded down minus two points.
 
 **Tooling devDependencies are exact-pinned.**
 `prettier`, `eslint`, `typescript`, `publint`, `@arethetypeswrong/cli`, `knip`, and `typescript-eslint` carry exact versions with no range prefix.
