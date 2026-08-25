@@ -48,6 +48,7 @@
     "build": "tsc -p tsconfig.build.json",
     "ts:ci": "tsc --noEmit",
     "test": "vitest run --coverage",
+    "mutation": "stryker run",
     "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
   },
   "engines": {
@@ -58,9 +59,11 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
-    "typescript": "6.0.3",
+    "@stryker-mutator/core": "10.0.0",
+    "@stryker-mutator/vitest-runner": "10.0.0",
     "@types/node": "^25.9.1",
-    "vitest": "^3.0.0",
-    "@vitest/coverage-v8": "3.2.4"
+    "@vitest/coverage-v8": "3.2.4",
+    "typescript": "6.0.3",
+    "vitest": "^3.0.0"
   }
 }

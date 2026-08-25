@@ -34,6 +34,9 @@ lerna-debug.log*
 # Testing
 coverage/
 
+# StrykerJS sandbox and incremental report
+.stryker-tmp/
+
 # OS files
 .DS_Store
 Thumbs.db
