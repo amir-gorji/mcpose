@@ -66,7 +66,7 @@ describe('Merkle tree (v2, domain-separated)', () => {
     const root = computeMerkleRoot(leaves);
     for (let i = 0; i < leaves.length; i++) {
       const proof = computeMerkleProof(leaves, i);
-      expect(verifyMerkleProof(leaves[i], proof, root)).toBe(true);
+      expect(verifyMerkleProof(leaves[i]!, proof, root)).toBe(true);
     }
   });
 
@@ -88,7 +88,7 @@ describe('Merkle tree (v2, domain-separated)', () => {
       siblings: proof.siblings.slice(1),
       directions: proof.directions.slice(1),
     };
-    expect(verifyMerkleProof(proof.siblings[0], forged, root)).toBe(false);
+    expect(verifyMerkleProof(proof.siblings[0]!, forged, root)).toBe(false);
   });
 
   it('computeMerkleProof bounds-checks the index', () => {
@@ -102,7 +102,7 @@ describe('Merkle tree (v2, domain-separated)', () => {
     const proof = computeMerkleProof(leaves, 0);
     expect(
       verifyMerkleProof(
-        leaves[0],
+        leaves[0]!,
         { ...proof, directions: proof.directions.slice(1) },
         root,
       ),
@@ -118,7 +118,7 @@ describe('Merkle tree (v2, domain-separated)', () => {
         d === 'left' ? 'right' : 'left',
       ),
     };
-    expect(verifyMerkleProof(leaves[0], flipped, root)).toBe(false);
+    expect(verifyMerkleProof(leaves[0]!, flipped, root)).toBe(false);
   });
 });
 
@@ -179,7 +179,7 @@ describe('verifyAuditChain (keyed)', () => {
     const { events, signingKey } = await produceSession('s-renumber', 4);
     // Delete event 1 and renumber the survivors — the keyless position
     // check would pass; the keyed recompute must not.
-    const doctored = [events[0], ...events.slice(2)].map((e, i) => ({
+    const doctored = [events[0]!, ...events.slice(2)].map((e, i) => ({
       ...e,
       replayManifestPosition: i,
     }));

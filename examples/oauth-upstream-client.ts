@@ -1,9 +1,10 @@
 import {
-  OAuthClientProvider,
+  type OAuthClientProvider,
   UnauthorizedError,
 } from '@modelcontextprotocol/sdk/client/auth';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
   OAuthClientInformationFull,
   OAuthClientMetadata,
@@ -178,7 +179,10 @@ export async function connectWithBrowserAuth(
 
     try {
       const client = new Client(clientInfo);
-      await client.connect(transport);
+      // The SDK's transports are not assignable to its own `Transport`
+      // interface under `exactOptionalPropertyTypes` — an upstream
+      // declaration mismatch, not a real type problem.
+      await client.connect(transport as Transport);
       // Reached only when persisted tokens are still valid (or auto-refreshed).
       return client;
     } catch (err) {
@@ -197,7 +201,7 @@ export async function connectWithBrowserAuth(
         new URL(serverUrl),
         { authProvider },
       );
-      await client.connect(authedTransport);
+      await client.connect(authedTransport as Transport);
       return client;
     }
   } finally {

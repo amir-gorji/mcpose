@@ -153,7 +153,7 @@ describe('createAuditMiddleware — never blocks the call path', () => {
     );
     expect(result).toEqual({ content: [] });
     expect(events).toHaveLength(1);
-    expect(events[0].inputHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(events[0]!.inputHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('a throwing sensitivityResolver degrades to high tier, not a failed call', async () => {
@@ -179,7 +179,7 @@ describe('createAuditMiddleware — never blocks the call path', () => {
       makeCtx('s3'),
     );
     expect(result).toEqual({ content: [] });
-    expect(events[0].sensitivityTier).toBe('high');
+    expect(events[0]!.sensitivityTier).toBe('high');
     expect(auditErrors).toHaveLength(1);
   });
 });
@@ -205,8 +205,8 @@ describe('createAuditMiddleware — error and rejection events', () => {
       ),
     ).rejects.toThrow('bad input');
 
-    expect(events[0].outcome).toBe('error');
-    expect(events[0].error).toEqual({
+    expect(events[0]!.outcome).toBe('error');
+    expect(events[0]!.error).toEqual({
       name: 'TypeError',
       message: 'bad input',
     });
@@ -233,8 +233,8 @@ describe('createAuditMiddleware — error and rejection events', () => {
     ).rejects.toThrow('Tool not found: hidden_tool');
 
     expect(events).toHaveLength(1);
-    expect(events[0].outcome).toBe('rejected');
-    expect(events[0].rejectionReason).toBe('TOOL_HIDDEN');
+    expect(events[0]!.outcome).toBe('rejected');
+    expect(events[0]!.rejectionReason).toBe('TOOL_HIDDEN');
   });
 
   it('includeRejections: false skips rejection events and keeps positions continuous', async () => {

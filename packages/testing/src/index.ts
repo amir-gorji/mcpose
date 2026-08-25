@@ -27,9 +27,7 @@ export function assertAuditChainIntegrity(events: AuditEvent[]): void {
   }
 
   const seen = new Set<string>();
-  for (let i = 0; i < events.length; i++) {
-    const event = events[i];
-
+  for (const [i, event] of events.entries()) {
     if (event.replayManifestPosition !== i) {
       throw new Error(
         `Audit chain broken at index ${i}: replayManifestPosition is ${event.replayManifestPosition}, expected ${i}`,
@@ -82,12 +80,12 @@ export function assertReplayManifestValid(
     );
   }
 
-  for (let i = 0; i < events.length; i++) {
-    const proof = manifest.merkleProofs[i];
+  for (const [i, proof] of manifest.merkleProofs.entries()) {
     if (proof.index !== i) {
       throw new Error(`Merkle proof at index ${i} claims index ${proof.index}`);
     }
-    if (!verifyMerkleProof(events[i].chainHash, proof, manifest.merkleRoot)) {
+    // The lengths were just checked to be equal.
+    if (!verifyMerkleProof(events[i]!.chainHash, proof, manifest.merkleRoot)) {
       throw new Error(
         `Merkle proof for event at index ${i} does not verify against root`,
       );
@@ -149,8 +147,8 @@ export function assertDelegationHonored(event: AuditEvent): void {
       `Audit event for tool "${event.tool}" has no delegation chain — expected at least one delegating identity`,
     );
   }
-  for (let i = 0; i < chain.length; i++) {
-    if (!chain[i].sub) {
+  for (const [i, entry] of chain.entries()) {
+    if (!entry.sub) {
       throw new Error(`Delegation chain entry at index ${i} has no sub`);
     }
   }

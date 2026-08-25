@@ -48,8 +48,8 @@ export function compose<Req, Res>(
       }
       index = i;
 
-      const fn: Middleware<Req, Res> =
-        i < middlewares.length ? middlewares[i] : (r) => next(r);
+      // Past the end of the pipeline, the terminal handler runs.
+      const fn: Middleware<Req, Res> = middlewares[i] ?? ((r) => next(r));
 
       return Promise.resolve(
         fn(currentReq, (r) => dispatch(i + 1, r), context),
