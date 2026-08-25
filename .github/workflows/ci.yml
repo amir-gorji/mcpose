@@ -31,5 +31,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm turbo build
+      # Type-aware linting needs the cross-package .d.ts emitted by build.
+      - run: pnpm lint
       - run: pnpm turbo ts:ci
       - run: pnpm turbo test
