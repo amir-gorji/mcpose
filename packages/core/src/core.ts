@@ -41,8 +41,6 @@ import { VERSION } from './version.js';
 /** Name the proxy advertises when `ProxyOptions.name` is omitted. */
 const DEFAULT_PROXY_NAME = 'mcpose';
 
-export type { ProxyContext } from './proxyContext.js';
-
 /**
  * Middleware for tool calls.
  * Uses `CompatibilityCallToolResult` to cover legacy `{ toolResult }` shape
