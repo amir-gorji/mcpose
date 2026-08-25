@@ -41,11 +41,9 @@ The install is workspace-aware and wires the local packages together via `worksp
 All commands run from the repository root.
 Turborepo caches results and only re-runs what changed.
 
-```bash
-pnpm build      # Build every package (tsc) into dist/
-pnpm test       # Run the vitest suite across every package
-pnpm ts:ci      # Type-check every package with --noEmit
-```
+[`AGENTS.md`](./AGENTS.md) is the single source of truth for the quality gates: the exact commands, the order to run them in, and which layer enforces each one.
+It also records the repository policies that a change can silently violate (coverage ratchets, exact-pinned tooling, dependency overrides).
+Read it before your first PR; humans and agents work from the same list.
 
 To run a command for one package only:
 
@@ -73,7 +71,7 @@ See [ADR-0003](./docs/adr/0003-audit-subkeys-derived-from-signing-oracle.md) and
 
 ### Tests and types
 
-- Every package type-checks clean with `pnpm ts:ci`.
+- Every package type-checks clean with `pnpm ts:ci` and passes the rest of the gate chain in [`AGENTS.md`](./AGENTS.md).
 - Add or update tests under the package you change.
   The suite runs with vitest and uses `@mcpose/testing` for compliance assertions.
 - Do not weaken an existing audit assertion to make a test pass.
@@ -82,8 +80,8 @@ See [ADR-0003](./docs/adr/0003-audit-subkeys-derived-from-signing-oracle.md) and
 ## Writing a good change
 
 - Keep pull requests focused on one concern.
-- Run `pnpm ts:ci` and `pnpm test` before pushing.
-  CI runs the same two checks, so a green local run means a green CI run.
+- Run the full gate chain from [`AGENTS.md`](./AGENTS.md) before pushing.
+  The `pre-push` hook runs it for you, and CI runs the same commands, so a clean local run means a green CI run.
 - Update documentation alongside behavior changes.
   If you add or rename a public API, update the root `README.md` and the relevant package README.
 - Add an ADR when a decision is non-obvious or reverses a prior choice.
@@ -169,7 +167,7 @@ Before opening a documentation PR:
 ## Commit and pull request style
 
 - Write commit messages in the imperative mood ("Add mTLS option", not "Added mTLS option").
-- Reference the issue number in the PR description when one exists.
+- Reference the issue id in the commit message and in the PR description, for example `Add mTLS option (#42)`.
 - The PR template lists the checklist the maintainer will review against.
 
 ## Reporting issues
