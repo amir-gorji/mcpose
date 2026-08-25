@@ -1,0 +1,24 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [],
+      "project": []
+    },
+    "packages/core": {
+      "entry": ["src/index.ts", "src/testing.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/audit": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/testing": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "examples": {
+      "project": ["**/*.ts"]
+    }
+  }
+}

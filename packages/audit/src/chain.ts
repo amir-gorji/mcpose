@@ -90,7 +90,7 @@ export function sha256hex(data: string | Buffer): string {
   return createHash('sha256').update(data).digest('hex');
 }
 
-export function hmacSha256hex(data: string | Buffer, key: Buffer): string {
+function hmacSha256hex(data: string | Buffer, key: Buffer): string {
   return createHmac('sha256', key).update(data).digest('hex');
 }
 

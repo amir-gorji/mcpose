@@ -1,7 +1,5 @@
 import type { Identity, RejectionReason, ToolMiddleware } from 'mcpose';
 
-export type { ToolMiddleware };
-
 // ── Sensitivity ────────────────────────────────────────────────────────────────
 
 export type SensitivityTier = 'low' | 'medium' | 'high';
