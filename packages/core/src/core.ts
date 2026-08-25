@@ -545,16 +545,20 @@ export function createProxyServer(
         !isHidden && passThroughToolSet.has(name)
           ? passThroughToolPipeline
           : toolPipeline;
-      const callBackend = isHidden
-        ? async (): Promise<CompatibilityCallToolResult> => {
+      // The return type is annotated on the binding rather than on the arrow:
+      // Babel, which Stryker uses to instrument this file for mutation testing,
+      // cannot parse an async arrow carrying a return type inside a conditional.
+      const callBackend: (
+        r: CallToolRequest,
+      ) => Promise<CompatibilityCallToolResult> = isHidden
+        ? async () => {
             throw rejectionMcpError(
               'TOOL_HIDDEN',
               ErrorCode.MethodNotFound,
               `Tool not found: ${name}`,
             );
           }
-        : (r: CallToolRequest) =>
-            backend.callTool(r.params, undefined, requestOptions);
+        : (r) => backend.callTool(r.params, undefined, requestOptions);
 
       try {
         const result = await pipeline(req, callBackend, context);
