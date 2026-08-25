@@ -1,10 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { runToolMiddleware, createMockBackendClient } from '../testing.js';
 import type { ToolMiddleware } from '../core.js';
-import type {
-  CallToolRequest,
-  CallToolResult,
-} from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolRequest } from '@modelcontextprotocol/sdk/types.js';
 
 const callReq: CallToolRequest = {
   method: 'tools/call',
@@ -29,8 +26,7 @@ describe('runToolMiddleware()', () => {
   });
 
   it('throws when middleware returns the legacy { toolResult } shape', async () => {
-    const legacy: ToolMiddleware = async () =>
-      ({ toolResult: 'old' }) as unknown as CallToolResult;
+    const legacy: ToolMiddleware = async () => ({ toolResult: 'old' });
 
     await expect(
       runToolMiddleware(legacy, callReq, async () => ({ content: [] })),
@@ -68,7 +64,7 @@ describe('createMockBackendClient()', () => {
     let seen: { name: string; arguments?: Record<string, unknown> } | undefined;
     const backend = createMockBackendClient({
       callToolResponse: (params) => {
-        seen = params as typeof seen;
+        seen = params;
         return { content: [{ type: 'text', text: `got:${params.name}` }] };
       },
     });

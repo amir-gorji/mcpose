@@ -114,8 +114,8 @@ describe('Merkle tree (v2, domain-separated)', () => {
     const proof = computeMerkleProof(leaves, 0);
     const flipped = {
       ...proof,
-      directions: proof.directions.map(
-        (d) => (d === 'left' ? 'right' : 'left') as 'left' | 'right',
+      directions: proof.directions.map((d) =>
+        d === 'left' ? 'right' : 'left',
       ),
     };
     expect(verifyMerkleProof(leaves[0], flipped, root)).toBe(false);
@@ -183,7 +183,7 @@ describe('verifyAuditChain (keyed)', () => {
       ...e,
       replayManifestPosition: i,
     }));
-    const result = await verifyAuditChain(doctored as AuditEvent[], signingKey);
+    const result = await verifyAuditChain(doctored, signingKey);
     expect(result.valid).toBe(false);
   });
 

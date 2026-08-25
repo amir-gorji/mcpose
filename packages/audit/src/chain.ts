@@ -59,7 +59,7 @@ function serialize(
       return 'null';
   }
 
-  const obj = value as object;
+  const obj = value;
   if (seen.has(obj)) {
     if (opts.strict) {
       throw new TypeError('canonicalJson: circular reference');

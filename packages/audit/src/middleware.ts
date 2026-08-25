@@ -3,9 +3,6 @@ import type {
   AuditEvent,
   AuditMiddlewareHandle,
   AuditOptions,
-  HighAuditEvent,
-  LowAuditEvent,
-  MediumAuditEvent,
   ReplayManifest,
   SensitivityTier,
 } from './types.js';
@@ -358,7 +355,7 @@ function buildEvent(p: BuildParams): AuditEvent {
       sensitivityTier: p.tier,
       inputRaw: p.args,
       outputRaw: p.result,
-    } as LowAuditEvent | MediumAuditEvent;
+    };
   }
   const eventKey = deriveEventKey(
     p.encRoot,
@@ -379,5 +376,5 @@ function buildEvent(p: BuildParams): AuditEvent {
       eventKey,
       `${DOMAIN_AAD}${base.id}\0output`,
     ),
-  } as HighAuditEvent;
+  };
 }
