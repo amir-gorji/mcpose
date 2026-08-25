@@ -65,14 +65,15 @@ async function invoke(
   params: Record<string, unknown> = {},
   extra: object = {},
 ): Promise<unknown> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handlers = (server as any)._requestHandlers as Map<
-    string,
-    (
-      req: { method: string; params: Record<string, unknown> },
-      extra: object,
-    ) => Promise<unknown>
-  >;
+  const { _requestHandlers: handlers } = server as unknown as {
+    _requestHandlers: Map<
+      string,
+      (
+        req: { method: string; params: Record<string, unknown> },
+        extra: object,
+      ) => Promise<unknown>
+    >;
+  };
   const handler = handlers.get(method);
   if (!handler) throw new Error(`No handler registered for method: ${method}`);
   return handler({ method, params }, extra);
@@ -237,12 +238,10 @@ describe('createProxyServer() — request options shapes', () => {
     const backend = makeRichBackend({ tools: {} });
     const sendNotification = vi.fn().mockResolvedValue(undefined);
 
-    (backend.callTool as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_p, _s, options) => {
-        options?.onprogress?.({ progress: 1 });
-        return { content: [] };
-      },
-    );
+    vi.mocked(backend.callTool).mockImplementation(async (_p, _s, options) => {
+      options?.onprogress?.({ progress: 1 });
+      return { content: [] };
+    });
 
     const server = createProxyServer(backend, { name: 'test-server' });
     await invoke(

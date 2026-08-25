@@ -29,7 +29,7 @@ async function collectEvents(
   {
     sessionId = 'test-session',
     resolver = createSensitivityResolver({ search: 'low' }),
-    args = {} as Record<string, unknown>,
+    args = {},
     delegatedFrom,
   }: {
     sessionId?: string;
@@ -51,7 +51,7 @@ async function collectEvents(
       {
         method: 'tools/call',
         params: { name: 'search', arguments: args },
-      } as Parameters<typeof middleware>[0],
+      },
       async () => ({ content: [] }),
       createProxyContext({
         transport: 'http',

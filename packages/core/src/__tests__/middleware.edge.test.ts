@@ -44,7 +44,7 @@ describe('compose() — edge cases', () => {
   it('does not mutate a frozen middleware array', async () => {
     const mw: Middleware<Req, Res> = (req, next) =>
       next({ value: req.value + 1 });
-    const arr = Object.freeze([mw]) as ReadonlyArray<Middleware<Req, Res>>;
+    const arr = Object.freeze([mw]);
 
     const pipeline = compose(arr);
     const result = await pipeline({ value: 2 }, passthroughNext);
@@ -117,7 +117,7 @@ describe('pipe() — edge cases', () => {
   it('accepts a frozen input array', async () => {
     const a: Middleware<Req, Res> = (req, next) =>
       next({ value: req.value + 1 });
-    const arr = Object.freeze([a]) as ReadonlyArray<Middleware<Req, Res>>;
+    const arr = Object.freeze([a]);
 
     const result = await pipe(arr)({ value: 1 }, passthroughNext);
 

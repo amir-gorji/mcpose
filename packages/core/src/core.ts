@@ -967,8 +967,8 @@ export function startHttpProxy(
   const rawClose = server.close.bind(server);
   let shuttingDown = false;
 
-  server.close = ((callback?: (err?: Error) => void) => {
-    if (shuttingDown) return rawClose(callback as never);
+  server.close = (callback?: (err?: Error) => void) => {
+    if (shuttingDown) return rawClose(callback);
     shuttingDown = true;
 
     // Tear down every session through the single teardown path (clears TTL
@@ -976,14 +976,14 @@ export function startHttpProxy(
     void Promise.allSettled(
       [...sessions.keys()].map((id) => destroySession(id)),
     ).finally(() => {
-      rawClose(callback as never);
+      rawClose(callback);
       // Idle keep-alive and lingering SSE sockets would otherwise keep the
       // close callback pending indefinitely.
       server.closeAllConnections();
     });
 
     return server;
-  }) as typeof server.close;
+  };
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);

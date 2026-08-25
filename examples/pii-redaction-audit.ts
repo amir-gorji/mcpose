@@ -161,8 +161,14 @@ async function main() {
     {
       port: 3000,
       resolveIdentity,
-      // Flush the replay manifest when the session ends.
-      onSessionClosed: (sessionId) => auditHandle.closeSession(sessionId),
+      // Flush the replay manifest when the session ends.  `onSessionClosed` is
+      // fire-and-forget (void), so handle the rejection here rather than
+      // returning the promise to a caller that will not await it.
+      onSessionClosed: (sessionId) => {
+        auditHandle.closeSession(sessionId).catch((err: unknown) => {
+          console.error('closeSession failed:', err);
+        });
+      },
     },
   );
 
@@ -171,7 +177,7 @@ async function main() {
   console.error('PII patterns:', PII_PATTERNS.map((r) => r.source).join(', '));
 
   // Graceful shutdown.
-  const shutdown = async () => {
+  const shutdown = () => {
     console.error('\nShutting down...');
     server.close();
     process.exit(0);

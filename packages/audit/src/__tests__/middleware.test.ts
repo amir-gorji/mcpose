@@ -41,7 +41,7 @@ function makeReq(tool: string, args: Record<string, unknown> = {}) {
 
 describe('createAuditMiddleware — tracer bullet', () => {
   it('calls onEvent after a successful tool call', async () => {
-    const onEvent = vi.fn();
+    const onEvent = vi.fn<AuditOptions['onEvent']>();
     const { middleware } = createAuditMiddleware(makeOptions({ onEvent }));
     const ctx = makeCtx('session-1');
 
@@ -57,7 +57,7 @@ describe('createAuditMiddleware — tracer bullet', () => {
   });
 
   it('records error outcome when next throws', async () => {
-    const onEvent = vi.fn();
+    const onEvent = vi.fn<AuditOptions['onEvent']>();
     const { middleware } = createAuditMiddleware(makeOptions({ onEvent }));
 
     await expect(

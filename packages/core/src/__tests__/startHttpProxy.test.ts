@@ -554,7 +554,7 @@ describe('startHttpProxy()', () => {
         headers: expect.objectContaining({
           'x-tenant-id': 'bank-42',
           'mcp-session-id': sessionId,
-        }),
+        }) as Record<string, string>,
       });
       expect(seenListContext?.requestId).toEqual(expect.any(String));
 
@@ -564,7 +564,7 @@ describe('startHttpProxy()', () => {
         headers: expect.objectContaining({
           'x-tenant-id': 'bank-42',
           'mcp-session-id': sessionId,
-        }),
+        }) as Record<string, string>,
       });
       expect(seenToolContext?.requestId).toEqual(expect.any(String));
     } finally {
