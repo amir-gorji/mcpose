@@ -1,0 +1,21 @@
+#!/bin/sh
+# Fast pre-commit gate: format-check staged files only. No build, no type-aware lint here.
+set -e
+
+files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.ts' '*.js' '*.mjs' '*.json' '*.yml' '*.yaml')
+
+if [ -z "$files" ]; then
+  exit 0
+fi
+
+# Split on newlines only (IFS trick), so filenames with spaces survive.
+IFS='
+'
+set -- $files
+unset IFS
+
+if ! pnpm exec prettier --check --ignore-unknown "$@"; then
+  echo "" >&2
+  echo "Prettier check failed on staged files. Run 'pnpm format', re-stage, and commit again." >&2
+  exit 1
+fi

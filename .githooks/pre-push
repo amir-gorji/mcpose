@@ -1,0 +1,6 @@
+#!/bin/sh
+# Full CI parity before push. Turbo caching keeps repeat runs cheap.
+# Emergency escape hatch: git push --no-verify
+set -e
+
+pnpm format:check && pnpm build && pnpm lint && pnpm ts:ci && pnpm test && pnpm knip && pnpm check:publish
