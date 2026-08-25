@@ -44,6 +44,9 @@ pnpm --filter @mcpose/audit mutation   # stryker run, packages/audit
 pnpm --filter mcpose mutation          # stryker run, packages/core
 ```
 
+Stryker mutates in place rather than in a sandbox, because a sandbox copy breaks the relative `extends` in each package `tsconfig.json`.
+A completed run restores the originals, but a killed run can leave mutated sources behind, so check `git status` before trusting the working tree after an interrupted run.
+
 Which layer enforces what:
 
 | Gate | Per-edit hook | pre-commit | pre-push | CI |
