@@ -57,8 +57,7 @@ export interface MockBackendClientOptions {
    * Default: `{ content: [{ type: 'text', text: 'mock response' }] }`
    */
   callToolResponse?:
-    | CallToolResult
-    | ((params: CallToolRequestParams) => CallToolResult);
+    CallToolResult | ((params: CallToolRequestParams) => CallToolResult);
   /** Default: `[]` */
   resources?: Resource[];
   /** Default: `{ contents: [{ uri: '', text: 'mock resource' }] }` */

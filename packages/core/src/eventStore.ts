@@ -1,4 +1,8 @@
-import type { EventStore, EventId, StreamId } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type {
+  EventStore,
+  EventId,
+  StreamId,
+} from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -17,7 +21,10 @@ export type { EventStore as PersistentEventStore };
  * Events are evicted FIFO once `maxEvents` is reached.
  */
 export function createInMemoryEventStore(maxEvents = 1000): EventStore {
-  const store = new Map<EventId, { streamId: StreamId; message: JSONRPCMessage }>();
+  const store = new Map<
+    EventId,
+    { streamId: StreamId; message: JSONRPCMessage }
+  >();
   let seq = 0;
 
   return {

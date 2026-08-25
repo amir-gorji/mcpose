@@ -24,4 +24,9 @@ export type {
   ResourceMiddleware,
   ListToolsMiddleware,
 } from './core.js';
-export { hasToolContent, createProxyServer, startProxy, startHttpProxy } from './core.js';
+export {
+  hasToolContent,
+  createProxyServer,
+  startProxy,
+  startHttpProxy,
+} from './core.js';

@@ -51,7 +51,9 @@ export function compose<Req, Res>(
       const fn: Middleware<Req, Res> =
         i < middlewares.length ? middlewares[i]! : (r) => next(r);
 
-      return Promise.resolve(fn(currentReq, (r) => dispatch(i + 1, r), context));
+      return Promise.resolve(
+        fn(currentReq, (r) => dispatch(i + 1, r), context),
+      );
     };
 
     return dispatch(0, req);

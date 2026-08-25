@@ -51,10 +51,10 @@ const AUDIT_SECRET = process.env.AUDIT_SECRET ?? 'dev-secret-change-me';
 // ---------------------------------------------------------------------------
 
 const PII_PATTERNS: RegExp[] = [
-  /\b\d{9}\b/g,          // 9-digit IDs (social security style)
-  /[A-Z]{2}\d{6}/g,      // Alphanumeric codes (e.g. passport-style)
-  /\b\d{16}\b/g,          // 16-digit card numbers
-  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,  // email addresses
+  /\b\d{9}\b/g, // 9-digit IDs (social security style)
+  /[A-Z]{2}\d{6}/g, // Alphanumeric codes (e.g. passport-style)
+  /\b\d{16}\b/g, // 16-digit card numbers
+  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, // email addresses
 ];
 
 function createPiiMiddleware(patterns: RegExp[]): ToolMiddleware {
@@ -92,8 +92,8 @@ function createPiiMiddleware(patterns: RegExp[]): ToolMiddleware {
 
 // Map tools to sensitivity tiers.  Unknown tools default to `'high'`.
 const sensitivityResolver = createSensitivityResolver({
-  get_balance:    'low',
-  search_trades:  'medium',
+  get_balance: 'low',
+  search_trades: 'medium',
   transfer_funds: 'high',
 });
 
@@ -126,9 +126,7 @@ const auditHandle = createAuditMiddleware({
 //    session.  Errors abort the session with HTTP 401.
 // ---------------------------------------------------------------------------
 
-async function resolveIdentity(
-  _req: http.IncomingMessage,
-): Promise<Identity> {
+async function resolveIdentity(_req: http.IncomingMessage): Promise<Identity> {
   // In production, extract and verify a JWT from the Authorization header,
   // or use mTLS client certificate details.  This is a placeholder.
   return {

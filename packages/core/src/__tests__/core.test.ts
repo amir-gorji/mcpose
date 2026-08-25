@@ -791,7 +791,9 @@ describe('createProxyServer() — rejection and pass-through observation', () =>
     await expect(
       invokeHandler(server, 'tools/call', { name: 'pass_tool', arguments: {} }),
     ).rejects.toMatchObject({ code: ErrorCode.MethodNotFound });
-    expect(observed).toMatchObject({ data: { rejectionReason: 'TOOL_HIDDEN' } });
+    expect(observed).toMatchObject({
+      data: { rejectionReason: 'TOOL_HIDDEN' },
+    });
     expect(backend.callTool).not.toHaveBeenCalled();
   });
 });

@@ -13,7 +13,10 @@ const identity: Identity = {
 
 describe('createSensitivityResolver', () => {
   it('returns the mapped tier for a known tool', () => {
-    const resolve = createSensitivityResolver({ transfer_funds: 'high', get_balance: 'low' });
+    const resolve = createSensitivityResolver({
+      transfer_funds: 'high',
+      get_balance: 'low',
+    });
     expect(resolve('transfer_funds', identity, {})).toBe('high');
     expect(resolve('get_balance', identity, {})).toBe('low');
   });
@@ -46,7 +49,13 @@ describe('createSensitivityResolver', () => {
     const resolve = createSensitivityResolver({ get_balance: 'low' });
     // These exist on Object.prototype — a naive map lookup returns a
     // truthy Function, bypassing the unknown⇒high default.
-    for (const tool of ['toString', 'constructor', 'valueOf', 'hasOwnProperty', '__proto__']) {
+    for (const tool of [
+      'toString',
+      'constructor',
+      'valueOf',
+      'hasOwnProperty',
+      '__proto__',
+    ]) {
       expect(resolve(tool, identity, {})).toBe('high');
     }
   });
@@ -57,10 +66,7 @@ describe('createSensitivityResolver', () => {
     });
     expect(badMap('typo_tool', identity, {})).toBe('high');
 
-    const badOverride = createSensitivityResolver(
-      {},
-      () => undefined as never,
-    );
+    const badOverride = createSensitivityResolver({}, () => undefined as never);
     expect(badOverride('anything', identity, {})).toBe('high');
   });
 });

@@ -25,10 +25,16 @@ export function createProxyContext(
     // correlation, so it is regenerated like a missing one.
     requestId: overrides.requestId || randomUUID(),
     transport: overrides.transport ?? 'stdio',
-    ...(overrides.sessionId === undefined ? {} : { sessionId: overrides.sessionId }),
+    ...(overrides.sessionId === undefined
+      ? {}
+      : { sessionId: overrides.sessionId }),
     ...(overrides.headers === undefined ? {} : { headers: overrides.headers }),
     ...(overrides.signal === undefined ? {} : { signal: overrides.signal }),
-    ...(overrides.identity === undefined ? {} : { identity: overrides.identity }),
-    ...(overrides.delegatedFrom === undefined ? {} : { delegatedFrom: overrides.delegatedFrom }),
+    ...(overrides.identity === undefined
+      ? {}
+      : { identity: overrides.identity }),
+    ...(overrides.delegatedFrom === undefined
+      ? {}
+      : { delegatedFrom: overrides.delegatedFrom }),
   };
 }
