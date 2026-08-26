@@ -346,7 +346,7 @@ Each package's README is the canonical reference for its own exports, and each i
 | [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware`, `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` schemas. |
 | [`@mcpose/testing`](./packages/testing/README.md#api) | `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`, each with what it does and does not prove. |
 
-Test helpers for the proxy itself (`createMockBackendClient`, `runToolMiddleware`) ship in the core package under the `mcpose/testing` subpath.
+Test helpers for the proxy itself (`createMockBackendClient`, `runToolMiddleware`, `runListToolsMiddleware`, `runResourceMiddleware`) ship in the core package under the `mcpose/testing` subpath.
 That is a different thing from the `@mcpose/testing` package, which asserts audit chains.
 See [the core README](./packages/core/README.md#test-helpers-mcposetesting) for the distinction.
 

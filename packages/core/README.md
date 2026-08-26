@@ -381,12 +381,18 @@ The values marked v3 are reserved: the union is declared now so that `error.data
 The core package exposes proxy and middleware test utilities under a subpath:
 
 ```ts
-import { createMockBackendClient, runToolMiddleware } from 'mcpose/testing';
+import {
+  createMockBackendClient,
+  runToolMiddleware,
+  runListToolsMiddleware,
+  runResourceMiddleware,
+} from 'mcpose/testing';
 ```
 
 `createMockBackendClient()` returns an in-memory backend stub with capability lookup and notification hooks.
 It works with both `createProxyServer()` and `startHttpProxy()` tests, so an example or test suite needs no real upstream.
-`runToolMiddleware()` drives a single middleware in isolation.
+`runToolMiddleware()`, `runListToolsMiddleware()`, and `runResourceMiddleware()` drive a single middleware in isolation; each takes the middleware, the request, a `next`, and an optional `ProxyContext` that defaults to a fresh `createProxyContext()`, so tests never pass `undefined as never` for the context argument.
+`runToolMiddleware()` additionally narrows away the legacy `{ toolResult }` shape; the list and resource results have no legacy variant, so the other two have nothing to narrow.
 
 > **Not to be confused with** [`@mcpose/testing`](https://www.npmjs.com/package/@mcpose/testing), a separate package of compliance assertions over audit chains.
 > This subpath mocks the proxy; that package verifies the audit trail.
