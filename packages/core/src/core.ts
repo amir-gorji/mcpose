@@ -21,11 +21,14 @@ import {
   ResourceListChangedNotificationSchema,
   ToolListChangedNotificationSchema,
   type CallToolRequest,
+  type CallToolRequestParams,
   type CallToolResult,
   type CompatibilityCallToolResult,
   type ReadResourceRequest,
   type ReadResourceResult,
   type ServerCapabilities,
+  type Tool,
+  McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { pipe, isPassThroughObserver, type Middleware } from './middleware.js';
 import type { HiddenToolPredicate } from './hiddenTools.js';
@@ -182,6 +185,24 @@ export interface HttpProxyOptions {
   enableDnsRebindingProtection?: boolean;
 }
 
+/**
+ * A tool the proxy implements itself, instead of forwarding to the
+ * upstream. See ADR-0007.
+ */
+export interface LocalTool {
+  /** The tool definition advertised in `tools/list`. */
+  tool: Tool;
+  /**
+   * Runs instead of the upstream call, from inside the innermost `next`,
+   * so the whole `toolMiddleware` pipeline (audit, redaction) still
+   * applies.
+   */
+  handler: (
+    params: CallToolRequestParams,
+    context: ProxyContext,
+  ) => Promise<CallToolResult>;
+}
+
 /** Proxy server options. */
 export interface ProxyOptions {
   /**
@@ -239,6 +260,23 @@ export interface ProxyOptions {
   hiddenResources?: ReadonlyArray<string>;
 
   /**
+   * Tools the proxy implements itself. Local tools appear in `tools/list`
+   * (first page only, so pagination does not duplicate them) and route to
+   * their handler instead of the upstream, from inside the innermost
+   * `next`, so the full `toolMiddleware` pipeline still runs.
+   *
+   * Precedence: `hiddenTools` beats a local tool; a local tool beats (and
+   * shadows) an upstream tool of the same name; `passThroughTools` has no
+   * effect on a local tool, because pass-through means "forward the
+   * upstream response as-is" and a local tool has no upstream.
+   *
+   * The proxy advertises the `tools` capability when this is non-empty
+   * even if the upstream has none. A duplicate local tool name throws at
+   * {@link createProxyServer}. See ADR-0007.
+   */
+  localTools?: ReadonlyArray<LocalTool>;
+
+  /**
    * Called after every tool call with timing and outcome data. Wire to any
    * custom telemetry sink (an OpenTelemetry adapter is planned for v3).
    * A throwing sink is logged and never fails the tool call.
@@ -274,12 +312,15 @@ const httpProxyContext = new AsyncLocalStorage<
   Omit<ProxyContext, 'requestId'>
 >();
 
-function createProxyCapabilities(backend: BackendClient): ServerCapabilities {
+function createProxyCapabilities(
+  backend: BackendClient,
+  hasLocalTools: boolean,
+): ServerCapabilities {
   const upstream = backend.getServerCapabilities();
 
   return {
-    ...(upstream?.tools
-      ? { tools: upstream.tools.listChanged ? { listChanged: true } : {} }
+    ...(upstream?.tools || hasLocalTools
+      ? { tools: upstream?.tools?.listChanged ? { listChanged: true } : {} }
       : {}),
     ...(upstream?.resources
       ? {
@@ -380,6 +421,25 @@ function getRejectionReason(err: unknown): RejectionReason | undefined {
   return typeof data?.rejectionReason === 'string'
     ? (data.rejectionReason as RejectionReason)
     : undefined;
+}
+
+/**
+ * Validates and indexes `localTools`. Throws on a duplicate name: there is
+ * no correct way to pick one, and silently keeping the last would route
+ * calls to a handler the configuration does not obviously name.
+ */
+function buildLocalToolMap(
+  localTools: ReadonlyArray<LocalTool> | undefined,
+): Map<string, LocalTool> {
+  const localToolMap = new Map<string, LocalTool>();
+  for (const localTool of localTools ?? []) {
+    const toolName = localTool.tool.name;
+    if (localToolMap.has(toolName)) {
+      throw new Error(`mcpose: duplicate local tool name "${toolName}"`);
+    }
+    localToolMap.set(toolName, localTool);
+  }
+  return localToolMap;
 }
 
 /** Normalizes the `hiddenTools` option to its predicate form. */
@@ -499,7 +559,10 @@ export function createProxyServer(
     );
   }
 
-  const capabilities = createProxyCapabilities(backend);
+  const localToolMap = buildLocalToolMap(options.localTools);
+  const upstreamHasTools = backend.getServerCapabilities()?.tools !== undefined;
+
+  const capabilities = createProxyCapabilities(backend, localToolMap.size > 0);
   const toolPipeline = pipe(options.toolMiddleware ?? []);
   // Pass-through tools skip transforming middleware but are still seen by
   // observers (audit, telemetry) marked via markPassThroughObserver().
@@ -530,13 +593,28 @@ export function createProxyServer(
     server.setRequestHandler(ListToolsRequestSchema, async (req, extra) => {
       const requestOptions = createRequestOptions(extra);
       const context = getMiddlewareContext(extra.signal);
+      // Local tools are overlaid inside the innermost `next`, so
+      // listToolsMiddleware sees them exactly as it sees upstream tools.
+      // They are added to the first page only (no cursor), so a paginating
+      // client sees each local tool once; the shadow filter runs on every
+      // page, so the client sees exactly one entry per name.
       const result = await listToolsPipeline(
         req,
-        async (currentReq) =>
-          filterHiddenTools(
-            await backend.listTools(currentReq.params, requestOptions),
-            isHiddenTool,
-          ),
+        async (currentReq) => {
+          const upstreamResult = upstreamHasTools
+            ? await backend.listTools(currentReq.params, requestOptions)
+            : { tools: [] };
+          if (!localToolMap.size) {
+            return filterHiddenTools(upstreamResult, isHiddenTool);
+          }
+          const tools = [
+            ...upstreamResult.tools.filter((t) => !localToolMap.has(t.name)),
+            ...(currentReq.params?.cursor === undefined
+              ? [...localToolMap.values()].map((lt) => lt.tool)
+              : []),
+          ];
+          return filterHiddenTools({ ...upstreamResult, tools }, isHiddenTool);
+        },
         context,
       );
 
@@ -580,8 +658,11 @@ export function createProxyServer(
       // Call phase: args is always an object, empty when the client sent
       // none, so a dispatcher-aware predicate can fail closed on it.
       const isHidden = isHiddenTool(name, req.params.arguments ?? {});
+      // Hidden beats local; local beats upstream; pass-through never
+      // applies to a local tool (it has no upstream response to forward).
+      const localTool = isHidden ? undefined : localToolMap.get(name);
       const pipeline =
-        !isHidden && passThroughToolSet.has(name)
+        !isHidden && localTool === undefined && passThroughToolSet.has(name)
           ? passThroughToolPipeline
           : toolPipeline;
       // The return type is annotated on the binding rather than on the arrow:
@@ -597,7 +678,18 @@ export function createProxyServer(
               `Tool not found: ${name}`,
             );
           }
-        : (r) => backend.callTool(r.params, undefined, requestOptions);
+        : localTool !== undefined
+          ? (r) => localTool.handler(r.params, context)
+          : upstreamHasTools
+            ? (r) => backend.callTool(r.params, undefined, requestOptions)
+            : async () => {
+                // Tools-less upstream: reject inside the pipeline rather
+                // than forwarding to an upstream that cannot serve it.
+                throw new McpError(
+                  ErrorCode.MethodNotFound,
+                  `Tool not found: ${name}`,
+                );
+              };
 
       try {
         const result = await pipeline(req, callBackend, context);
@@ -782,6 +874,10 @@ export function startHttpProxy(
   options: ProxyOptions = {},
   httpOptions: HttpProxyOptions = {},
 ): Promise<http.Server> {
+  // Sessions build their proxy server lazily, so surface configuration
+  // errors (duplicate local tool names) at startup, not on first initialize.
+  buildLocalToolMap(options.localTools);
+
   const mcpPath = httpOptions.path ?? '/mcp';
   const port = httpOptions.port ?? 3000;
   const host = httpOptions.host ?? '127.0.0.1';

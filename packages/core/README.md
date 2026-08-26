@@ -210,7 +210,13 @@ interface ProxyOptions {
   passThroughResources?: ReadonlyArray<string>;
   hiddenTools?:          ReadonlyArray<string> | HiddenToolPredicate;
   hiddenResources?:      ReadonlyArray<string>;
+  localTools?:           ReadonlyArray<LocalTool>;
   onTelemetry?:          (event: TelemetryEvent) => void;
+}
+
+interface LocalTool {
+  tool: Tool;  // advertised in tools/list
+  handler: (params: CallToolRequestParams, context: ProxyContext) => Promise<CallToolResult>;
 }
 ```
 
@@ -226,6 +232,11 @@ interface ProxyOptions {
   See [ADR-0006](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0006-hidden-tools-accept-a-predicate.md).
 - `passThroughTools` / `passThroughResources` skip transforming middleware, but middleware wrapped in `markPassThroughObserver()` still runs for them.
   A tool that is both hidden and pass-through stays hidden.
+- `localTools` are tools the proxy implements itself.
+  They appear in `tools/list` (first page only, so pagination does not duplicate them), route to their handler instead of the upstream, and still run through the full `toolMiddleware` pipeline, so audit and redaction apply to them.
+  Precedence: `hiddenTools` beats a local tool, a local tool beats (and shadows) an upstream tool of the same name, and `passThroughTools` does not apply to local tools.
+  The proxy advertises the `tools` capability when `localTools` is non-empty even if the upstream has none, and a duplicate local tool name throws at `createProxyServer`.
+  See [ADR-0007](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0007-local-tools-run-the-full-pipeline.md).
 - `onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
   Results with `isError: true` are reported as outcome `'error'`, and a throwing sink is logged but never fails the call.
   An OpenTelemetry adapter (`@mcpose/otel`) is planned for v3.

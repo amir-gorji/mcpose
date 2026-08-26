@@ -26,6 +26,7 @@ export { dispatcherAwareBlock } from './hiddenTools.js';
 export type {
   ProxyOptions,
   HttpProxyOptions,
+  LocalTool,
   ToolMiddleware,
   ResourceMiddleware,
   ListToolsMiddleware,
