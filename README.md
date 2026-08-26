@@ -233,6 +233,10 @@ End to end, mcpose:
 - forwards prompts as-is when the upstream supports prompts,
 - applies `hiddenTools` filtering both before *and* after `listToolsMiddleware`, so middleware cannot re-add a hidden tool.
 
+One deliberate exception to transparency: `params._meta` is stripped from every forwarded request by default, because clients put correlation identifiers there (`traceparent`, `vscode/conversationId`) and the upstream is frequently a third party.
+Set `stripRequestMeta: false` to restore verbatim forwarding.
+See [ADR-0008](./docs/adr/0008-strip-request-meta.md).
+
 ## Guides
 
 ### PII redaction with audit

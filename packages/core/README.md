@@ -211,6 +211,7 @@ interface ProxyOptions {
   hiddenTools?:          ReadonlyArray<string> | HiddenToolPredicate;
   hiddenResources?:      ReadonlyArray<string>;
   localTools?:           ReadonlyArray<LocalTool>;
+  stripRequestMeta?:     boolean;  // Default: true
   onTelemetry?:          (event: TelemetryEvent) => void;
 }
 
@@ -237,6 +238,10 @@ interface LocalTool {
   Precedence: `hiddenTools` beats a local tool, a local tool beats (and shadows) an upstream tool of the same name, and `passThroughTools` does not apply to local tools.
   The proxy advertises the `tools` capability when `localTools` is non-empty even if the upstream has none, and a duplicate local tool name throws at `createProxyServer`.
   See [ADR-0007](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0007-local-tools-run-the-full-pipeline.md).
+- `stripRequestMeta` (default `true`) removes `params._meta` from every forwarded request, tool calls, resource reads, list and prompt calls alike, because MCP clients put correlation identifiers there (VS Code sends `progressToken`, a W3C `traceparent`, and `vscode/conversationId`) and the upstream is frequently a third party.
+  The strip happens at the proxy boundary before the pipeline, so middleware can still add `_meta` deliberately, and it applies to pass-through tools too; disable only globally with `stripRequestMeta: false`.
+  Progress relay is unaffected: the proxy reads the client's progress token from the request `extra`, and the SDK client stamps its own token on the upstream request.
+  See [ADR-0008](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0008-strip-request-meta.md).
 - `onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
   Results with `isError: true` are reported as outcome `'error'`, and a throwing sink is logged but never fails the call.
   An OpenTelemetry adapter (`@mcpose/otel`) is planned for v3.

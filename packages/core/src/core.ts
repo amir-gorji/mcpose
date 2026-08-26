@@ -260,6 +260,24 @@ export interface ProxyOptions {
   hiddenResources?: ReadonlyArray<string>;
 
   /**
+   * Strips `params._meta` from every request the proxy forwards (tool
+   * calls, resource reads, list and prompt calls). Default: `true`.
+   *
+   * MCP clients put correlation identifiers there (VS Code sends
+   * `progressToken`, a W3C `traceparent`, and `vscode/conversationId`),
+   * and the upstream is frequently a third party. The strip happens at the
+   * proxy boundary, before the pipeline, so middleware sees the stripped
+   * request and can still add its own `_meta` deliberately. Progress relay
+   * is unaffected: the proxy reads the client's progress token from the
+   * server-side request `extra`, and the SDK client stamps its own token
+   * on the upstream request.
+   *
+   * Applies to `passThroughTools` too; disable only globally with `false`
+   * for upstreams that read other `_meta` keys. See ADR-0008.
+   */
+  stripRequestMeta?: boolean;
+
+  /**
    * Tools the proxy implements itself. Local tools appear in `tools/list`
    * (first page only, so pagination does not duplicate them) and route to
    * their handler instead of the upstream, from inside the innermost
@@ -424,6 +442,20 @@ function getRejectionReason(err: unknown): RejectionReason | undefined {
 }
 
 /**
+ * Removes `params._meta` at the proxy boundary, before the pipeline runs,
+ * so middleware sees the stripped request, can still add its own `_meta`
+ * deliberately, and audit hashes cover what is actually forwarded.
+ * Identity function when there is nothing to strip.
+ */
+function stripParamsMeta<
+  Req extends { params?: { _meta?: unknown } | undefined },
+>(req: Req): Req {
+  if (req.params === undefined || !('_meta' in req.params)) return req;
+  const { _meta: _stripped, ...params } = req.params;
+  return { ...req, params };
+}
+
+/**
  * Validates and indexes `localTools`. Throws on a duplicate name: there is
  * no correct way to pick one, and silently keeping the last would route
  * calls to a handler the configuration does not obviously name.
@@ -573,6 +605,15 @@ export function createProxyServer(
   const listToolsPipeline = pipe(options.listToolsMiddleware ?? []);
 
   const isHiddenTool = toHiddenToolPredicate(options.hiddenTools);
+  // Applied uniformly at every handler entry, pass-through included: a
+  // privacy control a per-tool option could silently switch off would be
+  // the same false-confidence failure as the dispatcher bypass (ADR-0006).
+  const stripMeta = options.stripRequestMeta !== false;
+  const stripRequest = <
+    Req extends { params?: { _meta?: unknown } | undefined },
+  >(
+    req: Req,
+  ): Req => (stripMeta ? stripParamsMeta(req) : req);
   const passThroughToolSet = new Set(options.passThroughTools ?? []);
   const hiddenResourceSet = new Set(options.hiddenResources ?? []);
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
@@ -590,7 +631,8 @@ export function createProxyServer(
   // ── Tool handlers ──────────────────────────────────────────────────────────
 
   if (capabilities.tools) {
-    server.setRequestHandler(ListToolsRequestSchema, async (req, extra) => {
+    server.setRequestHandler(ListToolsRequestSchema, async (rawReq, extra) => {
+      const req = stripRequest(rawReq);
       const requestOptions = createRequestOptions(extra);
       const context = getMiddlewareContext(extra.signal);
       // Local tools are overlaid inside the innermost `next`, so
@@ -621,7 +663,8 @@ export function createProxyServer(
       return filterHiddenTools(result, isHiddenTool);
     });
 
-    server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+    server.setRequestHandler(CallToolRequestSchema, async (rawReq, extra) => {
+      const req = stripRequest(rawReq);
       const name = req.params.name;
       const requestOptions = createRequestOptions(extra);
       const context = getMiddlewareContext(extra.signal);
@@ -712,21 +755,25 @@ export function createProxyServer(
   // ── Resource handlers ──────────────────────────────────────────────────────
 
   if (capabilities.resources) {
-    server.setRequestHandler(ListResourcesRequestSchema, async (req, extra) => {
-      const result = await backend.listResources(
-        req.params,
-        createRequestOptions(extra),
-      );
-      if (!hiddenResourceSet.size) return result;
-      return {
-        ...result,
-        resources: result.resources.filter(
-          (r) => !hiddenResourceSet.has(r.uri),
-        ),
-      };
-    });
+    server.setRequestHandler(
+      ListResourcesRequestSchema,
+      async (rawReq, extra) => {
+        const result = await backend.listResources(
+          stripRequest(rawReq).params,
+          createRequestOptions(extra),
+        );
+        if (!hiddenResourceSet.size) return result;
+        return {
+          ...result,
+          resources: result.resources.filter(
+            (r) => !hiddenResourceSet.has(r.uri),
+          ),
+        };
+      },
+    );
 
-    server.setRequestHandler(ReadResourceRequestSchema, (req, extra) => {
+    server.setRequestHandler(ReadResourceRequestSchema, (rawReq, extra) => {
+      const req = stripRequest(rawReq);
       const uri = req.params.uri;
       const requestOptions = createRequestOptions(extra);
       const context = getMiddlewareContext(extra.signal);
@@ -752,12 +799,18 @@ export function createProxyServer(
   // ── Prompt handlers (pass-through) ────────────────────────────────────────
 
   if (capabilities.prompts) {
-    server.setRequestHandler(ListPromptsRequestSchema, (req, extra) =>
-      backend.listPrompts(req.params, createRequestOptions(extra)),
+    server.setRequestHandler(ListPromptsRequestSchema, (rawReq, extra) =>
+      backend.listPrompts(
+        stripRequest(rawReq).params,
+        createRequestOptions(extra),
+      ),
     );
 
-    server.setRequestHandler(GetPromptRequestSchema, (req, extra) =>
-      backend.getPrompt(req.params, createRequestOptions(extra)),
+    server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) =>
+      backend.getPrompt(
+        stripRequest(rawReq).params,
+        createRequestOptions(extra),
+      ),
     );
   }
 
