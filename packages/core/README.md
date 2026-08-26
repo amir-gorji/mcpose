@@ -116,6 +116,8 @@ Active proxy sessions are closed before the underlying server finishes closing.
 
 Behavior worth knowing before you deploy it:
 
+- **The proxy binds loopback by default.** `host` defaults to `127.0.0.1`, DNS-rebinding protection is on for loopback binds with `allowedHosts` / `allowedOrigins` derived from the effective bind address and real listening port, and a non-loopback bind without `resolveIdentity` reports a startup warning through `onError`.
+  See [ADR-0005](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0005-loopback-bind-by-default.md).
 - **Session creation is restricted.** Only an `initialize` POST can create a session; a session-less GET or DELETE returns 400.
 - **Sessions can be re-validated per request.** `validateSession(req, { sessionId, identity })` runs on every routed request; return `false` or throw for a 401.
   Use it to bind a session to its original credential, so a leaked `mcp-session-id` alone cannot take a session over.
@@ -231,7 +233,7 @@ interface ProxyOptions {
 ```ts
 interface HttpProxyOptions {
   port?: number;         // Default: 3000
-  host?: string;         // Default: all interfaces
+  host?: string;         // Default: '127.0.0.1' (loopback); non-loopback is a deliberate opt-in
   path?: string;         // Default: '/mcp'
   onRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>;
   onError?: (err: unknown) => void;
@@ -251,11 +253,11 @@ interface HttpProxyOptions {
   eventStore?: PersistentEventStore | null;
   /** Called when a session closes: client DELETE, TTL expiry, or server shutdown. */
   onSessionClosed?: (sessionId: string) => void;
-  /** Hosts allowed in the Host header when DNS-rebinding protection is on. */
+  /** Hosts allowed in the Host header. Default: derived from the bind address and real port on loopback. */
   allowedHosts?: string[];
-  /** Origins allowed in the Origin header. */
+  /** Origins allowed in the Origin header. Default: derived, matching allowedHosts. */
   allowedOrigins?: string[];
-  /** Enables the SDK transport's Host/Origin checks. Recommended for localhost proxies. */
+  /** SDK Host/Origin checks. Default: true on a loopback bind, false otherwise. */
   enableDnsRebindingProtection?: boolean;
 }
 
@@ -269,7 +271,9 @@ function startHttpProxy(
 </details>
 
 `httpOptions` is meaningful only for HTTP/SSE transport; omit it when serving over stdio.
-`allowedHosts`, `allowedOrigins`, and `enableDnsRebindingProtection` are forwarded to the SDK transport.
+`allowedHosts`, `allowedOrigins`, and `enableDnsRebindingProtection` are forwarded to the SDK transport, which only validates against a non-empty list; that is why mcpose derives enforcing defaults for a loopback bind instead of shipping an inert flag.
+An explicit `allowedHosts` or `allowedOrigins` is used verbatim and never merged with the derived list.
+See [ADR-0005](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0005-loopback-bind-by-default.md) and the network posture section of [`SECURITY.md`](https://github.com/amir-gorji/mcpose/blob/main/SECURITY.md).
 The behavioral notes in [Serving over HTTP/SSE](#serving-over-httpsse) apply to all of these.
 
 ### Context and identity

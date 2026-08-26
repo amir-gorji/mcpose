@@ -9,8 +9,8 @@ Only the latest minor release line receives security fixes.
 
 | Version | Supported |
 |---|---|
-| 2.x | ✅ |
-| < 2.0 | ❌ |
+| 3.x | ✅ |
+| < 3.0 | ❌ |
 
 ## Reporting a vulnerability
 
@@ -63,6 +63,15 @@ Two invariants are load-bearing and must never silently break:
 - Per-entry chain keys and encryption roots are derived **through the `sign()` oracle**, not from `keyId`.
 
 A report that demonstrates either invariant is bypassed is high severity.
+
+## Network posture
+
+`startHttpProxy` binds `127.0.0.1` by default and treats a non-loopback bind as a deliberate opt-in ([ADR-0005](./docs/adr/0005-loopback-bind-by-default.md)).
+
+- For a loopback bind, DNS-rebinding protection is on by default, and `allowedHosts` / `allowedOrigins` are derived from the effective bind address and the real listening port, so the `Host` and `Origin` checks actually enforce something.
+- An explicit `allowedHosts` or `allowedOrigins` is used verbatim and never merged with the derived list.
+- The proxy authenticates the caller only when you configure `resolveIdentity` (and optionally `validateSession`); binding a non-loopback address without `resolveIdentity` reports a startup warning through `onError`, because everything that can route to the host can then call the upstream with the proxy's credentials.
+- The proxy holds the upstream credential (static header or OAuth session); it never forwards the caller's credential upstream.
 
 ## Hardening recommendations for operators
 

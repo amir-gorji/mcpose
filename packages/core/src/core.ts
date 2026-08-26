@@ -74,7 +74,14 @@ export function hasToolContent(
 export interface HttpProxyOptions {
   /** Default: 3000 */
   port?: number;
-  /** Default: all interfaces */
+  /**
+   * Bind address. Default: `'127.0.0.1'` (loopback).
+   *
+   * Binding a non-loopback address (e.g. `'0.0.0.0'`) exposes an
+   * unauthenticated MCP proxy holding an authenticated upstream session to
+   * the network, so it is a deliberate opt-in; doing so without
+   * {@link resolveIdentity} reports a startup warning through {@link onError}.
+   */
   host?: string;
   /** Default: '/mcp' */
   path?: string;
@@ -148,14 +155,28 @@ export interface HttpProxyOptions {
   /**
    * Hosts allowed in the `Host` header when
    * {@link enableDnsRebindingProtection} is on. Forwarded to the SDK
-   * transport.
+   * transport, which only validates against a non-empty list.
+   *
+   * Default: for a loopback bind, derived from the effective bind address
+   * and the real listening port (`127.0.0.1:<port>`, `localhost:<port>`,
+   * `[::1]:<port>`). An explicit value is used verbatim, never merged with
+   * the derived list. No list is derived for a non-loopback bind.
    */
   allowedHosts?: string[];
-  /** Origins allowed in the `Origin` header. Forwarded to the SDK transport. */
+  /**
+   * Origins allowed in the `Origin` header. Forwarded to the SDK transport,
+   * which only validates against a non-empty list.
+   *
+   * Default: for a loopback bind, the derived {@link allowedHosts} entries
+   * as origins (`http://` or `https://` matching {@link tlsOptions}). An
+   * explicit value is used verbatim, never merged.
+   */
   allowedOrigins?: string[];
   /**
    * Enables the SDK transport's DNS-rebinding protection (Host/Origin
-   * checks). Recommended for proxies bound to localhost.
+   * checks). Default: `true` when the effective bind address is loopback,
+   * `false` otherwise (a non-loopback bind usually sits behind a gateway
+   * that rewrites `Host`).
    */
   enableDnsRebindingProtection?: boolean;
 }
@@ -715,6 +736,19 @@ function applyBodySizeLimit(
 }
 
 /**
+ * True for bind addresses only reachable from the local machine.
+ * `127.` catches the whole 127.0.0.0/8 block Node can bind.
+ */
+function isLoopbackHost(host: string): boolean {
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    host === '::ffff:127.0.0.1' ||
+    host.startsWith('127.')
+  );
+}
+
+/**
  * Starts the proxy over Streamable HTTP with stateful sessions.
  *
  * Sessions keyed by `mcp-session-id`. Upstream notifications fanned out to
@@ -732,7 +766,16 @@ export function startHttpProxy(
 ): Promise<http.Server> {
   const mcpPath = httpOptions.path ?? '/mcp';
   const port = httpOptions.port ?? 3000;
-  const host = httpOptions.host;
+  const host = httpOptions.host ?? '127.0.0.1';
+  const loopback = isLoopbackHost(host);
+  const dnsRebindingProtection =
+    httpOptions.enableDnsRebindingProtection ?? loopback;
+  // Filled in once the server is listening (the real port is only known
+  // then); sessions are only created after that. The SDK transport
+  // validates Host/Origin only against a non-empty list, so an enabled flag
+  // without a list would be an inert control — see #74.
+  let derivedAllowedHosts: string[] | undefined;
+  let derivedAllowedOrigins: string[] | undefined;
   const eventStore =
     httpOptions.eventStore === null
       ? undefined
@@ -901,21 +944,17 @@ export function startHttpProxy(
           }
 
           const proxyServer = createProxyServer(backend, options);
+          // An explicit list is used verbatim; the derived loopback list
+          // only fills the gap so the default actually validates something.
+          const allowedHosts = httpOptions.allowedHosts ?? derivedAllowedHosts;
+          const allowedOrigins =
+            httpOptions.allowedOrigins ?? derivedAllowedOrigins;
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: randomUUID,
             ...(eventStore ? { eventStore } : {}),
-            ...(httpOptions.allowedHosts
-              ? { allowedHosts: httpOptions.allowedHosts }
-              : {}),
-            ...(httpOptions.allowedOrigins
-              ? { allowedOrigins: httpOptions.allowedOrigins }
-              : {}),
-            ...(httpOptions.enableDnsRebindingProtection === undefined
-              ? {}
-              : {
-                  enableDnsRebindingProtection:
-                    httpOptions.enableDnsRebindingProtection,
-                }),
+            ...(allowedHosts ? { allowedHosts } : {}),
+            ...(allowedOrigins ? { allowedOrigins } : {}),
+            enableDnsRebindingProtection: dnsRebindingProtection,
             onsessioninitialized: (id) => {
               let ttlTimer: NodeJS.Timeout | undefined;
               if (httpOptions.sessionTtlMs !== undefined) {
@@ -994,13 +1033,36 @@ export function startHttpProxy(
     return server;
   };
 
+  if (!loopback && httpOptions.resolveIdentity === undefined) {
+    reportError(
+      new Error(
+        `mcpose: startHttpProxy is binding non-loopback address "${host}" without resolveIdentity — ` +
+          'anything that can route to this host can call the upstream with ' +
+          "the proxy's credentials. Pass resolveIdentity, or bind 127.0.0.1.",
+      ),
+    );
+  }
+
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, ...(host ? [host] : []), () => {
+    server.listen(port, host, () => {
       server.off('error', reject);
       // Route post-listen server errors (e.g. EMFILE) to onError instead of
       // crashing the process with an unhandled 'error' event.
       server.on('error', reportError);
+      if (dnsRebindingProtection && loopback) {
+        const addr = server.address();
+        const actualPort =
+          addr !== null && typeof addr === 'object' ? addr.port : port;
+        const hosts = [
+          `127.0.0.1:${actualPort}`,
+          `localhost:${actualPort}`,
+          `[::1]:${actualPort}`,
+        ];
+        const scheme = httpOptions.tlsOptions ? 'https' : 'http';
+        derivedAllowedHosts = hosts;
+        derivedAllowedOrigins = hosts.map((h) => `${scheme}://${h}`);
+      }
       resolve(server);
     });
   });
