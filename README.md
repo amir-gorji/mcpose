@@ -217,6 +217,29 @@ toolMiddleware: [piiMW, auditMW]
 // 5. auditMW exit   → log already-clean data    (processes response last)
 ```
 
+Mapping array indices onto both traversal directions:
+
+```
+toolMiddleware: [ piiMW,  auditMW ]
+                  index 0  index 1
+
+request:   client ──► auditMW ──► piiMW ──► upstream   (last index first)
+response:  upstream ──► piiMW ──► auditMW ──► client   (index 0 first)
+```
+
+The rule in one line: **the last element is outermost**.
+The practical form: transformers first, observers last.
+
+> **Getting the order backwards fails silently.**
+> `[auditMW, piiMW]` puts audit innermost, so the audit store fills with unredacted payloads.
+> The client still receives redacted data, so nothing looks wrong, and the failure surfaces only when someone reads the trail.
+> No error is raised, and the configuration reads plausibly.
+
+| Ordering | What audit records |
+|---|---|
+| `[piiMW, auditMW]` (safe) | The redacted response: PII never reaches the log. |
+| `[auditMW, piiMW]` (unsafe) | The raw upstream response, unredacted, silently. |
+
 `compose([outerMW, innerMW])` uses the **opposite**, outermost-first convention.
 `ProxyOptions` arrays and `compose()` arguments are not interchangeable.
 See [ADR-0002](./docs/adr/0002-proxy-options-array-response-processing-order.md) for why.

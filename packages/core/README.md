@@ -134,6 +134,7 @@ Behavior worth knowing before you deploy it:
   Middlewares nest onion-style.
 - **Pipeline**: middleware passed to `ProxyOptions` runs in **response-processing order**, so the first element processes the response first and is therefore the innermost layer.
   `[piiMW, auditMW]` redacts before it audits.
+  Reversing that order fails silently: `[auditMW, piiMW]` fills the audit store with unredacted payloads while the client still receives redacted data; see [the array order rule](https://github.com/amir-gorji/mcpose#array-order-the-one-surprising-rule).
   Note that `compose()` uses the opposite, outermost-first convention, so the two are not interchangeable.
   See [ADR-0002](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0002-proxy-options-array-response-processing-order.md).
 - **ProxyContext**: per-request metadata threaded through the pipeline: `requestId`, `transport`, `sessionId`, the resolved `identity`, and the `delegatedFrom` delegation chain.
