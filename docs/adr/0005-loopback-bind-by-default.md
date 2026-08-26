@@ -18,6 +18,7 @@ An explicitly supplied `allowedHosts` or `allowedOrigins` is used verbatim and n
 Binding a non-loopback address is a deliberate opt-in: the consumer has to pass `host: '0.0.0.0'` and mean it.
 A non-loopback bind without `resolveIdentity` reports one warning through the existing `onError` hook, falling back to `console.error` to match the existing convention, once per server rather than per request.
 No list is derived for a non-loopback bind, because a proxy exposed to a network is usually behind a gateway that rewrites `Host`, and any list mcpose could invent there would be a guess.
+Explicitly enabling the protection there without explicit allowlists would therefore still be an inert flag, so that combination reports its own startup warning through `onError`.
 
 ## Considered Options
 

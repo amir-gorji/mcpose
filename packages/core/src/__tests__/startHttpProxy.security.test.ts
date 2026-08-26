@@ -228,6 +228,34 @@ describe('startHttpProxy() — non-loopback bind without resolveIdentity warns o
     }
   });
 
+  it('warns when protection is explicitly enabled on a non-loopback bind with no allowlists (inert flag)', async () => {
+    const onError = vi.fn();
+    const server = await startHttpProxy(
+      makeMockBackend(),
+      {},
+      {
+        port: 0,
+        host: '0.0.0.0',
+        enableDnsRebindingProtection: true,
+        onError,
+        resolveIdentity: () => ({
+          sub: 'svc',
+          type: 'service',
+          roles: [],
+          claims: {},
+          resolvedAt: new Date().toISOString(),
+          source: 'custom',
+        }),
+      },
+    );
+    try {
+      expect(onError).toHaveBeenCalledOnce();
+      expect(String(onError.mock.calls[0]?.[0])).toContain('allowedHosts');
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('stays quiet for the default loopback bind', async () => {
     const onError = vi.fn();
     const server = await startHttpProxy(

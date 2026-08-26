@@ -76,8 +76,9 @@ If your upstream exposes a dispatcher, pass a `HiddenToolPredicate`; `dispatcher
 
 - For a loopback bind, DNS-rebinding protection is on by default, and `allowedHosts` / `allowedOrigins` are derived from the effective bind address and the real listening port, so the `Host` and `Origin` checks actually enforce something.
 - An explicit `allowedHosts` or `allowedOrigins` is used verbatim and never merged with the derived list.
-- The proxy authenticates the caller only when you configure `resolveIdentity` (and optionally `validateSession`); binding a non-loopback address without `resolveIdentity` reports a startup warning through `onError`, because everything that can route to the host can then call the upstream with the proxy's credentials.
-- The proxy holds the upstream credential (static header or OAuth session); it never forwards the caller's credential upstream.
+- The proxy resolves a client identity only when you configure `resolveIdentity` (and optionally `validateSession`); binding a non-loopback address without `resolveIdentity` reports a startup warning through `onError`, because everything that can route to the host can then call the upstream with the proxy's credentials.
+- Enabling `enableDnsRebindingProtection` on a non-loopback bind without explicit `allowedHosts` / `allowedOrigins` also warns through `onError`: no list is derived there, and the SDK transport validates nothing against an empty list.
+- The proxy holds the upstream credential (static header or OAuth session); it never forwards the client's credential upstream.
 
 ## Hardening recommendations for operators
 

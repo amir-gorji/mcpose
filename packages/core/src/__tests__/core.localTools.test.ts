@@ -114,6 +114,17 @@ describe('createProxyServer() — localTools appear in tools/list', () => {
     expect(page2.tools.map((t) => t.name)).not.toContain('local_tool');
   });
 
+  it('filters a shadowed upstream duplicate on later pages too, so the client sees one entry per name', async () => {
+    const server = createProxyServer(makeMockBackend(), {
+      localTools: [makeLocalTool('shadowed_tool')],
+    });
+
+    const page2 = (await invokeHandler(server, 'tools/list', {
+      cursor: 'page-2',
+    })) as ListResult;
+    expect(page2.tools.map((t) => t.name)).toEqual(['upstream_tool']);
+  });
+
   it('a local tool shadows an upstream tool of the same name — one entry, the local one', async () => {
     const server = createProxyServer(makeMockBackend(), {
       localTools: [makeLocalTool('shadowed_tool')],

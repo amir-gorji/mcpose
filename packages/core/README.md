@@ -155,7 +155,7 @@ Behavior worth knowing before you deploy it:
 | `hasToolContent(result)` | Type guard narrowing `CompatibilityCallToolResult` to `CallToolResult`. |
 | `dispatcherAwareBlock(options)` | `HiddenToolPredicate` blocking hidden tools both directly and through dispatcher (meta) tools. Fail-closed. |
 
-**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `HiddenToolPredicate`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
+**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
 
 `PersistentEventStore` is an alias of the SDK's `EventStore` type, so any SDK-compatible store plugs in directly.
 

@@ -181,6 +181,10 @@ export interface HttpProxyOptions {
    * checks). Default: `true` when the effective bind address is loopback,
    * `false` otherwise (a non-loopback bind usually sits behind a gateway
    * that rewrites `Host`).
+   *
+   * Enabling this on a non-loopback bind without explicit
+   * {@link allowedHosts} / {@link allowedOrigins} validates nothing and
+   * reports a startup warning through {@link onError}.
    */
   enableDnsRebindingProtection?: boolean;
 }
@@ -1206,6 +1210,25 @@ export function startHttpProxy(
         `mcpose: startHttpProxy is binding non-loopback address "${host}" without resolveIdentity — ` +
           'anything that can route to this host can call the upstream with ' +
           "the proxy's credentials. Pass resolveIdentity, or bind 127.0.0.1.",
+      ),
+    );
+  }
+  // The SDK transport validates Host/Origin only against a non-empty list,
+  // and no list is derived for a non-loopback bind, so this combination is
+  // an inert flag — the false-confidence case the derived defaults exist
+  // to remove.
+  if (
+    dnsRebindingProtection &&
+    !loopback &&
+    httpOptions.allowedHosts === undefined &&
+    httpOptions.allowedOrigins === undefined
+  ) {
+    reportError(
+      new Error(
+        'mcpose: enableDnsRebindingProtection is on, but no allowedHosts or ' +
+          'allowedOrigins are set and none are derived for a non-loopback ' +
+          'bind, so the transport validates nothing. Pass allowedHosts ' +
+          'and/or allowedOrigins.',
       ),
     );
   }

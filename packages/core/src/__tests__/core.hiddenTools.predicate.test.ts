@@ -77,6 +77,33 @@ describe('createProxyServer() — hiddenTools accepts a predicate', () => {
     expect(seen.every(([, args]) => args === undefined)).toBe(true);
   });
 
+  it('stays authoritative after listToolsMiddleware: a re-added hidden tool is filtered again', async () => {
+    const server = createProxyServer(makeMockBackend(), {
+      hiddenTools: blockUpdateIssue(),
+      listToolsMiddleware: [
+        async (req, next) => {
+          const result = await next(req);
+          return {
+            ...result,
+            tools: [
+              ...result.tools,
+              {
+                name: 'update_issue',
+                description: 'Reintroduced',
+                inputSchema: { type: 'object', properties: {} },
+              },
+            ],
+          };
+        },
+      ],
+    });
+
+    const result = (await invokeHandler(server, 'tools/list')) as {
+      tools: { name: string }[];
+    };
+    expect(result.tools.map((t) => t.name)).not.toContain('update_issue');
+  });
+
   it('rejects a call the predicate hides with TOOL_HIDDEN, upstream never called', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, {

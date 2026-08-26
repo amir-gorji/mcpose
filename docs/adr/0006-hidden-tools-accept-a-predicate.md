@@ -17,7 +17,7 @@ The predicate is authoritative in both places the array already was: list respon
 - **Keep the array and document the bypass.** Rejected: documentation does not remove the false confidence, and every consumer fronting a dispatcher-shaped upstream would re-implement the same unwrapping middleware.
 - **A declarative dispatcher config only, without the predicate.** Rejected: `dispatcherAwareBlock` covers the observed shape, but upstreams nest the target arbitrarily (`request.tool.name`) and invent new shapes; the predicate is the escape hatch that keeps core out of the schema-guessing business.
 - **Inspect arguments during list filtering too.** Rejected: a listed tool has no arguments, so the extra parameter would always be `undefined` noise; encoding the phase in `args` keeps the signature honest.
-- **Fail open when the dispatcher's target argument is malformed.** Rejected: a caller who controls the arguments controls the malformation; failing open would reopen the bypass through a `null` or object-shaped target.
+- **Fail open when the dispatcher's target argument is malformed.** Rejected: a client who controls the arguments controls the malformation; failing open would reopen the bypass through a `null` or object-shaped target.
 
 ## Consequences
 
