@@ -21,13 +21,17 @@ import {
   ResourceListChangedNotificationSchema,
   ToolListChangedNotificationSchema,
   type CallToolRequest,
+  type CallToolRequestParams,
   type CallToolResult,
   type CompatibilityCallToolResult,
   type ReadResourceRequest,
   type ReadResourceResult,
   type ServerCapabilities,
+  type Tool,
+  McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { pipe, isPassThroughObserver, type Middleware } from './middleware.js';
+import type { HiddenToolPredicate } from './hiddenTools.js';
 import type { BackendClient } from './backendClient.js';
 import { createProxyContext, type ProxyContext } from './proxyContext.js';
 import type { Identity } from './identity.js';
@@ -74,7 +78,14 @@ export function hasToolContent(
 export interface HttpProxyOptions {
   /** Default: 3000 */
   port?: number;
-  /** Default: all interfaces */
+  /**
+   * Bind address. Default: `'127.0.0.1'` (loopback).
+   *
+   * Binding a non-loopback address (e.g. `'0.0.0.0'`) exposes an
+   * unauthenticated MCP proxy holding an authenticated upstream session to
+   * the network, so it is a deliberate opt-in; doing so without
+   * {@link resolveIdentity} reports a startup warning through {@link onError}.
+   */
   host?: string;
   /** Default: '/mcp' */
   path?: string;
@@ -148,16 +159,52 @@ export interface HttpProxyOptions {
   /**
    * Hosts allowed in the `Host` header when
    * {@link enableDnsRebindingProtection} is on. Forwarded to the SDK
-   * transport.
+   * transport, which only validates against a non-empty list.
+   *
+   * Default: for a loopback bind, derived from the effective bind address
+   * and the real listening port (`127.0.0.1:<port>`, `localhost:<port>`,
+   * `[::1]:<port>`). An explicit value is used verbatim, never merged with
+   * the derived list. No list is derived for a non-loopback bind.
    */
   allowedHosts?: string[];
-  /** Origins allowed in the `Origin` header. Forwarded to the SDK transport. */
+  /**
+   * Origins allowed in the `Origin` header. Forwarded to the SDK transport,
+   * which only validates against a non-empty list.
+   *
+   * Default: for a loopback bind, the derived {@link allowedHosts} entries
+   * as origins (`http://` or `https://` matching {@link tlsOptions}). An
+   * explicit value is used verbatim, never merged.
+   */
   allowedOrigins?: string[];
   /**
    * Enables the SDK transport's DNS-rebinding protection (Host/Origin
-   * checks). Recommended for proxies bound to localhost.
+   * checks). Default: `true` when the effective bind address is loopback,
+   * `false` otherwise (a non-loopback bind usually sits behind a gateway
+   * that rewrites `Host`).
+   *
+   * Enabling this on a non-loopback bind without explicit
+   * {@link allowedHosts} / {@link allowedOrigins} validates nothing and
+   * reports a startup warning through {@link onError}.
    */
   enableDnsRebindingProtection?: boolean;
+}
+
+/**
+ * A tool the proxy implements itself, instead of forwarding to the
+ * upstream. See ADR-0007.
+ */
+export interface LocalTool {
+  /** The tool definition advertised in `tools/list`. */
+  tool: Tool;
+  /**
+   * Runs instead of the upstream call, from inside the innermost `next`,
+   * so the whole `toolMiddleware` pipeline (audit, redaction) still
+   * applies.
+   */
+  handler: (
+    params: CallToolRequestParams,
+    context: ProxyContext,
+  ) => Promise<CallToolResult>;
 }
 
 /** Proxy server options. */
@@ -204,11 +251,52 @@ export interface ProxyOptions {
    * `passThroughTools` stays hidden. Hidden filtering is applied both
    * before and after `listToolsMiddleware`, so list middleware cannot
    * re-expose a hidden tool.
+   *
+   * A name array cannot see through a dispatcher (meta-tool) that takes
+   * the real tool name as an argument. Pass a {@link HiddenToolPredicate}
+   * (e.g. {@link dispatcherAwareBlock}) to close that bypass: it receives
+   * `undefined` args during list filtering and always an object at call
+   * time. See ADR-0006.
    */
-  hiddenTools?: ReadonlyArray<string>;
+  hiddenTools?: ReadonlyArray<string> | HiddenToolPredicate;
 
   /** Resources hidden from list_resources and rejected at runtime with InvalidRequest. */
   hiddenResources?: ReadonlyArray<string>;
+
+  /**
+   * Strips `params._meta` from every request the proxy forwards (tool
+   * calls, resource reads, list and prompt calls). Default: `true`.
+   *
+   * MCP clients put correlation identifiers there (VS Code sends
+   * `progressToken`, a W3C `traceparent`, and `vscode/conversationId`),
+   * and the upstream is frequently a third party. The strip happens at the
+   * proxy boundary, before the pipeline, so middleware sees the stripped
+   * request and can still add its own `_meta` deliberately. Progress relay
+   * is unaffected: the proxy reads the client's progress token from the
+   * server-side request `extra`, and the SDK client stamps its own token
+   * on the upstream request.
+   *
+   * Applies to `passThroughTools` too; disable only globally with `false`
+   * for upstreams that read other `_meta` keys. See ADR-0008.
+   */
+  stripRequestMeta?: boolean;
+
+  /**
+   * Tools the proxy implements itself. Local tools appear in `tools/list`
+   * (first page only, so pagination does not duplicate them) and route to
+   * their handler instead of the upstream, from inside the innermost
+   * `next`, so the full `toolMiddleware` pipeline still runs.
+   *
+   * Precedence: `hiddenTools` beats a local tool; a local tool beats (and
+   * shadows) an upstream tool of the same name; `passThroughTools` has no
+   * effect on a local tool, because pass-through means "forward the
+   * upstream response as-is" and a local tool has no upstream.
+   *
+   * The proxy advertises the `tools` capability when this is non-empty
+   * even if the upstream has none. A duplicate local tool name throws at
+   * {@link createProxyServer}. See ADR-0007.
+   */
+  localTools?: ReadonlyArray<LocalTool>;
 
   /**
    * Called after every tool call with timing and outcome data. Wire to any
@@ -246,12 +334,15 @@ const httpProxyContext = new AsyncLocalStorage<
   Omit<ProxyContext, 'requestId'>
 >();
 
-function createProxyCapabilities(backend: BackendClient): ServerCapabilities {
+function createProxyCapabilities(
+  backend: BackendClient,
+  hasLocalTools: boolean,
+): ServerCapabilities {
   const upstream = backend.getServerCapabilities();
 
   return {
-    ...(upstream?.tools
-      ? { tools: upstream.tools.listChanged ? { listChanged: true } : {} }
+    ...(upstream?.tools || hasLocalTools
+      ? { tools: upstream?.tools?.listChanged ? { listChanged: true } : {} }
       : {}),
     ...(upstream?.resources
       ? {
@@ -354,15 +445,57 @@ function getRejectionReason(err: unknown): RejectionReason | undefined {
     : undefined;
 }
 
+/**
+ * Removes `params._meta` at the proxy boundary, before the pipeline runs,
+ * so middleware sees the stripped request, can still add its own `_meta`
+ * deliberately, and audit hashes cover what is actually forwarded.
+ * Identity function when there is nothing to strip.
+ */
+function stripParamsMeta<
+  Req extends { params?: { _meta?: unknown } | undefined },
+>(req: Req): Req {
+  if (req.params === undefined || !('_meta' in req.params)) return req;
+  const { _meta: _stripped, ...params } = req.params;
+  return { ...req, params };
+}
+
+/**
+ * Validates and indexes `localTools`. Throws on a duplicate name: there is
+ * no correct way to pick one, and silently keeping the last would route
+ * calls to a handler the configuration does not obviously name.
+ */
+function buildLocalToolMap(
+  localTools: ReadonlyArray<LocalTool> | undefined,
+): Map<string, LocalTool> {
+  const localToolMap = new Map<string, LocalTool>();
+  for (const localTool of localTools ?? []) {
+    const toolName = localTool.tool.name;
+    if (localToolMap.has(toolName)) {
+      throw new Error(`mcpose: duplicate local tool name "${toolName}"`);
+    }
+    localToolMap.set(toolName, localTool);
+  }
+  return localToolMap;
+}
+
+/** Normalizes the `hiddenTools` option to its predicate form. */
+function toHiddenToolPredicate(
+  hiddenTools: ReadonlyArray<string> | HiddenToolPredicate | undefined,
+): HiddenToolPredicate {
+  if (typeof hiddenTools === 'function') return hiddenTools;
+  const hiddenToolSet = new Set(hiddenTools ?? []);
+  return (name) => hiddenToolSet.has(name);
+}
+
 function filterHiddenTools(
   result: ListToolsResult,
-  hiddenToolSet: ReadonlySet<string>,
+  isHiddenTool: HiddenToolPredicate,
 ): ListToolsResult {
-  if (!hiddenToolSet.size) return result;
-  return {
-    ...result,
-    tools: result.tools.filter((tool) => !hiddenToolSet.has(tool.name)),
-  };
+  // List phase: a listed tool has no arguments, so args is undefined.
+  const tools = result.tools.filter(
+    (tool) => !isHiddenTool(tool.name, undefined),
+  );
+  return tools.length === result.tools.length ? result : { ...result, tools };
 }
 
 function registerListChangedForwarders(
@@ -462,7 +595,10 @@ export function createProxyServer(
     );
   }
 
-  const capabilities = createProxyCapabilities(backend);
+  const localToolMap = buildLocalToolMap(options.localTools);
+  const upstreamHasTools = backend.getServerCapabilities()?.tools !== undefined;
+
+  const capabilities = createProxyCapabilities(backend, localToolMap.size > 0);
   const toolPipeline = pipe(options.toolMiddleware ?? []);
   // Pass-through tools skip transforming middleware but are still seen by
   // observers (audit, telemetry) marked via markPassThroughObserver().
@@ -472,7 +608,16 @@ export function createProxyServer(
   const resourcePipeline = pipe(options.resourceMiddleware ?? []);
   const listToolsPipeline = pipe(options.listToolsMiddleware ?? []);
 
-  const hiddenToolSet = new Set(options.hiddenTools ?? []);
+  const isHiddenTool = toHiddenToolPredicate(options.hiddenTools);
+  // Applied uniformly at every handler entry, pass-through included: a
+  // privacy control a per-tool option could silently switch off would be
+  // the same false-confidence failure as the dispatcher bypass (ADR-0006).
+  const stripMeta = options.stripRequestMeta !== false;
+  const stripRequest = <
+    Req extends { params?: { _meta?: unknown } | undefined },
+  >(
+    req: Req,
+  ): Req => (stripMeta ? stripParamsMeta(req) : req);
   const passThroughToolSet = new Set(options.passThroughTools ?? []);
   const hiddenResourceSet = new Set(options.hiddenResources ?? []);
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
@@ -490,23 +635,40 @@ export function createProxyServer(
   // ── Tool handlers ──────────────────────────────────────────────────────────
 
   if (capabilities.tools) {
-    server.setRequestHandler(ListToolsRequestSchema, async (req, extra) => {
+    server.setRequestHandler(ListToolsRequestSchema, async (rawReq, extra) => {
+      const req = stripRequest(rawReq);
       const requestOptions = createRequestOptions(extra);
       const context = getMiddlewareContext(extra.signal);
+      // Local tools are overlaid inside the innermost `next`, so
+      // listToolsMiddleware sees them exactly as it sees upstream tools.
+      // They are added to the first page only (no cursor), so a paginating
+      // client sees each local tool once; the shadow filter runs on every
+      // page, so the client sees exactly one entry per name.
       const result = await listToolsPipeline(
         req,
-        async (currentReq) =>
-          filterHiddenTools(
-            await backend.listTools(currentReq.params, requestOptions),
-            hiddenToolSet,
-          ),
+        async (currentReq) => {
+          const upstreamResult = upstreamHasTools
+            ? await backend.listTools(currentReq.params, requestOptions)
+            : { tools: [] };
+          if (!localToolMap.size) {
+            return filterHiddenTools(upstreamResult, isHiddenTool);
+          }
+          const tools = [
+            ...upstreamResult.tools.filter((t) => !localToolMap.has(t.name)),
+            ...(currentReq.params?.cursor === undefined
+              ? [...localToolMap.values()].map((lt) => lt.tool)
+              : []),
+          ];
+          return filterHiddenTools({ ...upstreamResult, tools }, isHiddenTool);
+        },
         context,
       );
 
-      return filterHiddenTools(result, hiddenToolSet);
+      return filterHiddenTools(result, isHiddenTool);
     });
 
-    server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+    server.setRequestHandler(CallToolRequestSchema, async (rawReq, extra) => {
+      const req = stripRequest(rawReq);
       const name = req.params.name;
       const requestOptions = createRequestOptions(extra);
       const context = getMiddlewareContext(extra.signal);
@@ -540,9 +702,14 @@ export function createProxyServer(
       // Hidden beats pass-through. The rejection is thrown by the innermost
       // `next` INSIDE the pipeline so middleware (audit) observes it in-chain;
       // the backend is never called for hidden tools.
-      const isHidden = hiddenToolSet.has(name);
+      // Call phase: args is always an object, empty when the client sent
+      // none, so a dispatcher-aware predicate can fail closed on it.
+      const isHidden = isHiddenTool(name, req.params.arguments ?? {});
+      // Hidden beats local; local beats upstream; pass-through never
+      // applies to a local tool (it has no upstream response to forward).
+      const localTool = isHidden ? undefined : localToolMap.get(name);
       const pipeline =
-        !isHidden && passThroughToolSet.has(name)
+        !isHidden && localTool === undefined && passThroughToolSet.has(name)
           ? passThroughToolPipeline
           : toolPipeline;
       // The return type is annotated on the binding rather than on the arrow:
@@ -558,7 +725,18 @@ export function createProxyServer(
               `Tool not found: ${name}`,
             );
           }
-        : (r) => backend.callTool(r.params, undefined, requestOptions);
+        : localTool !== undefined
+          ? (r) => localTool.handler(r.params, context)
+          : upstreamHasTools
+            ? (r) => backend.callTool(r.params, undefined, requestOptions)
+            : async () => {
+                // Tools-less upstream: reject inside the pipeline rather
+                // than forwarding to an upstream that cannot serve it.
+                throw new McpError(
+                  ErrorCode.MethodNotFound,
+                  `Tool not found: ${name}`,
+                );
+              };
 
       try {
         const result = await pipeline(req, callBackend, context);
@@ -581,21 +759,25 @@ export function createProxyServer(
   // ── Resource handlers ──────────────────────────────────────────────────────
 
   if (capabilities.resources) {
-    server.setRequestHandler(ListResourcesRequestSchema, async (req, extra) => {
-      const result = await backend.listResources(
-        req.params,
-        createRequestOptions(extra),
-      );
-      if (!hiddenResourceSet.size) return result;
-      return {
-        ...result,
-        resources: result.resources.filter(
-          (r) => !hiddenResourceSet.has(r.uri),
-        ),
-      };
-    });
+    server.setRequestHandler(
+      ListResourcesRequestSchema,
+      async (rawReq, extra) => {
+        const result = await backend.listResources(
+          stripRequest(rawReq).params,
+          createRequestOptions(extra),
+        );
+        if (!hiddenResourceSet.size) return result;
+        return {
+          ...result,
+          resources: result.resources.filter(
+            (r) => !hiddenResourceSet.has(r.uri),
+          ),
+        };
+      },
+    );
 
-    server.setRequestHandler(ReadResourceRequestSchema, (req, extra) => {
+    server.setRequestHandler(ReadResourceRequestSchema, (rawReq, extra) => {
+      const req = stripRequest(rawReq);
       const uri = req.params.uri;
       const requestOptions = createRequestOptions(extra);
       const context = getMiddlewareContext(extra.signal);
@@ -621,12 +803,18 @@ export function createProxyServer(
   // ── Prompt handlers (pass-through) ────────────────────────────────────────
 
   if (capabilities.prompts) {
-    server.setRequestHandler(ListPromptsRequestSchema, (req, extra) =>
-      backend.listPrompts(req.params, createRequestOptions(extra)),
+    server.setRequestHandler(ListPromptsRequestSchema, (rawReq, extra) =>
+      backend.listPrompts(
+        stripRequest(rawReq).params,
+        createRequestOptions(extra),
+      ),
     );
 
-    server.setRequestHandler(GetPromptRequestSchema, (req, extra) =>
-      backend.getPrompt(req.params, createRequestOptions(extra)),
+    server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) =>
+      backend.getPrompt(
+        stripRequest(rawReq).params,
+        createRequestOptions(extra),
+      ),
     );
   }
 
@@ -715,6 +903,19 @@ function applyBodySizeLimit(
 }
 
 /**
+ * True for bind addresses only reachable from the local machine.
+ * `127.` catches the whole 127.0.0.0/8 block Node can bind.
+ */
+function isLoopbackHost(host: string): boolean {
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    host === '::ffff:127.0.0.1' ||
+    host.startsWith('127.')
+  );
+}
+
+/**
  * Starts the proxy over Streamable HTTP with stateful sessions.
  *
  * Sessions keyed by `mcp-session-id`. Upstream notifications fanned out to
@@ -730,9 +931,22 @@ export function startHttpProxy(
   options: ProxyOptions = {},
   httpOptions: HttpProxyOptions = {},
 ): Promise<http.Server> {
+  // Sessions build their proxy server lazily, so surface configuration
+  // errors (duplicate local tool names) at startup, not on first initialize.
+  buildLocalToolMap(options.localTools);
+
   const mcpPath = httpOptions.path ?? '/mcp';
   const port = httpOptions.port ?? 3000;
-  const host = httpOptions.host;
+  const host = httpOptions.host ?? '127.0.0.1';
+  const loopback = isLoopbackHost(host);
+  const dnsRebindingProtection =
+    httpOptions.enableDnsRebindingProtection ?? loopback;
+  // Filled in once the server is listening (the real port is only known
+  // then); sessions are only created after that. The SDK transport
+  // validates Host/Origin only against a non-empty list, so an enabled flag
+  // without a list would be an inert control — see #74.
+  let derivedAllowedHosts: string[] | undefined;
+  let derivedAllowedOrigins: string[] | undefined;
   const eventStore =
     httpOptions.eventStore === null
       ? undefined
@@ -901,21 +1115,17 @@ export function startHttpProxy(
           }
 
           const proxyServer = createProxyServer(backend, options);
+          // An explicit list is used verbatim; the derived loopback list
+          // only fills the gap so the default actually validates something.
+          const allowedHosts = httpOptions.allowedHosts ?? derivedAllowedHosts;
+          const allowedOrigins =
+            httpOptions.allowedOrigins ?? derivedAllowedOrigins;
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: randomUUID,
             ...(eventStore ? { eventStore } : {}),
-            ...(httpOptions.allowedHosts
-              ? { allowedHosts: httpOptions.allowedHosts }
-              : {}),
-            ...(httpOptions.allowedOrigins
-              ? { allowedOrigins: httpOptions.allowedOrigins }
-              : {}),
-            ...(httpOptions.enableDnsRebindingProtection === undefined
-              ? {}
-              : {
-                  enableDnsRebindingProtection:
-                    httpOptions.enableDnsRebindingProtection,
-                }),
+            ...(allowedHosts ? { allowedHosts } : {}),
+            ...(allowedOrigins ? { allowedOrigins } : {}),
+            enableDnsRebindingProtection: dnsRebindingProtection,
             onsessioninitialized: (id) => {
               let ttlTimer: NodeJS.Timeout | undefined;
               if (httpOptions.sessionTtlMs !== undefined) {
@@ -994,13 +1204,55 @@ export function startHttpProxy(
     return server;
   };
 
+  if (!loopback && httpOptions.resolveIdentity === undefined) {
+    reportError(
+      new Error(
+        `mcpose: startHttpProxy is binding non-loopback address "${host}" without resolveIdentity — ` +
+          'anything that can route to this host can call the upstream with ' +
+          "the proxy's credentials. Pass resolveIdentity, or bind 127.0.0.1.",
+      ),
+    );
+  }
+  // The SDK transport validates Host/Origin only against a non-empty list,
+  // and no list is derived for a non-loopback bind, so this combination is
+  // an inert flag — the false-confidence case the derived defaults exist
+  // to remove.
+  if (
+    dnsRebindingProtection &&
+    !loopback &&
+    httpOptions.allowedHosts === undefined &&
+    httpOptions.allowedOrigins === undefined
+  ) {
+    reportError(
+      new Error(
+        'mcpose: enableDnsRebindingProtection is on, but no allowedHosts or ' +
+          'allowedOrigins are set and none are derived for a non-loopback ' +
+          'bind, so the transport validates nothing. Pass allowedHosts ' +
+          'and/or allowedOrigins.',
+      ),
+    );
+  }
+
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, ...(host ? [host] : []), () => {
+    server.listen(port, host, () => {
       server.off('error', reject);
       // Route post-listen server errors (e.g. EMFILE) to onError instead of
       // crashing the process with an unhandled 'error' event.
       server.on('error', reportError);
+      if (dnsRebindingProtection && loopback) {
+        const addr = server.address();
+        const actualPort =
+          addr !== null && typeof addr === 'object' ? addr.port : port;
+        const hosts = [
+          `127.0.0.1:${actualPort}`,
+          `localhost:${actualPort}`,
+          `[::1]:${actualPort}`,
+        ];
+        const scheme = httpOptions.tlsOptions ? 'https' : 'http';
+        derivedAllowedHosts = hosts;
+        derivedAllowedOrigins = hosts.map((h) => `${scheme}://${h}`);
+      }
       resolve(server);
     });
   });

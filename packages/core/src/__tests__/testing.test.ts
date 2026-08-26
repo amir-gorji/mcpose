@@ -1,11 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { runToolMiddleware, createMockBackendClient } from '../testing.js';
-import type { ToolMiddleware } from '../core.js';
-import type { CallToolRequest } from '@modelcontextprotocol/sdk/types.js';
+import {
+  runToolMiddleware,
+  runListToolsMiddleware,
+  runResourceMiddleware,
+  createMockBackendClient,
+} from '../testing.js';
+import type {
+  ListToolsMiddleware,
+  ResourceMiddleware,
+  ToolMiddleware,
+} from '../core.js';
+import type {
+  CallToolRequest,
+  ListToolsRequest,
+  ReadResourceRequest,
+} from '@modelcontextprotocol/sdk/types.js';
 
 const callReq: CallToolRequest = {
   method: 'tools/call',
   params: { name: 'echo', arguments: {} },
+};
+
+const listReq: ListToolsRequest = { method: 'tools/list', params: {} };
+
+const readReq: ReadResourceRequest = {
+  method: 'resources/read',
+  params: { uri: 'res://a' },
 };
 
 describe('runToolMiddleware()', () => {
@@ -44,6 +64,82 @@ describe('runToolMiddleware()', () => {
       requestId: 'abc-123',
       transport: 'stdio',
     });
+
+    expect(seenRequestId).toBe('abc-123');
+  });
+});
+
+describe('runListToolsMiddleware()', () => {
+  it('runs the middleware with a fresh default ProxyContext — no cast needed', async () => {
+    let seenRequestId: string | undefined;
+    const capture: ListToolsMiddleware = async (req, next, context) => {
+      seenRequestId = context.requestId;
+      return next(req);
+    };
+
+    const result = await runListToolsMiddleware(capture, listReq, async () => ({
+      tools: [],
+    }));
+
+    expect(result.tools).toEqual([]);
+    expect(seenRequestId).toBeTruthy();
+  });
+
+  it('forwards a custom ProxyContext to the middleware', async () => {
+    let seenRequestId: string | undefined;
+    const capture: ListToolsMiddleware = async (req, next, context) => {
+      seenRequestId = context.requestId;
+      return next(req);
+    };
+
+    await runListToolsMiddleware(
+      capture,
+      listReq,
+      async () => ({ tools: [] }),
+      {
+        requestId: 'abc-123',
+        transport: 'stdio',
+      },
+    );
+
+    expect(seenRequestId).toBe('abc-123');
+  });
+});
+
+describe('runResourceMiddleware()', () => {
+  it('runs the middleware with a fresh default ProxyContext — no cast needed', async () => {
+    let seenRequestId: string | undefined;
+    const capture: ResourceMiddleware = async (req, next, context) => {
+      seenRequestId = context.requestId;
+      return next(req);
+    };
+
+    const result = await runResourceMiddleware(capture, readReq, async () => ({
+      contents: [{ uri: 'res://a', text: 'body' }],
+    }));
+
+    expect(result.contents[0]).toMatchObject({ text: 'body' });
+    expect(seenRequestId).toBeTruthy();
+  });
+
+  it('forwards a custom ProxyContext to the middleware', async () => {
+    let seenRequestId: string | undefined;
+    const capture: ResourceMiddleware = async (req, next, context) => {
+      seenRequestId = context.requestId;
+      return next(req);
+    };
+
+    await runResourceMiddleware(
+      capture,
+      readReq,
+      async () => ({
+        contents: [],
+      }),
+      {
+        requestId: 'abc-123',
+        transport: 'stdio',
+      },
+    );
 
     expect(seenRequestId).toBe('abc-123');
   });

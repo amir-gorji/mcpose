@@ -116,6 +116,8 @@ Active proxy sessions are closed before the underlying server finishes closing.
 
 Behavior worth knowing before you deploy it:
 
+- **The proxy binds loopback by default.** `host` defaults to `127.0.0.1`, DNS-rebinding protection is on for loopback binds with `allowedHosts` / `allowedOrigins` derived from the effective bind address and real listening port, and a non-loopback bind without `resolveIdentity` reports a startup warning through `onError`.
+  See [ADR-0005](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0005-loopback-bind-by-default.md).
 - **Session creation is restricted.** Only an `initialize` POST can create a session; a session-less GET or DELETE returns 400.
 - **Sessions can be re-validated per request.** `validateSession(req, { sessionId, identity })` runs on every routed request; return `false` or throw for a 401.
   Use it to bind a session to its original credential, so a leaked `mcp-session-id` alone cannot take a session over.
@@ -132,6 +134,7 @@ Behavior worth knowing before you deploy it:
   Middlewares nest onion-style.
 - **Pipeline**: middleware passed to `ProxyOptions` runs in **response-processing order**, so the first element processes the response first and is therefore the innermost layer.
   `[piiMW, auditMW]` redacts before it audits.
+  Reversing that order fails silently: `[auditMW, piiMW]` fills the audit store with unredacted payloads while the client still receives redacted data; see [the array order rule](https://github.com/amir-gorji/mcpose#array-order-the-one-surprising-rule).
   Note that `compose()` uses the opposite, outermost-first convention, so the two are not interchangeable.
   See [ADR-0002](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0002-proxy-options-array-response-processing-order.md).
 - **ProxyContext**: per-request metadata threaded through the pipeline: `requestId`, `transport`, `sessionId`, the resolved `identity`, and the `delegatedFrom` delegation chain.
@@ -150,8 +153,9 @@ Behavior worth knowing before you deploy it:
 | `createProxyContext(overrides?)` | Construct a `ProxyContext`. Useful in tests. |
 | `createInMemoryEventStore()` | Default SSE reconnect event store; swap for a `PersistentEventStore`. |
 | `hasToolContent(result)` | Type guard narrowing `CompatibilityCallToolResult` to `CallToolResult`. |
+| `dispatcherAwareBlock(options)` | `HiddenToolPredicate` blocking hidden tools both directly and through dispatcher (meta) tools. Fail-closed. |
 
-**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
+**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
 
 `PersistentEventStore` is an alias of the SDK's `EventStore` type, so any SDK-compatible store plugs in directly.
 
@@ -205,9 +209,16 @@ interface ProxyOptions {
   listToolsMiddleware?:  ReadonlyArray<ListToolsMiddleware>;
   passThroughTools?:     ReadonlyArray<string>;
   passThroughResources?: ReadonlyArray<string>;
-  hiddenTools?:          ReadonlyArray<string>;
+  hiddenTools?:          ReadonlyArray<string> | HiddenToolPredicate;
   hiddenResources?:      ReadonlyArray<string>;
+  localTools?:           ReadonlyArray<LocalTool>;
+  stripRequestMeta?:     boolean;  // Default: true
   onTelemetry?:          (event: TelemetryEvent) => void;
+}
+
+interface LocalTool {
+  tool: Tool;  // advertised in tools/list
+  handler: (params: CallToolRequestParams, context: ProxyContext) => Promise<CallToolResult>;
 }
 ```
 
@@ -217,8 +228,21 @@ interface ProxyOptions {
   `name` defaults to `'mcpose'` and `version` to the mcpose library version, so set your own when you ship a proxy.
 - `hiddenTools` / `hiddenResources` reject calls with a structured [`RejectionReason`](#rejection-reasons) in the MCP error `data` field.
   The rejection is thrown *inside* the pipeline, so observing middleware such as audit records it; the upstream is never called.
+- `hiddenTools` also accepts a `HiddenToolPredicate` (`(name, args) => boolean`), because a name array cannot see through a dispatcher (meta-tool) that takes the real tool name as an argument.
+  The predicate receives `undefined` args during list filtering and always an object at call time, so it can keep the dispatcher listed while failing closed on a malformed call.
+  `dispatcherAwareBlock({ tools, dispatchers, argPath })` implements the common case and blocks whenever the target name is missing or is not a string.
+  See [ADR-0006](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0006-hidden-tools-accept-a-predicate.md).
 - `passThroughTools` / `passThroughResources` skip transforming middleware, but middleware wrapped in `markPassThroughObserver()` still runs for them.
   A tool that is both hidden and pass-through stays hidden.
+- `localTools` are tools the proxy implements itself.
+  They appear in `tools/list` (first page only, so pagination does not duplicate them), route to their handler instead of the upstream, and still run through the full `toolMiddleware` pipeline, so audit and redaction apply to them.
+  Precedence: `hiddenTools` beats a local tool, a local tool beats (and shadows) an upstream tool of the same name, and `passThroughTools` does not apply to local tools.
+  The proxy advertises the `tools` capability when `localTools` is non-empty even if the upstream has none, and a duplicate local tool name throws at `createProxyServer`.
+  See [ADR-0007](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0007-local-tools-run-the-full-pipeline.md).
+- `stripRequestMeta` (default `true`) removes `params._meta` from every forwarded request, tool calls, resource reads, list and prompt calls alike, because MCP clients put correlation identifiers there (VS Code sends `progressToken`, a W3C `traceparent`, and `vscode/conversationId`) and the upstream is frequently a third party.
+  The strip happens at the proxy boundary before the pipeline, so middleware can still add `_meta` deliberately, and it applies to pass-through tools too; disable only globally with `stripRequestMeta: false`.
+  Progress relay is unaffected: the proxy reads the client's progress token from the request `extra`, and the SDK client stamps its own token on the upstream request.
+  See [ADR-0008](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0008-strip-request-meta.md).
 - `onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
   Results with `isError: true` are reported as outcome `'error'`, and a throwing sink is logged but never fails the call.
   An OpenTelemetry adapter (`@mcpose/otel`) is planned for v3.
@@ -231,7 +255,7 @@ interface ProxyOptions {
 ```ts
 interface HttpProxyOptions {
   port?: number;         // Default: 3000
-  host?: string;         // Default: all interfaces
+  host?: string;         // Default: '127.0.0.1' (loopback); non-loopback is a deliberate opt-in
   path?: string;         // Default: '/mcp'
   onRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>;
   onError?: (err: unknown) => void;
@@ -251,11 +275,11 @@ interface HttpProxyOptions {
   eventStore?: PersistentEventStore | null;
   /** Called when a session closes: client DELETE, TTL expiry, or server shutdown. */
   onSessionClosed?: (sessionId: string) => void;
-  /** Hosts allowed in the Host header when DNS-rebinding protection is on. */
+  /** Hosts allowed in the Host header. Default: derived from the bind address and real port on loopback. */
   allowedHosts?: string[];
-  /** Origins allowed in the Origin header. */
+  /** Origins allowed in the Origin header. Default: derived, matching allowedHosts. */
   allowedOrigins?: string[];
-  /** Enables the SDK transport's Host/Origin checks. Recommended for localhost proxies. */
+  /** SDK Host/Origin checks. Default: true on a loopback bind, false otherwise. */
   enableDnsRebindingProtection?: boolean;
 }
 
@@ -269,7 +293,9 @@ function startHttpProxy(
 </details>
 
 `httpOptions` is meaningful only for HTTP/SSE transport; omit it when serving over stdio.
-`allowedHosts`, `allowedOrigins`, and `enableDnsRebindingProtection` are forwarded to the SDK transport.
+`allowedHosts`, `allowedOrigins`, and `enableDnsRebindingProtection` are forwarded to the SDK transport, which only validates against a non-empty list; that is why mcpose derives enforcing defaults for a loopback bind instead of shipping an inert flag.
+An explicit `allowedHosts` or `allowedOrigins` is used verbatim and never merged with the derived list.
+See [ADR-0005](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0005-loopback-bind-by-default.md) and the network posture section of [`SECURITY.md`](https://github.com/amir-gorji/mcpose/blob/main/SECURITY.md).
 The behavioral notes in [Serving over HTTP/SSE](#serving-over-httpsse) apply to all of these.
 
 ### Context and identity
@@ -356,12 +382,18 @@ The values marked v3 are reserved: the union is declared now so that `error.data
 The core package exposes proxy and middleware test utilities under a subpath:
 
 ```ts
-import { createMockBackendClient, runToolMiddleware } from 'mcpose/testing';
+import {
+  createMockBackendClient,
+  runToolMiddleware,
+  runListToolsMiddleware,
+  runResourceMiddleware,
+} from 'mcpose/testing';
 ```
 
 `createMockBackendClient()` returns an in-memory backend stub with capability lookup and notification hooks.
 It works with both `createProxyServer()` and `startHttpProxy()` tests, so an example or test suite needs no real upstream.
-`runToolMiddleware()` drives a single middleware in isolation.
+`runToolMiddleware()`, `runListToolsMiddleware()`, and `runResourceMiddleware()` drive a single middleware in isolation; each takes the middleware, the request, a `next`, and an optional `ProxyContext` that defaults to a fresh `createProxyContext()`, so tests never pass `undefined as never` for the context argument.
+`runToolMiddleware()` additionally narrows away the legacy `{ toolResult }` shape; the list and resource results have no legacy variant, so the other two have nothing to narrow.
 
 > **Not to be confused with** [`@mcpose/testing`](https://www.npmjs.com/package/@mcpose/testing), a separate package of compliance assertions over audit chains.
 > This subpath mocks the proxy; that package verifies the audit trail.

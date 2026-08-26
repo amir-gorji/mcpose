@@ -162,12 +162,13 @@ To serve over HTTP/SSE instead, with per-session identity, mTLS, session limits,
 
 ### Routing: hidden, pass-through, middleware
 
-For each tool or resource, mcpose picks exactly one of three paths:
+For each tool or resource, mcpose picks exactly one path:
 
 | Path | Option | Behavior |
 |---|---|---|
-| **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses, and rejected at call time with `TOOL_HIDDEN` / `RESOURCE_HIDDEN`. |
+| **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses, and rejected at call time with `TOOL_HIDDEN` / `RESOURCE_HIDDEN`. `hiddenTools` also takes a predicate, so a dispatcher (meta-tool) cannot reach a hidden tool by argument; see `dispatcherAwareBlock`. |
 | **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded to the upstream untouched. Transforming middleware is skipped. |
+| **Local** | `localTools` | Served by the proxy itself instead of the upstream, still through the full `toolMiddleware` pipeline. Hidden beats local; local beats an upstream tool of the same name; pass-through does not apply. |
 | **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline. |
 
 Three consequences worth knowing up front:
@@ -216,6 +217,29 @@ toolMiddleware: [piiMW, auditMW]
 // 5. auditMW exit   → log already-clean data    (processes response last)
 ```
 
+Mapping array indices onto both traversal directions:
+
+```
+toolMiddleware: [ piiMW,  auditMW ]
+                  index 0  index 1
+
+request:   client ──► auditMW ──► piiMW ──► upstream   (last index first)
+response:  upstream ──► piiMW ──► auditMW ──► client   (index 0 first)
+```
+
+The rule in one line: **the last element is outermost**.
+The practical form: transformers first, observers last.
+
+> **Getting the order backwards fails silently.**
+> `[auditMW, piiMW]` puts audit innermost, so the audit store fills with unredacted payloads.
+> The client still receives redacted data, so nothing looks wrong, and the failure surfaces only when someone reads the trail.
+> No error is raised, and the configuration reads plausibly.
+
+| Ordering | What audit records |
+|---|---|
+| `[piiMW, auditMW]` (safe) | The redacted response: PII never reaches the log. |
+| `[auditMW, piiMW]` (unsafe) | The raw upstream response, unredacted, silently. |
+
 `compose([outerMW, innerMW])` uses the **opposite**, outermost-first convention.
 `ProxyOptions` arrays and `compose()` arguments are not interchangeable.
 See [ADR-0002](./docs/adr/0002-proxy-options-array-response-processing-order.md) for why.
@@ -231,6 +255,10 @@ End to end, mcpose:
 - advertises and fans out list-changed notifications when the upstream supports them,
 - forwards prompts as-is when the upstream supports prompts,
 - applies `hiddenTools` filtering both before *and* after `listToolsMiddleware`, so middleware cannot re-add a hidden tool.
+
+One deliberate exception to transparency: `params._meta` is stripped from every forwarded request by default, because clients put correlation identifiers there (`traceparent`, `vscode/conversationId`) and the upstream is frequently a third party.
+Set `stripRequestMeta: false` to restore verbatim forwarding.
+See [ADR-0008](./docs/adr/0008-strip-request-meta.md).
 
 ## Guides
 
@@ -337,11 +365,11 @@ Each package's README is the canonical reference for its own exports, and each i
 
 | Package | Reference covers |
 |---|---|
-| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, and the `ProxyContext` / `Identity` / `ProxyOptions` / `HttpProxyOptions` / `RejectionReason` types. |
+| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `ProxyOptions` / `HttpProxyOptions` / `LocalTool` / `HiddenToolPredicate` / `RejectionReason` types. |
 | [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware`, `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` schemas. |
 | [`@mcpose/testing`](./packages/testing/README.md#api) | `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`, each with what it does and does not prove. |
 
-Test helpers for the proxy itself (`createMockBackendClient`, `runToolMiddleware`) ship in the core package under the `mcpose/testing` subpath.
+Test helpers for the proxy itself (`createMockBackendClient`, `runToolMiddleware`, `runListToolsMiddleware`, `runResourceMiddleware`) ship in the core package under the `mcpose/testing` subpath.
 That is a different thing from the `@mcpose/testing` package, which asserts audit chains.
 See [the core README](./packages/core/README.md#test-helpers-mcposetesting) for the distinction.
 

@@ -18,8 +18,15 @@ export type { RejectionReason } from './rejection.js';
 export { rejectionMcpError } from './rejection.js';
 
 export type {
+  HiddenToolPredicate,
+  DispatcherAwareBlockOptions,
+} from './hiddenTools.js';
+export { dispatcherAwareBlock } from './hiddenTools.js';
+
+export type {
   ProxyOptions,
   HttpProxyOptions,
+  LocalTool,
   ToolMiddleware,
   ResourceMiddleware,
   ListToolsMiddleware,
