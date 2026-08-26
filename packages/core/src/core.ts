@@ -28,6 +28,7 @@ import {
   type ServerCapabilities,
 } from '@modelcontextprotocol/sdk/types.js';
 import { pipe, isPassThroughObserver, type Middleware } from './middleware.js';
+import type { HiddenToolPredicate } from './hiddenTools.js';
 import type { BackendClient } from './backendClient.js';
 import { createProxyContext, type ProxyContext } from './proxyContext.js';
 import type { Identity } from './identity.js';
@@ -225,8 +226,14 @@ export interface ProxyOptions {
    * `passThroughTools` stays hidden. Hidden filtering is applied both
    * before and after `listToolsMiddleware`, so list middleware cannot
    * re-expose a hidden tool.
+   *
+   * A name array cannot see through a dispatcher (meta-tool) that takes
+   * the real tool name as an argument. Pass a {@link HiddenToolPredicate}
+   * (e.g. {@link dispatcherAwareBlock}) to close that bypass: it receives
+   * `undefined` args during list filtering and always an object at call
+   * time. See ADR-0006.
    */
-  hiddenTools?: ReadonlyArray<string>;
+  hiddenTools?: ReadonlyArray<string> | HiddenToolPredicate;
 
   /** Resources hidden from list_resources and rejected at runtime with InvalidRequest. */
   hiddenResources?: ReadonlyArray<string>;
@@ -375,15 +382,24 @@ function getRejectionReason(err: unknown): RejectionReason | undefined {
     : undefined;
 }
 
+/** Normalizes the `hiddenTools` option to its predicate form. */
+function toHiddenToolPredicate(
+  hiddenTools: ReadonlyArray<string> | HiddenToolPredicate | undefined,
+): HiddenToolPredicate {
+  if (typeof hiddenTools === 'function') return hiddenTools;
+  const hiddenToolSet = new Set(hiddenTools ?? []);
+  return (name) => hiddenToolSet.has(name);
+}
+
 function filterHiddenTools(
   result: ListToolsResult,
-  hiddenToolSet: ReadonlySet<string>,
+  isHiddenTool: HiddenToolPredicate,
 ): ListToolsResult {
-  if (!hiddenToolSet.size) return result;
-  return {
-    ...result,
-    tools: result.tools.filter((tool) => !hiddenToolSet.has(tool.name)),
-  };
+  // List phase: a listed tool has no arguments, so args is undefined.
+  const tools = result.tools.filter(
+    (tool) => !isHiddenTool(tool.name, undefined),
+  );
+  return tools.length === result.tools.length ? result : { ...result, tools };
 }
 
 function registerListChangedForwarders(
@@ -493,7 +509,7 @@ export function createProxyServer(
   const resourcePipeline = pipe(options.resourceMiddleware ?? []);
   const listToolsPipeline = pipe(options.listToolsMiddleware ?? []);
 
-  const hiddenToolSet = new Set(options.hiddenTools ?? []);
+  const isHiddenTool = toHiddenToolPredicate(options.hiddenTools);
   const passThroughToolSet = new Set(options.passThroughTools ?? []);
   const hiddenResourceSet = new Set(options.hiddenResources ?? []);
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
@@ -519,12 +535,12 @@ export function createProxyServer(
         async (currentReq) =>
           filterHiddenTools(
             await backend.listTools(currentReq.params, requestOptions),
-            hiddenToolSet,
+            isHiddenTool,
           ),
         context,
       );
 
-      return filterHiddenTools(result, hiddenToolSet);
+      return filterHiddenTools(result, isHiddenTool);
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
@@ -561,7 +577,9 @@ export function createProxyServer(
       // Hidden beats pass-through. The rejection is thrown by the innermost
       // `next` INSIDE the pipeline so middleware (audit) observes it in-chain;
       // the backend is never called for hidden tools.
-      const isHidden = hiddenToolSet.has(name);
+      // Call phase: args is always an object, empty when the client sent
+      // none, so a dispatcher-aware predicate can fail closed on it.
+      const isHidden = isHiddenTool(name, req.params.arguments ?? {});
       const pipeline =
         !isHidden && passThroughToolSet.has(name)
           ? passThroughToolPipeline

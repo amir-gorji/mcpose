@@ -166,7 +166,7 @@ For each tool or resource, mcpose picks exactly one of three paths:
 
 | Path | Option | Behavior |
 |---|---|---|
-| **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses, and rejected at call time with `TOOL_HIDDEN` / `RESOURCE_HIDDEN`. |
+| **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses, and rejected at call time with `TOOL_HIDDEN` / `RESOURCE_HIDDEN`. `hiddenTools` also takes a predicate, so a dispatcher (meta-tool) cannot reach a hidden tool by argument; see `dispatcherAwareBlock`. |
 | **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded to the upstream untouched. Transforming middleware is skipped. |
 | **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline. |
 
@@ -337,7 +337,7 @@ Each package's README is the canonical reference for its own exports, and each i
 
 | Package | Reference covers |
 |---|---|
-| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, and the `ProxyContext` / `Identity` / `ProxyOptions` / `HttpProxyOptions` / `RejectionReason` types. |
+| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `ProxyOptions` / `HttpProxyOptions` / `HiddenToolPredicate` / `RejectionReason` types. |
 | [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware`, `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` schemas. |
 | [`@mcpose/testing`](./packages/testing/README.md#api) | `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`, each with what it does and does not prove. |
 

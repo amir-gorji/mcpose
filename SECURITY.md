@@ -64,6 +64,12 @@ Two invariants are load-bearing and must never silently break:
 
 A report that demonstrates either invariant is bypassed is high severity.
 
+## Hidden tools and dispatcher (meta) tools
+
+A name-only `hiddenTools` array cannot see through a dispatcher: an upstream meta-tool that takes the real tool name as an argument, such as `execute_sentry_tool({ name, arguments })`.
+Hiding `update_issue` by name does nothing against `execute_sentry_tool({ name: 'update_issue' })`.
+If your upstream exposes a dispatcher, pass a `HiddenToolPredicate`; `dispatcherAwareBlock` covers the common case and fails closed on malformed target arguments ([ADR-0006](./docs/adr/0006-hidden-tools-accept-a-predicate.md)).
+
 ## Network posture
 
 `startHttpProxy` binds `127.0.0.1` by default and treats a non-loopback bind as a deliberate opt-in ([ADR-0005](./docs/adr/0005-loopback-bind-by-default.md)).

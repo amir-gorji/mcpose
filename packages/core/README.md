@@ -152,8 +152,9 @@ Behavior worth knowing before you deploy it:
 | `createProxyContext(overrides?)` | Construct a `ProxyContext`. Useful in tests. |
 | `createInMemoryEventStore()` | Default SSE reconnect event store; swap for a `PersistentEventStore`. |
 | `hasToolContent(result)` | Type guard narrowing `CompatibilityCallToolResult` to `CallToolResult`. |
+| `dispatcherAwareBlock(options)` | `HiddenToolPredicate` blocking hidden tools both directly and through dispatcher (meta) tools. Fail-closed. |
 
-**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
+**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `HiddenToolPredicate`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
 
 `PersistentEventStore` is an alias of the SDK's `EventStore` type, so any SDK-compatible store plugs in directly.
 
@@ -207,7 +208,7 @@ interface ProxyOptions {
   listToolsMiddleware?:  ReadonlyArray<ListToolsMiddleware>;
   passThroughTools?:     ReadonlyArray<string>;
   passThroughResources?: ReadonlyArray<string>;
-  hiddenTools?:          ReadonlyArray<string>;
+  hiddenTools?:          ReadonlyArray<string> | HiddenToolPredicate;
   hiddenResources?:      ReadonlyArray<string>;
   onTelemetry?:          (event: TelemetryEvent) => void;
 }
@@ -219,6 +220,10 @@ interface ProxyOptions {
   `name` defaults to `'mcpose'` and `version` to the mcpose library version, so set your own when you ship a proxy.
 - `hiddenTools` / `hiddenResources` reject calls with a structured [`RejectionReason`](#rejection-reasons) in the MCP error `data` field.
   The rejection is thrown *inside* the pipeline, so observing middleware such as audit records it; the upstream is never called.
+- `hiddenTools` also accepts a `HiddenToolPredicate` (`(name, args) => boolean`), because a name array cannot see through a dispatcher (meta-tool) that takes the real tool name as an argument.
+  The predicate receives `undefined` args during list filtering and always an object at call time, so it can keep the dispatcher listed while failing closed on a malformed call.
+  `dispatcherAwareBlock({ tools, dispatchers, argPath })` implements the common case and blocks whenever the target name is missing or is not a string.
+  See [ADR-0006](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0006-hidden-tools-accept-a-predicate.md).
 - `passThroughTools` / `passThroughResources` skip transforming middleware, but middleware wrapped in `markPassThroughObserver()` still runs for them.
   A tool that is both hidden and pass-through stays hidden.
 - `onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
