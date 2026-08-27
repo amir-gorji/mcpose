@@ -61,6 +61,6 @@
     "fast-check": "4.9.0",
     "mcpose": "workspace:*",
     "typescript": "6.0.3",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.11"
   }
 }
