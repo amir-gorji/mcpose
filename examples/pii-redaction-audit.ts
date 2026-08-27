@@ -21,7 +21,7 @@
  */
 
 import type * as http from 'node:http';
-import { createBackendClient, startHttpProxy, hasToolContent } from 'mcpose';
+import { createBackendClient, startHttpProxy, mapToolResult } from 'mcpose';
 import type { ToolMiddleware, Identity } from 'mcpose';
 import {
   createAuditMiddleware,
@@ -58,27 +58,26 @@ const PII_PATTERNS: RegExp[] = [
 ];
 
 function createPiiMiddleware(patterns: RegExp[]): ToolMiddleware {
-  return async (req, next) => {
-    const result = await next(req);
+  const scrub = (text: string): string =>
+    patterns.reduce((t, re) => t.replace(re, '[REDACTED]'), text);
 
-    // Narrow to a tool-call result (skip protocol-level results).
-    if (!hasToolContent(result)) return result;
-
-    return {
-      ...result,
-      content: result.content.map((item) =>
-        item.type === 'text'
-          ? {
-              ...item,
-              text: patterns.reduce(
-                (t, re) => t.replace(re, '[REDACTED]'),
-                item.text,
-              ),
-            }
-          : item,
-      ),
-    };
-  };
+  // mapToolResult requires a handler per payload channel (text blocks,
+  // non-text blocks, structuredContent), so a redaction cannot silently
+  // miss one. Legacy { toolResult } results pass through untouched.
+  return async (req, next) =>
+    mapToolResult(await next(req), {
+      onText: (block) => ({ ...block, text: scrub(block.text) }),
+      // Images, audio, and embedded resources cannot be scrubbed by regex:
+      // drop them rather than forward unredacted bytes.
+      onOther: () => null,
+      // structuredContent mirrors the text channel as JSON: scrub the
+      // serialized form so string values inside it are redacted too.
+      onStructured: (structured) =>
+        JSON.parse(scrub(JSON.stringify(structured))) as Record<
+          string,
+          unknown
+        >,
+    });
 }
 
 // ---------------------------------------------------------------------------

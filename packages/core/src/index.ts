@@ -30,9 +30,11 @@ export type {
   ToolMiddleware,
   ResourceMiddleware,
   ListToolsMiddleware,
+  ToolResultHandlers,
 } from './core.js';
 export {
   hasToolContent,
+  mapToolResult,
   createProxyServer,
   startProxy,
   startHttpProxy,

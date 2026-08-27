@@ -153,9 +153,10 @@ Behavior worth knowing before you deploy it:
 | `createProxyContext(overrides?)` | Construct a `ProxyContext`. Useful in tests. |
 | `createInMemoryEventStore()` | Default SSE reconnect event store; swap for a `PersistentEventStore`. |
 | `hasToolContent(result)` | Type guard narrowing `CompatibilityCallToolResult` to `CallToolResult`. |
+| `mapToolResult(result, handlers)` | Map every payload channel of a tool result (text blocks, non-text blocks, `structuredContent`) through required handlers, so a redaction cannot silently miss one. |
 | `dispatcherAwareBlock(options)` | `HiddenToolPredicate` blocking hidden tools both directly and through dispatcher (meta) tools. Fail-closed. |
 
-**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
+**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ToolResultHandlers`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
 
 `PersistentEventStore` is an alias of the SDK's `EventStore` type, so any SDK-compatible store plugs in directly.
 
@@ -213,6 +214,7 @@ interface ProxyOptions {
   hiddenResources?:      ReadonlyArray<string>;
   localTools?:           ReadonlyArray<LocalTool>;
   stripRequestMeta?:     boolean;  // Default: true
+  stripResultMeta?:      boolean;  // Default: true
   onTelemetry?:          (event: TelemetryEvent) => void;
 }
 
@@ -243,6 +245,10 @@ interface LocalTool {
   The strip happens at the proxy boundary before the pipeline, so middleware can still add `_meta` deliberately, and it applies to pass-through tools too; disable only globally with `stripRequestMeta: false`.
   Progress relay is unaffected: the proxy reads the client's progress token from the request `extra`, and the SDK client stamps its own token on the upstream request.
   See [ADR-0008](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0008-strip-request-meta.md).
+- `stripResultMeta` (default `true`) is the response-direction mirror: top-level `_meta` is removed from every result returned from the upstream, because upstreams stamp correlation identifiers there (the SDK stamps `io.modelcontextprotocol/related-task`) and the client is a third party to them.
+  The strip happens at the upstream boundary inside the innermost `next`, so middleware sees the stripped result and middleware-added `_meta` still reaches the client.
+  Local tool results and nested `_meta` (per-tool in `tools[]`, per-block in `content`) are untouched; disable only globally with `stripResultMeta: false`.
+  See [ADR-0009](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0009-strip-result-meta.md).
 - `onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
   Results with `isError: true` are reported as outcome `'error'`, and a throwing sink is logged but never fails the call.
   An OpenTelemetry adapter (`@mcpose/otel`) is planned for v3.
