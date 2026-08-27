@@ -19,6 +19,9 @@ Stripping inside the innermost `next` rather than after the pipeline means middl
 - **Default off, opt-in strip.** Rejected: the population that most needs the strip does not know result `_meta` exists; an opt-in privacy control protects nobody by default.
 - **An allowlist of `_meta` keys to forward.** Rejected: a key allowlist invites a slowly growing pass-through list whose privacy meaning nobody re-reviews.
 - **Strip after the pipeline instead of at the upstream boundary.** Rejected: middleware would see and could log the identifiers the strip exists to contain, and middleware-added `_meta` would be stripped along with the upstream's.
+- **A `contentTypes` allow-list option that drops content blocks the pipeline cannot inspect.**
+  Rejected: `mapToolResult` already forces a decision per non-text block through its required `onOther` handler, and `onOther: () => null` is that allow-list in one consumer-owned line.
+  A second declarative policy surface for the same channel invites the two to diverge.
 - **A per-tool exemption via `passThroughTools`.** Rejected: pass-through selects which middleware runs; `stripResultMeta` governs what reaches the client. A privacy control a per-tool option could silently switch off would be the same false-confidence failure as the dispatcher bypass (ADR-0006), so the strip is uniform and can only be disabled globally.
 
 ## Consequences

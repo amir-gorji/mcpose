@@ -103,6 +103,23 @@ describe('sanitizeToolDescriptions()', () => {
     expect(result.tools[0]?.description).toBe('host  and host ');
   });
 
+  it('drops a sticky flag so a sticky pattern still replaces every occurrence', async () => {
+    const upstream: ListToolsResult = {
+      tools: [
+        {
+          name: 't',
+          description: 'a db-1 b db-2',
+          inputSchema: { type: 'object' },
+        },
+      ],
+    };
+    const result = await run(
+      sanitizeToolDescriptions({ patterns: [/db-\d/y] }),
+      upstream,
+    );
+    expect(result.tools[0]?.description).toBe('a  b ');
+  });
+
   it('sanitizes description fields nested in inputSchema and outputSchema', async () => {
     const result = await run(
       sanitizeToolDescriptions({ patterns: ['acme-corp'] }),

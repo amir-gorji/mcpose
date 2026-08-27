@@ -61,6 +61,18 @@ function createPiiMiddleware(patterns: RegExp[]): ToolMiddleware {
   const scrub = (text: string): string =>
     patterns.reduce((t, re) => t.replace(re, '[REDACTED]'), text);
 
+  const scrubValue = (value: unknown): unknown => {
+    if (typeof value === 'string') return scrub(value);
+    if (typeof value === 'number' && scrub(String(value)) !== String(value))
+      return '[REDACTED]';
+    if (Array.isArray(value)) return value.map(scrubValue);
+    if (value !== null && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value).map(([key, v]) => [key, scrubValue(v)]),
+      );
+    return value;
+  };
+
   // mapToolResult requires a handler per payload channel (text blocks,
   // non-text blocks, structuredContent), so a redaction cannot silently
   // miss one. Legacy { toolResult } results pass through untouched.
@@ -70,13 +82,12 @@ function createPiiMiddleware(patterns: RegExp[]): ToolMiddleware {
       // Images, audio, and embedded resources cannot be scrubbed by regex:
       // drop them rather than forward unredacted bytes.
       onOther: () => null,
-      // structuredContent mirrors the text channel as JSON: scrub the
-      // serialized form so string values inside it are redacted too.
+      // structuredContent mirrors the text channel as JSON: walk the value
+      // and redact matching strings and numbers in place. Scrubbing the
+      // serialized form instead would turn a bare numeric match into
+      // invalid JSON.
       onStructured: (structured) =>
-        JSON.parse(scrub(JSON.stringify(structured))) as Record<
-          string,
-          unknown
-        >,
+        scrubValue(structured) as Record<string, unknown>,
     });
 }
 

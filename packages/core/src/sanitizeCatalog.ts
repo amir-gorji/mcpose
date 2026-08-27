@@ -13,7 +13,8 @@ const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>()[\]]+/g;
 export interface SanitizeToolDescriptionsOptions {
   /**
    * Extra patterns to remove. A string replaces every literal occurrence;
-   * a RegExp is normalized to global so every match is replaced.
+   * a RegExp is normalized to global, with any sticky flag dropped, so
+   * every match is replaced.
    */
   patterns?: ReadonlyArray<string | RegExp>;
   /** Replacement text for every match. Default: `''` (plain removal). */
@@ -72,9 +73,12 @@ export function sanitizeToolDescriptions(
   const replacement = options.replacement ?? '';
   const patterns: ReadonlyArray<string | RegExp> = [
     URL_PATTERN,
+    // Rebuild with exactly one `g` and no `y`: String.replace with a
+    // sticky regex only replaces matches anchored at index 0, so a sticky
+    // pattern would silently leak later occurrences.
     ...(options.patterns ?? []).map((p) =>
-      p instanceof RegExp && !p.flags.includes('g')
-        ? new RegExp(p.source, p.flags + 'g')
+      p instanceof RegExp
+        ? new RegExp(p.source, p.flags.replace(/[gy]/g, '') + 'g')
         : p,
     ),
   ];
