@@ -65,6 +65,19 @@ There is no cron: a nightly run would re-mutate unchanged code for no new inform
 Because it only reports after a merge, run it locally before landing a change that reshapes test assertions in either package.
 `git push --no-verify` is the emergency escape hatch and is not a normal workflow.
 
+## Dependabot automation
+
+Dependabot PRs are reviewed and merged autonomously by two workflows, run by the Claude GitHub App under a Claude Max subscription (no separate API billing).
+
+- [`dependabot-review.yml`](./.github/workflows/dependabot-review.yml) runs on every dependabot PR.
+  It resolves merge conflicts and enforces the exact-pin and `pnpm-workspace.yaml` override policies below.
+  A bump that violates a policy, or breaks a gate for a reason beyond a small mechanical fix, gets held back on its own rather than blocking the whole PR.
+  It then runs the full gate chain and labels the PR `auto-merge-approved` or `needs-human-review`, with a comment explaining the outcome.
+  It never merges.
+- [`dependabot-merge.yml`](./.github/workflows/dependabot-merge.yml) merges a PR once `mcpose CI` is green on it and it carries `auto-merge-approved`.
+
+`.github/dependabot.yml` intentionally has no `groups:` block: dependabot opens one PR per dependency, so a bad bump only ever holds back or blocks itself, not a bundle of unrelated updates.
+
 ## Policies
 
 **Coverage thresholds are raise-only ratchets.**

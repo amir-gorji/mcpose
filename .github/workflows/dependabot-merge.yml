@@ -1,0 +1,79 @@
+name: Dependabot Merge
+
+# Merges a dependabot PR once mcpose CI (build/lint/test/gitleaks/osv-scan)
+# is green on it and dependabot-review.yml has labeled it
+# auto-merge-approved. Two triggers cover both orderings of "review labels
+# it" vs "CI finishes":
+#   - workflow_run: mcpose CI finishes after the label was already applied
+#     (the common path when the review needed to push a fix, which
+#     retriggers CI).
+#   - pull_request/labeled: the label is applied after mcpose CI's original
+#     run already finished (the common path when the PR needed no changes,
+#     since the review job's own gate chain usually takes longer than CI's).
+# Either way this checks mcpose CI's actual current check status before
+# merging, rather than trusting a specific run's payload.
+
+on:
+  workflow_run:
+    workflows: ['mcpose CI']
+    types: [completed]
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: |
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.pull_requests[0]) ||
+      (github.event_name == 'pull_request' &&
+       github.event.label.name == 'auto-merge-approved' &&
+       github.event.pull_request.user.login == 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve PR number
+        id: number
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "value=${{ github.event.workflow_run.pull_requests[0].number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify and merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.number.outputs.value }}
+          REPO: ${{ github.repository }}
+        run: |
+          AUTHOR=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author --jq '.author.login')
+          if [ "$AUTHOR" != "dependabot[bot]" ]; then
+            echo "PR #$PR_NUMBER is not a dependabot PR, skipping."
+            exit 0
+          fi
+
+          LABELS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name]')
+          if ! echo "$LABELS" | jq -e 'index("auto-merge-approved")' > /dev/null; then
+            echo "PR #$PR_NUMBER is not labeled auto-merge-approved, skipping."
+            exit 0
+          fi
+
+          # mcpose CI's own checks must all be green on the PR's current
+          # head. Checked by name so an unrelated/self check (this workflow,
+          # the Claude review job, claude-code-review.yml) never gates this.
+          CHECKS=$(gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,bucket)
+          for name in 'ci (20)' 'ci (22)' 'ci (24)' 'gitleaks' 'osv-scan'; do
+            bucket=$(echo "$CHECKS" | jq -r --arg n "$name" '.[] | select(.name == $n) | .bucket')
+            if [ "$bucket" != "pass" ]; then
+              echo "Check '$name' is '${bucket:-missing}', not pass yet. Skipping; another trigger will retry once it is."
+              exit 0
+            fi
+          done
+
+          gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --delete-branch
