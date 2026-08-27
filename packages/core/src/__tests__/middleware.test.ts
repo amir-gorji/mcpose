@@ -10,13 +10,17 @@ const identity: Middleware<Req, Res> = (req, next) => next(req);
 describe('compose()', () => {
   it('calls innermost next when middlewares array is empty', async () => {
     const pipeline = compose<Req, Res>([]);
-    const result = await pipeline({ value: 1 }, async (r) => ({ result: r.value * 10 }));
+    const result = await pipeline({ value: 1 }, async (r) => ({
+      result: r.value * 10,
+    }));
     expect(result).toEqual({ result: 10 });
   });
 
   it('passes through a single identity middleware', async () => {
     const pipeline = compose([identity]);
-    const result = await pipeline({ value: 3 }, async (r) => ({ result: r.value }));
+    const result = await pipeline({ value: 3 }, async (r) => ({
+      result: r.value,
+    }));
     expect(result).toEqual({ result: 3 });
   });
 
@@ -79,7 +83,12 @@ describe('compose()', () => {
     const pipeline = compose([outer, inner]);
     await pipeline({ value: 0 }, async () => ({ result: 0 }));
 
-    expect(order).toEqual(['outer-enter', 'inner-enter', 'inner-exit', 'outer-exit']);
+    expect(order).toEqual([
+      'outer-enter',
+      'inner-enter',
+      'inner-exit',
+      'outer-exit',
+    ]);
   });
 
   it('allows outer middleware to transform the response', async () => {
@@ -89,7 +98,9 @@ describe('compose()', () => {
     };
 
     const pipeline = compose([doubler]);
-    const result = await pipeline({ value: 5 }, async (r) => ({ result: r.value }));
+    const result = await pipeline({ value: 5 }, async (r) => ({
+      result: r.value,
+    }));
     expect(result).toEqual({ result: 10 });
   });
 
@@ -98,17 +109,23 @@ describe('compose()', () => {
       next({ value: req.value + 1 });
 
     const pipeline = compose([incrementer]);
-    const result = await pipeline({ value: 4 }, async (r) => ({ result: r.value }));
+    const result = await pipeline({ value: 4 }, async (r) => ({
+      result: r.value,
+    }));
     expect(result).toEqual({ result: 5 });
   });
 
   it('chains multiple transformations correctly', async () => {
-    const add1: Middleware<Req, Res> = (req, next) => next({ value: req.value + 1 });
-    const mul2: Middleware<Req, Res> = (req, next) => next({ value: req.value * 2 });
+    const add1: Middleware<Req, Res> = (req, next) =>
+      next({ value: req.value + 1 });
+    const mul2: Middleware<Req, Res> = (req, next) =>
+      next({ value: req.value * 2 });
 
     // add1 outer: value = (original + 1) * 2
     const pipeline = compose([add1, mul2]);
-    const result = await pipeline({ value: 3 }, async (r) => ({ result: r.value }));
+    const result = await pipeline({ value: 3 }, async (r) => ({
+      result: r.value,
+    }));
     expect(result).toEqual({ result: 8 }); // (3 + 1) * 2 = 8
   });
 
@@ -127,7 +144,9 @@ describe('compose()', () => {
   it('propagates errors from the inner next', async () => {
     const pipeline = compose([identity]);
     await expect(
-      pipeline({ value: 0 }, async () => { throw new Error('upstream error'); }),
+      pipeline({ value: 0 }, async () => {
+        throw new Error('upstream error');
+      }),
     ).rejects.toThrow('upstream error');
   });
 
@@ -145,17 +164,21 @@ describe('compose()', () => {
 
 describe('pipe()', () => {
   it('pipe([A, B]) is equivalent to compose([B, A])', async () => {
-    const add1: Middleware<Req, Res> = (req, next) => next({ value: req.value + 1 });
-    const mul2: Middleware<Req, Res> = (req, next) => next({ value: req.value * 2 });
+    const add1: Middleware<Req, Res> = (req, next) =>
+      next({ value: req.value + 1 });
+    const mul2: Middleware<Req, Res> = (req, next) =>
+      next({ value: req.value * 2 });
 
     // pipe([add1, mul2]) ≡ compose([mul2, add1])
     // mul2 outer: value = (original * 2) + 1 = 7
-    const pipePipeline    = pipe([add1, mul2]);
+    const pipePipeline = pipe([add1, mul2]);
     const composePipeline = compose([mul2, add1]);
 
     const baseNext = async (r: Req): Promise<Res> => ({ result: r.value });
     expect(await pipePipeline({ value: 3 }, baseNext)).toEqual({ result: 7 });
-    expect(await composePipeline({ value: 3 }, baseNext)).toEqual({ result: 7 });
+    expect(await composePipeline({ value: 3 }, baseNext)).toEqual({
+      result: 7,
+    });
   });
 
   it('executes in data-flow order — first element processes the response first', async () => {
@@ -180,7 +203,12 @@ describe('pipe()', () => {
     const pipeline = pipe([innerMW, outerMW]);
     await pipeline({ value: 0 }, async () => ({ result: 0 }));
 
-    expect(order).toEqual(['outer-enter', 'inner-enter', 'inner-exit', 'outer-exit']);
+    expect(order).toEqual([
+      'outer-enter',
+      'inner-enter',
+      'inner-exit',
+      'outer-exit',
+    ]);
   });
 
   it('keeps the same ProxyContext while reversing response-processing order', async () => {

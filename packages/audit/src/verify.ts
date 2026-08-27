@@ -1,13 +1,16 @@
 import { timingSafeEqual } from 'node:crypto';
-import type { AuditEvent, ReplayManifest, SigningKeyProvider } from './types.js';
+import type {
+  AuditEvent,
+  ReplayManifest,
+  SigningKeyProvider,
+} from './types.js';
 import { chainPreimageFields, computeChainHash } from './chain.js';
 import { manifestSigningPayload } from './middleware.js';
 
 const DOMAIN_CHAIN = Buffer.from('mcpose/v2/chain');
 
 export type ChainVerification =
-  | { valid: true }
-  | { valid: false; index: number; reason: string };
+  { valid: true } | { valid: false; index: number; reason: string };
 
 function hexEqual(aHex: string, bHex: string): boolean {
   const a = Buffer.from(aHex, 'hex');
@@ -35,8 +38,7 @@ export async function verifyAuditChain(
   const chainKey = await signingKey.sign(DOMAIN_CHAIN);
   let prevChainHash = '';
 
-  for (let i = 0; i < events.length; i++) {
-    const event = events[i];
+  for (const [i, event] of events.entries()) {
     if (event.replayManifestPosition !== i) {
       return {
         valid: false,

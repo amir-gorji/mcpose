@@ -19,7 +19,10 @@ const identity: Identity = {
 function makeOptions(overrides: Partial<AuditOptions> = {}): AuditOptions {
   return {
     signingKey: createDefaultSigningKeyProvider('test-secret'),
-    sensitivityResolver: createSensitivityResolver({ search: 'low', transfer: 'high' }),
+    sensitivityResolver: createSensitivityResolver({
+      search: 'low',
+      transfer: 'high',
+    }),
     onEvent: vi.fn(),
     ...overrides,
   };
@@ -38,14 +41,14 @@ function makeReq(tool: string, args: Record<string, unknown> = {}) {
 
 describe('createAuditMiddleware — tracer bullet', () => {
   it('calls onEvent after a successful tool call', async () => {
-    const onEvent = vi.fn();
+    const onEvent = vi.fn<AuditOptions['onEvent']>();
     const { middleware } = createAuditMiddleware(makeOptions({ onEvent }));
     const ctx = makeCtx('session-1');
 
     await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
 
     expect(onEvent).toHaveBeenCalledOnce();
-    const event: AuditEvent = onEvent.mock.calls[0][0];
+    const event: AuditEvent = onEvent.mock.calls[0]![0];
     expect(event.tool).toBe('search');
     expect(event.outcome).toBe('success');
     expect(event.identity.sub).toBe('user-1');
@@ -54,21 +57,31 @@ describe('createAuditMiddleware — tracer bullet', () => {
   });
 
   it('records error outcome when next throws', async () => {
-    const onEvent = vi.fn();
+    const onEvent = vi.fn<AuditOptions['onEvent']>();
     const { middleware } = createAuditMiddleware(makeOptions({ onEvent }));
 
     await expect(
-      middleware(makeReq('search'), async () => { throw new Error('upstream down'); }, makeCtx()),
+      middleware(
+        makeReq('search'),
+        async () => {
+          throw new Error('upstream down');
+        },
+        makeCtx(),
+      ),
     ).rejects.toThrow('upstream down');
 
-    const event: AuditEvent = onEvent.mock.calls[0][0];
+    const event: AuditEvent = onEvent.mock.calls[0]![0];
     expect(event.outcome).toBe('error');
   });
 
   it('sets replayManifestPosition sequentially within a session', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
     const ctx = makeCtx('sess-seq');
 
@@ -84,17 +97,29 @@ describe('createAuditMiddleware — HMAC chain', () => {
   it('first event chainHash is non-empty', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
-    await middleware(makeReq('search'), async () => ({ content: [] }), makeCtx('s1'));
-    expect(events[0].chainHash).toBeTruthy();
-    expect(events[0].chainHash.length).toBeGreaterThan(0);
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx('s1'),
+    );
+    expect(events[0]!.chainHash).toBeTruthy();
+    expect(events[0]!.chainHash.length).toBeGreaterThan(0);
   });
 
   it('each chainHash differs from the previous (chain advances)', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
     const ctx = makeCtx('s2');
     for (let i = 0; i < 5; i++) {
@@ -110,14 +135,18 @@ describe('createAuditMiddleware — sensitivity tiers', () => {
   it('low-tier event has inputRaw and outputRaw', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
     await middleware(
       makeReq('search', { q: 'hello' }),
       async () => ({ content: [{ type: 'text', text: 'result' }] }),
       makeCtx(),
     );
-    const event = events[0];
+    const event = events[0]!;
     expect(event.sensitivityTier).toBe('low');
     if (event.sensitivityTier === 'low') {
       expect(event.inputRaw).toEqual({ q: 'hello' });
@@ -127,14 +156,18 @@ describe('createAuditMiddleware — sensitivity tiers', () => {
   it('high-tier event has encrypted fields, no inputRaw/outputRaw', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
     await middleware(
       makeReq('transfer', { amount: 1000 }),
       async () => ({ content: [] }),
       makeCtx(),
     );
-    const event = events[0];
+    const event = events[0]!;
     expect(event.sensitivityTier).toBe('high');
     if (event.sensitivityTier === 'high') {
       expect(typeof event.inputEncrypted).toBe('string');
@@ -176,7 +209,7 @@ describe('createAuditMiddleware — closeSession', () => {
     expect(manifest!.signature).toBeTruthy();
     expect(manifest!.signedBy).toBeTruthy();
     expect(onManifest).toHaveBeenCalledOnce();
-    expect(onManifest.mock.calls[0][0]).toEqual(manifest);
+    expect(onManifest.mock.calls[0]![0]).toEqual(manifest);
   });
 });
 
@@ -185,7 +218,11 @@ describe('createAuditMiddleware — Merkle proof', () => {
     const { verifyMerkleProof } = await import('../chain.js');
     const events: AuditEvent[] = [];
     const { middleware, closeSession } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
     const ctx = makeCtx('sess-merkle');
     for (let i = 0; i < 4; i++) {
@@ -196,8 +233,8 @@ describe('createAuditMiddleware — Merkle proof', () => {
 
     for (let i = 0; i < events.length; i++) {
       const valid = verifyMerkleProof(
-        events[i].chainHash,
-        manifest!.merkleProofs[i],
+        events[i]!.chainHash,
+        manifest!.merkleProofs[i]!,
         manifest!.merkleRoot,
       );
       expect(valid).toBe(true);
@@ -213,7 +250,10 @@ function aesGcmDecrypt(b64: string, key: Buffer, aad: string): string {
   const decipher = createDecipheriv('aes-256-gcm', key.subarray(0, 32), iv);
   decipher.setAAD(Buffer.from(aad));
   decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+  return Buffer.concat([
+    decipher.update(ciphertext),
+    decipher.final(),
+  ]).toString('utf8');
 }
 
 /** Reproduces the documented v2 event-key derivation (see ADR-0004). */
@@ -237,7 +277,12 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
     const events: AuditEvent[] = [];
     const signingKey = createDefaultSigningKeyProvider('test-secret');
     const { middleware } = createAuditMiddleware(
-      makeOptions({ signingKey, onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        signingKey,
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
 
     await middleware(
@@ -246,28 +291,38 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
       makeCtx(),
     );
 
-    const event = events[0];
+    const event = events[0]!;
     if (event.sensitivityTier !== 'high') throw new Error('expected high tier');
     const aad = `mcpose/v2/aad\0${event.id}\0input`;
 
     // Attacker path: keyId is public (== manifest.signedBy). The OLD scheme keyed
     // encryption off SHA256(keyIdBytes ‖ id). Prove that path no longer decrypts.
     const publicKeyId = Buffer.from(signingKey.keyId, 'hex');
-    const forgedKey = createHash('sha256').update(publicKeyId).update(event.id).digest();
+    const forgedKey = createHash('sha256')
+      .update(publicKeyId)
+      .update(event.id)
+      .digest();
     expect(() => aesGcmDecrypt(event.inputEncrypted, forgedKey, aad)).toThrow();
 
     // Legitimate path: encRoot is derived from the secret through the oracle and
     // is never published; only a secret-holder can reproduce it.
     const encRoot = await signingKey.sign(Buffer.from('mcpose/v2/enc'));
     const realKey = deriveEventKey(encRoot, undefined, 0, event.id);
-    expect(JSON.parse(aesGcmDecrypt(event.inputEncrypted, realKey, aad))).toEqual({ acct: 'secret-acct' });
+    expect(
+      JSON.parse(aesGcmDecrypt(event.inputEncrypted, realKey, aad)),
+    ).toEqual({ acct: 'secret-acct' });
   });
 
   it('input and output ciphertexts are not swappable within an event (AAD binding)', async () => {
     const events: AuditEvent[] = [];
     const signingKey = createDefaultSigningKeyProvider('test-secret');
     const { middleware } = createAuditMiddleware(
-      makeOptions({ signingKey, onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        signingKey,
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
 
     await middleware(
@@ -276,7 +331,7 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
       makeCtx(),
     );
 
-    const event = events[0];
+    const event = events[0]!;
     if (event.sensitivityTier !== 'high') throw new Error('expected high tier');
     const encRoot = await signingKey.sign(Buffer.from('mcpose/v2/enc'));
     const key = deriveEventKey(encRoot, undefined, 0, event.id);
@@ -284,7 +339,9 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
     // Correct AAD decrypts; the OTHER field's AAD must not authenticate.
     const inputAad = `mcpose/v2/aad\0${event.id}\0input`;
     const outputAad = `mcpose/v2/aad\0${event.id}\0output`;
-    expect(() => aesGcmDecrypt(event.inputEncrypted, key, inputAad)).not.toThrow();
+    expect(() =>
+      aesGcmDecrypt(event.inputEncrypted, key, inputAad),
+    ).not.toThrow();
     expect(() => aesGcmDecrypt(event.inputEncrypted, key, outputAad)).toThrow();
     expect(() => aesGcmDecrypt(event.outputEncrypted, key, inputAad)).toThrow();
   });
@@ -296,28 +353,53 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
       makeOptions({
         signingKey,
         sensitivityResolver: () => 'high',
-        onEvent: (e) => { events.push(e); },
+        onEvent: (e) => {
+          events.push(e);
+        },
       }),
     );
 
     // Deliberately reuse ONE context (and therefore one requestId).
     const ctx = makeCtx('reused-ctx-session');
-    await middleware(makeReq('transfer', { n: 1 }), async () => ({ content: [] }), ctx);
-    await middleware(makeReq('transfer', { n: 2 }), async () => ({ content: [] }), ctx);
+    await middleware(
+      makeReq('transfer', { n: 1 }),
+      async () => ({ content: [] }),
+      ctx,
+    );
+    await middleware(
+      makeReq('transfer', { n: 2 }),
+      async () => ({ content: [] }),
+      ctx,
+    );
 
-    expect(events[0].id).toBe(events[1].id);
+    expect(events[0]!.id).toBe(events[1]!.id);
     const encRoot = await signingKey.sign(Buffer.from('mcpose/v2/enc'));
-    const key0 = deriveEventKey(encRoot, 'reused-ctx-session', 0, events[0].id);
-    const key1 = deriveEventKey(encRoot, 'reused-ctx-session', 1, events[1].id);
+    const key0 = deriveEventKey(
+      encRoot,
+      'reused-ctx-session',
+      0,
+      events[0]!.id,
+    );
+    const key1 = deriveEventKey(
+      encRoot,
+      'reused-ctx-session',
+      1,
+      events[1]!.id,
+    );
     expect(key0.equals(key1)).toBe(false);
 
     // Each event decrypts only under its own positional key.
     const [first, second] = events;
-    if (first.sensitivityTier !== 'high' || second.sensitivityTier !== 'high') {
+    if (
+      first?.sensitivityTier !== 'high' ||
+      second?.sensitivityTier !== 'high'
+    ) {
       throw new Error('expected high tier');
     }
     const aad0 = `mcpose/v2/aad\0${first.id}\0input`;
-    expect(JSON.parse(aesGcmDecrypt(first.inputEncrypted, key0, aad0))).toEqual({ n: 1 });
+    expect(JSON.parse(aesGcmDecrypt(first.inputEncrypted, key0, aad0))).toEqual(
+      { n: 1 },
+    );
     expect(() => aesGcmDecrypt(second.inputEncrypted, key0, aad0)).toThrow();
   });
 });

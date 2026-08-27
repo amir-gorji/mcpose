@@ -41,9 +41,8 @@ describe('createBackendClient() URL scheme validation', () => {
   });
 
   it('passes for http: URLs', async () => {
-    const { StreamableHTTPClientTransport } = await import(
-      '@modelcontextprotocol/sdk/client/streamableHttp.js'
-    );
+    const { StreamableHTTPClientTransport } =
+      await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
     await expect(
       createBackendClient({ url: 'http://localhost:3000/mcp' }),
     ).resolves.toBeDefined();
@@ -53,9 +52,8 @@ describe('createBackendClient() URL scheme validation', () => {
   });
 
   it('passes for https: URLs', async () => {
-    const { StreamableHTTPClientTransport } = await import(
-      '@modelcontextprotocol/sdk/client/streamableHttp.js'
-    );
+    const { StreamableHTTPClientTransport } =
+      await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
     await expect(
       createBackendClient({ url: 'https://example.com/mcp' }),
     ).resolves.toBeDefined();
@@ -77,9 +75,8 @@ describe('createBackendClient() URL scheme validation', () => {
   });
 
   it('prefers url over command when both are provided', async () => {
-    const { StreamableHTTPClientTransport } = await import(
-      '@modelcontextprotocol/sdk/client/streamableHttp.js'
-    );
+    const { StreamableHTTPClientTransport } =
+      await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
     await expect(
       createBackendClient({
         command: '/definitely/not/an/executable',
@@ -107,9 +104,7 @@ describe('createBackendClient() URL scheme validation', () => {
   });
 
   it('throws on a malformed URL string', async () => {
-    await expect(
-      createBackendClient({ url: 'not a url' }),
-    ).rejects.toThrow();
+    await expect(createBackendClient({ url: 'not a url' })).rejects.toThrow();
   });
 });
 
@@ -126,9 +121,8 @@ describe('createBackendClient() HTTP transport options', () => {
 
   /** Resolves to the options object passed to the last StreamableHTTPClientTransport. */
   const lastTransportOpts = async () => {
-    const { StreamableHTTPClientTransport } = await import(
-      '@modelcontextprotocol/sdk/client/streamableHttp.js'
-    );
+    const { StreamableHTTPClientTransport } =
+      await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
     return vi.mocked(StreamableHTTPClientTransport).mock.lastCall?.[1] as
       | {
           requestInit?: { headers?: Record<string, string> };

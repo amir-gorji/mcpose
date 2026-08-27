@@ -42,8 +42,9 @@ describe('compose() — edge cases', () => {
   });
 
   it('does not mutate a frozen middleware array', async () => {
-    const mw: Middleware<Req, Res> = (req, next) => next({ value: req.value + 1 });
-    const arr = Object.freeze([mw]) as ReadonlyArray<Middleware<Req, Res>>;
+    const mw: Middleware<Req, Res> = (req, next) =>
+      next({ value: req.value + 1 });
+    const arr = Object.freeze([mw]);
 
     const pipeline = compose(arr);
     const result = await pipeline({ value: 2 }, passthroughNext);
@@ -86,7 +87,11 @@ describe('compose() — edge cases', () => {
     };
     const ctx = createProxyContext({ requestId: 'fixed-id' });
 
-    await compose([capture, capture, capture])({ value: 1 }, passthroughNext, ctx);
+    await compose([capture, capture, capture])(
+      { value: 1 },
+      passthroughNext,
+      ctx,
+    );
 
     expect(refs).toHaveLength(3);
     expect(refs[0]).toBe(ctx);
@@ -97,8 +102,10 @@ describe('compose() — edge cases', () => {
 
 describe('pipe() — edge cases', () => {
   it('does not mutate the input array (reverse on a copy)', async () => {
-    const a: Middleware<Req, Res> = (req, next) => next({ value: req.value + 1 });
-    const b: Middleware<Req, Res> = (req, next) => next({ value: req.value * 2 });
+    const a: Middleware<Req, Res> = (req, next) =>
+      next({ value: req.value + 1 });
+    const b: Middleware<Req, Res> = (req, next) =>
+      next({ value: req.value * 2 });
     const arr = [a, b];
     const snapshot = [...arr];
 
@@ -108,8 +115,9 @@ describe('pipe() — edge cases', () => {
   });
 
   it('accepts a frozen input array', async () => {
-    const a: Middleware<Req, Res> = (req, next) => next({ value: req.value + 1 });
-    const arr = Object.freeze([a]) as ReadonlyArray<Middleware<Req, Res>>;
+    const a: Middleware<Req, Res> = (req, next) =>
+      next({ value: req.value + 1 });
+    const arr = Object.freeze([a]);
 
     const result = await pipe(arr)({ value: 1 }, passthroughNext);
 

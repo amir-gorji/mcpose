@@ -66,14 +66,16 @@ describe('Merkle tree (v2, domain-separated)', () => {
     const root = computeMerkleRoot(leaves);
     for (let i = 0; i < leaves.length; i++) {
       const proof = computeMerkleProof(leaves, i);
-      expect(verifyMerkleProof(leaves[i], proof, root)).toBe(true);
+      expect(verifyMerkleProof(leaves[i]!, proof, root)).toBe(true);
     }
   });
 
   it('single leaf root is the tagged leaf hash, not the raw value', () => {
     const root = computeMerkleRoot(['aa']);
     expect(root).not.toBe('aa');
-    expect(verifyMerkleProof('aa', { index: 0, siblings: [], directions: [] }, root)).toBe(true);
+    expect(
+      verifyMerkleProof('aa', { index: 0, siblings: [], directions: [] }, root),
+    ).toBe(true);
   });
 
   it('an internal node cannot be replayed as a leaf', () => {
@@ -81,8 +83,12 @@ describe('Merkle tree (v2, domain-separated)', () => {
     const proof = computeMerkleProof(leaves, 0);
     // Try to verify the level-1 sibling (an internal node in disguise)
     // as if it were a leaf under a shortened proof.
-    const forged = { index: 1, siblings: proof.siblings.slice(1), directions: proof.directions.slice(1) };
-    expect(verifyMerkleProof(proof.siblings[0], forged, root)).toBe(false);
+    const forged = {
+      index: 1,
+      siblings: proof.siblings.slice(1),
+      directions: proof.directions.slice(1),
+    };
+    expect(verifyMerkleProof(proof.siblings[0]!, forged, root)).toBe(false);
   });
 
   it('computeMerkleProof bounds-checks the index', () => {
@@ -95,7 +101,11 @@ describe('Merkle tree (v2, domain-separated)', () => {
     const root = computeMerkleRoot(leaves);
     const proof = computeMerkleProof(leaves, 0);
     expect(
-      verifyMerkleProof(leaves[0], { ...proof, directions: proof.directions.slice(1) }, root),
+      verifyMerkleProof(
+        leaves[0]!,
+        { ...proof, directions: proof.directions.slice(1) },
+        root,
+      ),
     ).toBe(false);
   });
 
@@ -104,9 +114,11 @@ describe('Merkle tree (v2, domain-separated)', () => {
     const proof = computeMerkleProof(leaves, 0);
     const flipped = {
       ...proof,
-      directions: proof.directions.map((d) => (d === 'left' ? 'right' : 'left') as 'left' | 'right'),
+      directions: proof.directions.map((d) =>
+        d === 'left' ? 'right' : 'left',
+      ),
     };
-    expect(verifyMerkleProof(leaves[0], flipped, root)).toBe(false);
+    expect(verifyMerkleProof(leaves[0]!, flipped, root)).toBe(false);
   });
 });
 
@@ -122,10 +134,14 @@ async function produceSession(sessionId: string, count: number) {
       events.push(e);
     },
   });
-  const ctx = () => createProxyContext({ transport: 'http', identity, sessionId });
+  const ctx = () =>
+    createProxyContext({ transport: 'http', identity, sessionId });
   for (let i = 0; i < count; i++) {
     await middleware(
-      { method: 'tools/call' as const, params: { name: 'search', arguments: { i } } },
+      {
+        method: 'tools/call' as const,
+        params: { name: 'search', arguments: { i } },
+      },
       async () => ({ content: [] }),
       ctx(),
     );
@@ -152,18 +168,22 @@ describe('verifyAuditChain (keyed)', () => {
       i === 2 ? { ...e, duration_ms: e.duration_ms + 1 } : e,
     );
     const result = await verifyAuditChain(tampered, signingKey);
-    expect(result).toEqual({ valid: false, index: 2, reason: 'chainHash mismatch' });
+    expect(result).toEqual({
+      valid: false,
+      index: 2,
+      reason: 'chainHash mismatch',
+    });
   });
 
   it('detects a renumbered suffix (delete + renumber)', async () => {
     const { events, signingKey } = await produceSession('s-renumber', 4);
     // Delete event 1 and renumber the survivors — the keyless position
     // check would pass; the keyed recompute must not.
-    const doctored = [events[0], ...events.slice(2)].map((e, i) => ({
+    const doctored = [events[0]!, ...events.slice(2)].map((e, i) => ({
       ...e,
       replayManifestPosition: i,
     }));
-    const result = await verifyAuditChain(doctored as AuditEvent[], signingKey);
+    const result = await verifyAuditChain(doctored, signingKey);
     expect(result.valid).toBe(false);
   });
 

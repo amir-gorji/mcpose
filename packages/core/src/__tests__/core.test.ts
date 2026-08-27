@@ -105,14 +105,15 @@ async function invokeHandler(
   params: Record<string, unknown> = {},
   extra: object = {},
 ) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handlers = (server as any)._requestHandlers as Map<
-    string,
-    (
-      req: { method: string; params: Record<string, unknown> },
-      extra: object,
-    ) => Promise<unknown>
-  >;
+  const { _requestHandlers: handlers } = server as unknown as {
+    _requestHandlers: Map<
+      string,
+      (
+        req: { method: string; params: Record<string, unknown> },
+        extra: object,
+      ) => Promise<unknown>
+    >;
+  };
   const handler = handlers.get(method);
   if (!handler) throw new Error(`No handler registered for method: ${method}`);
   return handler({ method, params }, extra);
@@ -605,7 +606,7 @@ describe('createProxyServer() — onTelemetry', () => {
       tool: 'echo',
       outcome: 'success',
     });
-    expect(typeof events[0].duration_ms).toBe('number');
+    expect(typeof events[0]!.duration_ms).toBe('number');
   });
 
   it('emits a rejected event with TOOL_HIDDEN when a hidden tool is called', async () => {
@@ -662,8 +663,9 @@ describe('createProxyServer() — onTelemetry', () => {
 describe('createProxyServer() — server identity', () => {
   // The MCP SDK stores the advertised server info on a protected `_serverInfo`.
   const serverInfo = (server: ReturnType<typeof createProxyServer>) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (server as any)._serverInfo as { name: string; version: string };
+    return (
+      server as unknown as { _serverInfo: { name: string; version: string } }
+    )._serverInfo;
   };
 
   it('omitting options is allowed and defaults name to "mcpose"', () => {
@@ -791,7 +793,9 @@ describe('createProxyServer() — rejection and pass-through observation', () =>
     await expect(
       invokeHandler(server, 'tools/call', { name: 'pass_tool', arguments: {} }),
     ).rejects.toMatchObject({ code: ErrorCode.MethodNotFound });
-    expect(observed).toMatchObject({ data: { rejectionReason: 'TOOL_HIDDEN' } });
+    expect(observed).toMatchObject({
+      data: { rejectionReason: 'TOOL_HIDDEN' },
+    });
     expect(backend.callTool).not.toHaveBeenCalled();
   });
 });

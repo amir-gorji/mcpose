@@ -35,13 +35,31 @@ import type { ToolMiddleware, Identity, TelemetryEvent } from 'mcpose';
 
 const backend = createMockBackendClient({
   tools: [
-    { name: 'get_balance', description: 'Return the account balance.', inputSchema: { type: 'object' } },
-    { name: 'search_trades', description: 'Search trade history.', inputSchema: { type: 'object' } },
-    { name: 'wire_transfer', description: 'Initiate a wire transfer.', inputSchema: { type: 'object' } },
-    { name: 'health_check', description: 'Internal health check.', inputSchema: { type: 'object' } },
+    {
+      name: 'get_balance',
+      description: 'Return the account balance.',
+      inputSchema: { type: 'object' },
+    },
+    {
+      name: 'search_trades',
+      description: 'Search trade history.',
+      inputSchema: { type: 'object' },
+    },
+    {
+      name: 'wire_transfer',
+      description: 'Initiate a wire transfer.',
+      inputSchema: { type: 'object' },
+    },
+    {
+      name: 'health_check',
+      description: 'Internal health check.',
+      inputSchema: { type: 'object' },
+    },
   ],
   callToolResponse: (params) => ({
-    content: [{ type: 'text' as const, text: `mock response for ${params.name}` }],
+    content: [
+      { type: 'text' as const, text: `mock response for ${params.name}` },
+    ],
   }),
 });
 
@@ -90,7 +108,8 @@ function onTelemetry(event: TelemetryEvent) {
 // ---------------------------------------------------------------------------
 
 const loggingMW: ToolMiddleware = async (req, next, ctx) => {
-  const identity = ctx.identity?.displayName ?? ctx.identity?.sub ?? 'anonymous';
+  const identity =
+    ctx.identity?.displayName ?? ctx.identity?.sub ?? 'anonymous';
   console.error(`→ ${req.params.name}  (by ${identity})`);
   const result = await next(req);
   console.error(`← ${req.params.name}  done`);
@@ -139,8 +158,12 @@ console.error('  health_check  → pass-through (raw forward, no middleware)');
 console.error('');
 console.error('Identity:', JSON.stringify(identity, null, 2));
 console.error('');
-console.error('To run this against a real upstream, replace createMockBackendClient');
-console.error('with createBackendClient({ command: ..., args: ... }) for stdio,');
+console.error(
+  'To run this against a real upstream, replace createMockBackendClient',
+);
+console.error(
+  'with createBackendClient({ command: ..., args: ... }) for stdio,',
+);
 console.error('or createBackendClient({ url: ... }) for HTTP/SSE.');
 
 // In a real app, call `await startProxy(backend, options)` or

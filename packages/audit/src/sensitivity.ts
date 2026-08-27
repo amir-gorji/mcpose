@@ -26,9 +26,7 @@ export function createSensitivityResolver(
   override?: SensitivityOverrideFn,
 ): SensitivityResolverFn {
   return (tool, identity, args) => {
-    const mapTier = validTier(
-      Object.hasOwn(map, tool) ? map[tool] : undefined,
-    );
+    const mapTier = validTier(Object.hasOwn(map, tool) ? map[tool] : undefined);
     if (override) return validTier(override(tool, identity, args, mapTier));
     return mapTier;
   };

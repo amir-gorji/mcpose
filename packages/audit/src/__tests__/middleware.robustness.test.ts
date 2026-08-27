@@ -43,14 +43,21 @@ function makeCtx(sessionId?: string) {
 }
 
 function makeReq(tool: string, args: Record<string, unknown> = {}) {
-  return { method: 'tools/call' as const, params: { name: tool, arguments: args } };
+  return {
+    method: 'tools/call' as const,
+    params: { name: tool, arguments: args },
+  };
 }
 
 describe('createAuditMiddleware — concurrency', () => {
   it('allocates unique sequential positions under 20 concurrent calls', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
 
     await Promise.all(
@@ -67,7 +74,9 @@ describe('createAuditMiddleware — concurrency', () => {
       ),
     );
 
-    const positions = events.map((e) => e.replayManifestPosition).sort((a, b) => a - b);
+    const positions = events
+      .map((e) => e.replayManifestPosition)
+      .sort((a, b) => a - b);
     expect(positions).toEqual(Array.from({ length: 20 }, (_, i) => i));
 
     // The chain must ALSO recompute — positions being unique is necessary
@@ -75,7 +84,9 @@ describe('createAuditMiddleware — concurrency', () => {
     const ordered = [...events].sort(
       (a, b) => a.replayManifestPosition - b.replayManifestPosition,
     );
-    expect(await verifyAuditChain(ordered, signingKey)).toEqual({ valid: true });
+    expect(await verifyAuditChain(ordered, signingKey)).toEqual({
+      valid: true,
+    });
   });
 });
 
@@ -126,7 +137,11 @@ describe('createAuditMiddleware — never blocks the call path', () => {
   it('circular and BigInt arguments still produce an event', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
     const circular: Record<string, unknown> = { amount: 10n };
     circular.self = circular;
@@ -138,7 +153,7 @@ describe('createAuditMiddleware — never blocks the call path', () => {
     );
     expect(result).toEqual({ content: [] });
     expect(events).toHaveLength(1);
-    expect(events[0].inputHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(events[0]!.inputHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('a throwing sensitivityResolver degrades to high tier, not a failed call', async () => {
@@ -149,8 +164,12 @@ describe('createAuditMiddleware — never blocks the call path', () => {
         sensitivityResolver: () => {
           throw new Error('resolver bug');
         },
-        onEvent: (e) => { events.push(e); },
-        onAuditError: (err) => { auditErrors.push(err); },
+        onEvent: (e) => {
+          events.push(e);
+        },
+        onAuditError: (err) => {
+          auditErrors.push(err);
+        },
       }),
     );
 
@@ -160,7 +179,7 @@ describe('createAuditMiddleware — never blocks the call path', () => {
       makeCtx('s3'),
     );
     expect(result).toEqual({ content: [] });
-    expect(events[0].sensitivityTier).toBe('high');
+    expect(events[0]!.sensitivityTier).toBe('high');
     expect(auditErrors).toHaveLength(1);
   });
 });
@@ -169,21 +188,38 @@ describe('createAuditMiddleware — error and rejection events', () => {
   it('records structured error details, distinct outputHash per error', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
 
     await expect(
-      middleware(makeReq('search'), async () => { throw new TypeError('bad input'); }, makeCtx('e1')),
+      middleware(
+        makeReq('search'),
+        async () => {
+          throw new TypeError('bad input');
+        },
+        makeCtx('e1'),
+      ),
     ).rejects.toThrow('bad input');
 
-    expect(events[0].outcome).toBe('error');
-    expect(events[0].error).toEqual({ name: 'TypeError', message: 'bad input' });
+    expect(events[0]!.outcome).toBe('error');
+    expect(events[0]!.error).toEqual({
+      name: 'TypeError',
+      message: 'bad input',
+    });
   });
 
   it('records outcome rejected with rejectionReason for MCP rejections', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
 
     await expect(
@@ -197,8 +233,8 @@ describe('createAuditMiddleware — error and rejection events', () => {
     ).rejects.toThrow('Tool not found: hidden_tool');
 
     expect(events).toHaveLength(1);
-    expect(events[0].outcome).toBe('rejected');
-    expect(events[0].rejectionReason).toBe('TOOL_HIDDEN');
+    expect(events[0]!.outcome).toBe('rejected');
+    expect(events[0]!.rejectionReason).toBe('TOOL_HIDDEN');
   });
 
   it('includeRejections: false skips rejection events and keeps positions continuous', async () => {
@@ -206,7 +242,9 @@ describe('createAuditMiddleware — error and rejection events', () => {
     const { middleware } = createAuditMiddleware(
       makeOptions({
         includeRejections: false,
-        onEvent: (e) => { events.push(e); },
+        onEvent: (e) => {
+          events.push(e);
+        },
       }),
     );
     const ctx = () => makeCtx('r2');
@@ -232,7 +270,11 @@ describe('createAuditMiddleware — error and rejection events', () => {
 describe('createAuditMiddleware — session hygiene', () => {
   it('closeSession is idempotent: second call returns undefined', async () => {
     const { middleware, closeSession } = createAuditMiddleware(makeOptions());
-    await middleware(makeReq('search'), async () => ({ content: [] }), makeCtx('h1'));
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx('h1'),
+    );
 
     expect(await closeSession('h1')).toBeDefined();
     expect(await closeSession('h1')).toBeUndefined();
@@ -270,15 +312,28 @@ describe('createAuditMiddleware — session hygiene', () => {
     };
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
-      makeOptions({ signingKey: flaky, onEvent: (e) => { events.push(e); } }),
+      makeOptions({
+        signingKey: flaky,
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
     );
 
     await expect(
-      middleware(makeReq('search'), async () => ({ content: [] }), makeCtx('k1')),
+      middleware(
+        makeReq('search'),
+        async () => ({ content: [] }),
+        makeCtx('k1'),
+      ),
     ).rejects.toThrow('KMS unavailable');
 
     // Second attempt succeeds — the rejected derivation was not cached.
-    await middleware(makeReq('search'), async () => ({ content: [] }), makeCtx('k1'));
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx('k1'),
+    );
     expect(events).toHaveLength(1);
   });
 });

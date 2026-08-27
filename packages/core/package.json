@@ -1,6 +1,6 @@
 {
   "name": "mcpose",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "description": "The audit and governance layer for MCP",
   "type": "module",
   "main": "./dist/index.js",
@@ -47,7 +47,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "ts:ci": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
+    "mutation": "stryker run",
     "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
   },
   "engines": {
@@ -58,8 +59,11 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
-    "typescript": "~7.0.2",
+    "@stryker-mutator/core": "10.0.0",
+    "@stryker-mutator/vitest-runner": "10.0.0",
     "@types/node": "^26.2.0",
-    "vitest": "^4.1.10"
+    "@vitest/coverage-v8": "3.2.4",
+    "typescript": "6.0.3",
+    "vitest": "^3.0.0"
   }
 }

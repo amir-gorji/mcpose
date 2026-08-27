@@ -48,7 +48,7 @@ These two packages produce and verify mcpose's **tamper-evident audit trail**. T
 
 | Assertion | Proves | Does NOT prove |
 |---|---|---|
-| `assertAuditChainIntegrity` | non-empty; positions sequential; `chainHash`es distinct & non-empty | HMAC validity (no key) → not a key-consistent forgery |
+| `assertAuditChainIntegrity` | non-empty; positions sequential; `chainHash`es distinct & non-empty | Authenticity. No HMAC is recomputed, so any self-consistent rewrite passes — and it does not have to be key-consistent, because the forger supplies the hashes. Tail truncation also passes; the manifest's `eventCount` is what catches it |
 | `assertReplayManifestValid` | root recomputes from the events; one proof per event; each proof verifies at its index | the manifest **signature** — `verifyManifestSignature` does that |
 | `assertPiiRedacted` | low/medium: no pattern matches plaintext; high: no plaintext fields present, encrypted payloads present | anything about the CONTENT of high-tier ciphertext |
 | `assertDelegationHonored(event)` | `delegatedFrom` non-empty; each entry has a `sub` | signatures or chain continuity (v3) |

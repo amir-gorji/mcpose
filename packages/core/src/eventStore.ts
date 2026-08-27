@@ -1,4 +1,8 @@
-import type { EventStore, EventId, StreamId } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type {
+  EventStore,
+  EventId,
+  StreamId,
+} from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -17,12 +21,15 @@ export type { EventStore as PersistentEventStore };
  * Events are evicted FIFO once `maxEvents` is reached.
  */
 export function createInMemoryEventStore(maxEvents = 1000): EventStore {
-  const store = new Map<EventId, { streamId: StreamId; message: JSONRPCMessage }>();
+  const store = new Map<
+    EventId,
+    { streamId: StreamId; message: JSONRPCMessage }
+  >();
   let seq = 0;
 
   return {
     async storeEvent(streamId, message) {
-      const id = String(++seq) as EventId;
+      const id = String(++seq);
       store.set(id, { streamId, message });
       if (store.size > maxEvents) {
         store.delete(store.keys().next().value!);
@@ -38,14 +45,11 @@ export function createInMemoryEventStore(maxEvents = 1000): EventStore {
       // Unknown or malformed Last-Event-ID (or one already evicted): replay
       // nothing rather than the whole buffer.
       const origin = store.get(lastEventId);
-      if (!origin) return '' as StreamId;
+      if (!origin) return '';
 
-      const afterSeq = parseInt(lastEventId as string, 10);
+      const afterSeq = parseInt(lastEventId, 10);
       for (const [id, { streamId, message }] of store) {
-        if (
-          streamId === origin.streamId &&
-          parseInt(id as string, 10) > afterSeq
-        ) {
+        if (streamId === origin.streamId && parseInt(id, 10) > afterSeq) {
           await send(id, message);
         }
       }

@@ -1,14 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { runToolMiddleware, createMockBackendClient } from '../testing.js';
-import type { ToolMiddleware } from '../core.js';
+import {
+  runToolMiddleware,
+  runListToolsMiddleware,
+  runResourceMiddleware,
+  createMockBackendClient,
+} from '../testing.js';
+import type {
+  ListToolsMiddleware,
+  ResourceMiddleware,
+  ToolMiddleware,
+} from '../core.js';
 import type {
   CallToolRequest,
-  CallToolResult,
+  ListToolsRequest,
+  ReadResourceRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 
 const callReq: CallToolRequest = {
   method: 'tools/call',
   params: { name: 'echo', arguments: {} },
+};
+
+const listReq: ListToolsRequest = { method: 'tools/list', params: {} };
+
+const readReq: ReadResourceRequest = {
+  method: 'resources/read',
+  params: { uri: 'res://a' },
 };
 
 describe('runToolMiddleware()', () => {
@@ -29,8 +46,7 @@ describe('runToolMiddleware()', () => {
   });
 
   it('throws when middleware returns the legacy { toolResult } shape', async () => {
-    const legacy: ToolMiddleware = async () =>
-      ({ toolResult: 'old' } as unknown as CallToolResult);
+    const legacy: ToolMiddleware = async () => ({ toolResult: 'old' });
 
     await expect(
       runToolMiddleware(legacy, callReq, async () => ({ content: [] })),
@@ -44,11 +60,85 @@ describe('runToolMiddleware()', () => {
       return next(req);
     };
 
-    await runToolMiddleware(
+    await runToolMiddleware(capture, callReq, async () => ({ content: [] }), {
+      requestId: 'abc-123',
+      transport: 'stdio',
+    });
+
+    expect(seenRequestId).toBe('abc-123');
+  });
+});
+
+describe('runListToolsMiddleware()', () => {
+  it('runs the middleware with a fresh default ProxyContext — no cast needed', async () => {
+    let seenRequestId: string | undefined;
+    const capture: ListToolsMiddleware = async (req, next, context) => {
+      seenRequestId = context.requestId;
+      return next(req);
+    };
+
+    const result = await runListToolsMiddleware(capture, listReq, async () => ({
+      tools: [],
+    }));
+
+    expect(result.tools).toEqual([]);
+    expect(seenRequestId).toBeTruthy();
+  });
+
+  it('forwards a custom ProxyContext to the middleware', async () => {
+    let seenRequestId: string | undefined;
+    const capture: ListToolsMiddleware = async (req, next, context) => {
+      seenRequestId = context.requestId;
+      return next(req);
+    };
+
+    await runListToolsMiddleware(
       capture,
-      callReq,
-      async () => ({ content: [] }),
-      { requestId: 'abc-123', transport: 'stdio' },
+      listReq,
+      async () => ({ tools: [] }),
+      {
+        requestId: 'abc-123',
+        transport: 'stdio',
+      },
+    );
+
+    expect(seenRequestId).toBe('abc-123');
+  });
+});
+
+describe('runResourceMiddleware()', () => {
+  it('runs the middleware with a fresh default ProxyContext — no cast needed', async () => {
+    let seenRequestId: string | undefined;
+    const capture: ResourceMiddleware = async (req, next, context) => {
+      seenRequestId = context.requestId;
+      return next(req);
+    };
+
+    const result = await runResourceMiddleware(capture, readReq, async () => ({
+      contents: [{ uri: 'res://a', text: 'body' }],
+    }));
+
+    expect(result.contents[0]).toMatchObject({ text: 'body' });
+    expect(seenRequestId).toBeTruthy();
+  });
+
+  it('forwards a custom ProxyContext to the middleware', async () => {
+    let seenRequestId: string | undefined;
+    const capture: ResourceMiddleware = async (req, next, context) => {
+      seenRequestId = context.requestId;
+      return next(req);
+    };
+
+    await runResourceMiddleware(
+      capture,
+      readReq,
+      async () => ({
+        contents: [],
+      }),
+      {
+        requestId: 'abc-123',
+        transport: 'stdio',
+      },
     );
 
     expect(seenRequestId).toBe('abc-123');
@@ -61,23 +151,32 @@ describe('createMockBackendClient()', () => {
       callToolResponse: { content: [{ type: 'text', text: 'static' }] },
     });
     const result = await backend.callTool({ name: 'x', arguments: {} });
-    expect((result.content as { text: string }[])[0]).toMatchObject({ text: 'static' });
+    expect((result.content as { text: string }[])[0]).toMatchObject({
+      text: 'static',
+    });
   });
 
   it('passes the call params to a factory callToolResponse', async () => {
-    let seen: { name: string; arguments?: Record<string, unknown> } | undefined;
+    let seen:
+      | { name: string; arguments?: Record<string, unknown> | undefined }
+      | undefined;
     const backend = createMockBackendClient({
       callToolResponse: (params) => {
-        seen = params as typeof seen;
+        seen = params;
         return { content: [{ type: 'text', text: `got:${params.name}` }] };
       },
     });
 
-    const result = await backend.callTool({ name: 'echo', arguments: { a: 1 } });
+    const result = await backend.callTool({
+      name: 'echo',
+      arguments: { a: 1 },
+    });
 
     expect(seen?.name).toBe('echo');
     expect(seen?.arguments).toEqual({ a: 1 });
-    expect((result.content as { text: string }[])[0]).toMatchObject({ text: 'got:echo' });
+    expect((result.content as { text: string }[])[0]).toMatchObject({
+      text: 'got:echo',
+    });
   });
 
   it('defaults capabilities to all three scopes', () => {
@@ -91,7 +190,13 @@ describe('createMockBackendClient()', () => {
 
   it('exposes user-supplied tools verbatim', async () => {
     const backend = createMockBackendClient({
-      tools: [{ name: 't', description: 'd', inputSchema: { type: 'object', properties: {} } }],
+      tools: [
+        {
+          name: 't',
+          description: 'd',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
     });
     const result = await backend.listTools();
     expect(result.tools).toHaveLength(1);

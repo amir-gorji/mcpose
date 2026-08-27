@@ -5,9 +5,11 @@
 import type {
   CallToolRequest,
   CallToolResult,
+  ListToolsRequest,
   ListToolsResult,
   ListResourcesResult,
   ListPromptsResult,
+  ReadResourceRequest,
   ReadResourceResult,
   Tool,
   Resource,
@@ -19,7 +21,11 @@ import type {
   ServerCapabilities,
 } from '@modelcontextprotocol/sdk/types.js';
 import { hasToolContent } from './core.js';
-import type { ToolMiddleware } from './core.js';
+import type {
+  ListToolsMiddleware,
+  ResourceMiddleware,
+  ToolMiddleware,
+} from './core.js';
 import type { BackendClient } from './backendClient.js';
 import { createProxyContext, type ProxyContext } from './proxyContext.js';
 
@@ -46,6 +52,38 @@ export async function runToolMiddleware(
   return result;
 }
 
+/**
+ * Runs a `ListToolsMiddleware` with a defaulted `ProxyContext`, so tests
+ * do not pass `undefined as never` for the context argument.
+ *
+ * `ListToolsResult` has no legacy variant, so unlike `runToolMiddleware`
+ * there is nothing to narrow and this never throws on shape.
+ */
+export async function runListToolsMiddleware(
+  mw: ListToolsMiddleware,
+  req: ListToolsRequest,
+  next: (req: ListToolsRequest) => Promise<ListToolsResult>,
+  context: ProxyContext = createProxyContext(),
+): Promise<ListToolsResult> {
+  return mw(req, next, context);
+}
+
+/**
+ * Runs a `ResourceMiddleware` with a defaulted `ProxyContext`.
+ *
+ * `ReadResourceResult` has no legacy variant, so unlike
+ * `runToolMiddleware` there is nothing to narrow and this never throws on
+ * shape.
+ */
+export async function runResourceMiddleware(
+  mw: ResourceMiddleware,
+  req: ReadResourceRequest,
+  next: (req: ReadResourceRequest) => Promise<ReadResourceResult>,
+  context: ProxyContext = createProxyContext(),
+): Promise<ReadResourceResult> {
+  return mw(req, next, context);
+}
+
 /** Config for mock backend client. */
 export interface MockBackendClientOptions {
   /** Default: tools/resources/prompts enabled */
@@ -57,8 +95,7 @@ export interface MockBackendClientOptions {
    * Default: `{ content: [{ type: 'text', text: 'mock response' }] }`
    */
   callToolResponse?:
-    | CallToolResult
-    | ((params: CallToolRequestParams) => CallToolResult);
+    CallToolResult | ((params: CallToolRequestParams) => CallToolResult);
   /** Default: `[]` */
   resources?: Resource[];
   /** Default: `{ contents: [{ uri: '', text: 'mock resource' }] }` */

@@ -39,7 +39,7 @@ type MiddlewarePipeline<Req, Res> = {
 export function compose<Req, Res>(
   middlewares: ReadonlyArray<Middleware<Req, Res>>,
 ): MiddlewarePipeline<Req, Res> {
-  return ((req, next, context: ProxyContext = createProxyContext()) => {
+  return (req, next, context: ProxyContext = createProxyContext()) => {
     let index = -1;
 
     const dispatch = (i: number, currentReq: Req): Promise<Res> => {
@@ -48,14 +48,16 @@ export function compose<Req, Res>(
       }
       index = i;
 
-      const fn: Middleware<Req, Res> =
-        i < middlewares.length ? middlewares[i]! : (r) => next(r);
+      // Past the end of the pipeline, the terminal handler runs.
+      const fn: Middleware<Req, Res> = middlewares[i] ?? ((r) => next(r));
 
-      return Promise.resolve(fn(currentReq, (r) => dispatch(i + 1, r), context));
+      return Promise.resolve(
+        fn(currentReq, (r) => dispatch(i + 1, r), context),
+      );
     };
 
     return dispatch(0, req);
-  }) as MiddlewarePipeline<Req, Res>;
+  };
 }
 
 /**

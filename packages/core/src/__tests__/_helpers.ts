@@ -10,9 +10,11 @@ export function makeMockBackend(
   }> = {},
 ): BackendClient {
   return {
-    getServerCapabilities: vi.fn().mockReturnValue(
-      overrides.capabilities ?? { tools: {}, resources: {}, prompts: {} },
-    ),
+    getServerCapabilities: vi
+      .fn()
+      .mockReturnValue(
+        overrides.capabilities ?? { tools: {}, resources: {}, prompts: {} },
+      ),
     listTools: vi.fn().mockResolvedValue({ tools: [] }),
     callTool: vi.fn().mockResolvedValue({ content: [] }),
     listResources: vi.fn().mockResolvedValue({ resources: [] }),
@@ -48,10 +50,14 @@ export function postOnFreshConnection(
   body: string,
 ): Promise<number> {
   return new Promise<number>((resolve, reject) => {
-    const req = http.request(url, { method: 'POST', agent: false, headers }, (res) => {
-      res.resume();
-      resolve(res.statusCode ?? 0);
-    });
+    const req = http.request(
+      url,
+      { method: 'POST', agent: false, headers },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      },
+    );
     req.on('error', reject);
     req.end(body);
   });

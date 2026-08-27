@@ -10,10 +10,13 @@ export type { AuditEvent, ReplayManifest };
  * pass a compliance assertion.
  *
  * This check is deliberately KEYLESS (the signing secret is not available
- * to tests): it catches reordering, renumbering, and duplicated entries,
- * but NOT a forgery rewritten consistently by a key-holder — for that,
- * recompute the chain with `verifyAuditChain(events, signingKey)` from
- * `@mcpose/audit`.
+ * to tests): it catches reordering, renumbering, duplicated entries, and
+ * head or middle deletion. It does NOT prove authenticity — a forger who
+ * rewrites every event and regenerates the chain hashes produces a document
+ * these checks accept without needing the signing secret at all. Tail
+ * truncation also passes this check alone; the manifest's `eventCount`
+ * is what catches it. For keyed verification, use
+ * `verifyAuditChain(events, signingKey)` from `@mcpose/audit`.
  */
 export function assertAuditChainIntegrity(events: AuditEvent[]): void {
   if (events.length === 0) {
@@ -24,9 +27,7 @@ export function assertAuditChainIntegrity(events: AuditEvent[]): void {
   }
 
   const seen = new Set<string>();
-  for (let i = 0; i < events.length; i++) {
-    const event = events[i];
-
+  for (const [i, event] of events.entries()) {
     if (event.replayManifestPosition !== i) {
       throw new Error(
         `Audit chain broken at index ${i}: replayManifestPosition is ${event.replayManifestPosition}, expected ${i}`,
@@ -79,15 +80,15 @@ export function assertReplayManifestValid(
     );
   }
 
-  for (let i = 0; i < events.length; i++) {
-    const proof = manifest.merkleProofs[i];
+  for (const [i, proof] of manifest.merkleProofs.entries()) {
     if (proof.index !== i) {
-      throw new Error(
-        `Merkle proof at index ${i} claims index ${proof.index}`,
-      );
+      throw new Error(`Merkle proof at index ${i} claims index ${proof.index}`);
     }
-    if (!verifyMerkleProof(events[i].chainHash, proof, manifest.merkleRoot)) {
-      throw new Error(`Merkle proof for event at index ${i} does not verify against root`);
+    // The lengths were just checked to be equal.
+    if (!verifyMerkleProof(events[i]!.chainHash, proof, manifest.merkleRoot)) {
+      throw new Error(
+        `Merkle proof for event at index ${i} does not verify against root`,
+      );
     }
   }
 }
@@ -118,10 +119,15 @@ export function assertPiiRedacted(event: AuditEvent, patterns: RegExp[]): void {
     return;
   }
 
-  const raw = JSON.stringify({ inputRaw: event.inputRaw, outputRaw: event.outputRaw });
+  const raw = JSON.stringify({
+    inputRaw: event.inputRaw,
+    outputRaw: event.outputRaw,
+  });
   for (const pattern of patterns) {
     if (pattern.test(raw)) {
-      throw new Error(`PII pattern ${pattern} found in audit event for tool "${event.tool}"`);
+      throw new Error(
+        `PII pattern ${pattern} found in audit event for tool "${event.tool}"`,
+      );
     }
   }
 }
@@ -141,8 +147,8 @@ export function assertDelegationHonored(event: AuditEvent): void {
       `Audit event for tool "${event.tool}" has no delegation chain — expected at least one delegating identity`,
     );
   }
-  for (let i = 0; i < chain.length; i++) {
-    if (!chain[i].sub) {
+  for (const [i, entry] of chain.entries()) {
+    if (!entry.sub) {
       throw new Error(`Delegation chain entry at index ${i} has no sub`);
     }
   }
