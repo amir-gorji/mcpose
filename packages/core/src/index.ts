@@ -23,6 +23,9 @@ export type {
 } from './hiddenTools.js';
 export { dispatcherAwareBlock } from './hiddenTools.js';
 
+export type { SanitizeToolDescriptionsOptions } from './sanitizeCatalog.js';
+export { sanitizeToolDescriptions } from './sanitizeCatalog.js';
+
 export type {
   ProxyOptions,
   HttpProxyOptions,

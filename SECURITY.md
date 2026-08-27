@@ -70,6 +70,14 @@ A name-only `hiddenTools` array cannot see through a dispatcher: an upstream met
 Hiding `update_issue` by name does nothing against `execute_sentry_tool({ name: 'update_issue' })`.
 If your upstream exposes a dispatcher, pass a `HiddenToolPredicate`; `dispatcherAwareBlock` covers the common case and fails closed on malformed target arguments ([ADR-0006](./docs/adr/0006-hidden-tools-accept-a-predicate.md)).
 
+## The tool catalog is an egress channel
+
+`tools/list` forwards upstream tool names, descriptions, and input/output schemas verbatim, and clients paste all of it into model context.
+Real upstreams leak org slugs and internal hostnames through description text, typically in embedded documentation URLs, and a prompt-injected agent can exfiltrate anything that reaches model context.
+`sanitizeToolDescriptions()` is the opt-in mitigation: a `ListToolsMiddleware` that strips http(s) URLs and any configured patterns from tool descriptions and from `description` fields nested in the schemas.
+Names and schema shapes are deliberately left intact, because clients route calls on them.
+See [ADR-0010](./docs/adr/0010-tool-catalog-egress-sanitizer.md).
+
 ## Network posture
 
 `startHttpProxy` binds `127.0.0.1` by default and treats a non-loopback bind as a deliberate opt-in ([ADR-0005](./docs/adr/0005-loopback-bind-by-default.md)).

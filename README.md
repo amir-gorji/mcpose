@@ -340,6 +340,14 @@ const enrichDescriptions: ListToolsMiddleware = async (req, next) => {
 
 `hiddenTools` stays authoritative: filtering is applied after this middleware too, so it cannot re-add a hidden tool.
 
+For the common security case, the shipped `sanitizeToolDescriptions()` middleware strips URLs and configured patterns from tool and schema descriptions, because the catalog is an egress channel into model context ([ADR-0010](./docs/adr/0010-tool-catalog-egress-sanitizer.md)):
+
+```ts
+listToolsMiddleware: [sanitizeToolDescriptions({ patterns: ['acme-corp'] })],
+```
+
+Place it last in the array so it sanitizes the output of other list middleware and local tools.
+
 ## Examples
 
 Runnable, commented examples live in [`examples/`](./examples/).
