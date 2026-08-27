@@ -133,6 +133,189 @@ describe('sanitizeToolDescriptions()', () => {
     expect(output.properties.url?.description).toBe('Link into ');
   });
 
+  it('strips plain http URLs too', async () => {
+    const upstream: ListToolsResult = {
+      tools: [
+        {
+          name: 't',
+          description: 'see http://internal.host/a for details',
+          inputSchema: { type: 'object' },
+        },
+      ],
+    };
+    const result = await run(sanitizeToolDescriptions(), upstream);
+    expect(result.tools[0]?.description).toBe('see  for details');
+  });
+
+  it('accepts a pattern that already carries the global flag', async () => {
+    const upstream: ListToolsResult = {
+      tools: [
+        {
+          name: 't',
+          description: 'a db-1 b db-2',
+          inputSchema: { type: 'object' },
+        },
+      ],
+    };
+    const result = await run(
+      sanitizeToolDescriptions({ patterns: [/db-\d/g] }),
+      upstream,
+    );
+    expect(result.tools[0]?.description).toBe('a  b ');
+  });
+
+  it('sanitizes descriptions inside schema arrays, keeping untouched siblings by reference', async () => {
+    const clean = { type: 'string' };
+    const untouchedEnum = ['x', 'y'];
+    const upstream: ListToolsResult = {
+      tools: [
+        {
+          name: 't',
+          inputSchema: {
+            type: 'object',
+            anyOf: [{ description: 'acme-corp branch' }, clean],
+            allOf: [
+              { description: 'acme-corp a' },
+              { description: 'acme-corp b' },
+            ],
+            enum: untouchedEnum,
+          },
+        },
+      ],
+    };
+    const result = await run(
+      sanitizeToolDescriptions({ patterns: ['acme-corp'] }),
+      upstream,
+    );
+    const schema = result.tools[0]?.inputSchema as unknown as {
+      anyOf: [{ description: string }, typeof clean];
+      allOf: [{ description: string }, { description: string }];
+      enum: string[];
+    };
+    expect(Array.isArray(schema.anyOf)).toBe(true);
+    expect(schema.anyOf[0].description).toBe(' branch');
+    expect(schema.anyOf[1]).toBe(clean);
+    expect(schema.allOf[0].description).toBe(' a');
+    expect(schema.allOf[1].description).toBe(' b');
+    expect(schema.enum).toBe(untouchedEnum);
+  });
+
+  it('sanitizes a tool whose only match is in outputSchema', async () => {
+    const upstream: ListToolsResult = {
+      tools: [
+        {
+          name: 't',
+          description: 'clean',
+          inputSchema: { type: 'object' },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'https://internal.host/x' },
+            },
+          },
+        },
+      ],
+    };
+    const result = await run(sanitizeToolDescriptions(), upstream);
+    const output = result.tools[0]?.outputSchema as unknown as NestedSchema;
+    expect(output.properties.url?.description).toBe('');
+  });
+
+  it('ignores string values outside description keys, non-string descriptions, and null nodes', async () => {
+    const upstream: ListToolsResult = {
+      tools: [
+        {
+          name: 't',
+          description: 'acme-corp tool',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              host: {
+                type: 'string',
+                pattern: 'acme-corp',
+                default: null,
+                description: { note: 'acme-corp' },
+              },
+            },
+          } as unknown as ListToolsResult['tools'][number]['inputSchema'],
+        },
+      ],
+    };
+    const result = await run(
+      sanitizeToolDescriptions({ patterns: ['acme-corp'] }),
+      upstream,
+    );
+    expect(result.tools[0]?.description).toBe(' tool');
+    const input = result.tools[0]?.inputSchema as unknown as {
+      properties: {
+        host: {
+          pattern: string;
+          default: null;
+          description: { note: string };
+        };
+      };
+    };
+    expect(input.properties.host.pattern).toBe('acme-corp');
+    expect(input.properties.host.default).toBeNull();
+    expect(input.properties.host.description).toEqual({ note: 'acme-corp' });
+  });
+
+  it('applies no hidden default patterns beyond the URL strip', async () => {
+    const upstream: ListToolsResult = {
+      tools: [
+        {
+          name: 't',
+          description: 'Stryker was here and stays',
+          inputSchema: { type: 'object' },
+        },
+      ],
+    };
+    const result = await run(sanitizeToolDescriptions(), upstream);
+    expect(result).toBe(upstream);
+  });
+
+  it('does not inject absent description or outputSchema keys when rebuilding', async () => {
+    const upstream: ListToolsResult = {
+      tools: [
+        {
+          name: 't',
+          inputSchema: {
+            type: 'object',
+            description: 'see https://internal.host/x',
+          },
+        },
+      ],
+    };
+    const result = await run(sanitizeToolDescriptions(), upstream);
+    const tool = result.tools[0] as object;
+    expect(
+      (result.tools[0]?.inputSchema as { description?: string }).description,
+    ).toBe('see ');
+    expect('description' in tool).toBe(false);
+    expect('outputSchema' in tool).toBe(false);
+  });
+
+  it('rebuilds only the changed tool in a mixed catalog', async () => {
+    const upstream: ListToolsResult = {
+      tools: [
+        {
+          name: 'clean',
+          description: 'nothing here',
+          inputSchema: { type: 'object' },
+        },
+        {
+          name: 'dirty',
+          description: 'see https://internal.host/x',
+          inputSchema: { type: 'object' },
+        },
+      ],
+    };
+    const result = await run(sanitizeToolDescriptions(), upstream);
+    expect(result).not.toBe(upstream);
+    expect(result.tools[0]).toBe(upstream.tools[0]);
+    expect(result.tools[1]?.description).toBe('see ');
+  });
+
   it('leaves names, titles, and schema structure intact', async () => {
     const result = await run();
     expect(result.tools[0]?.name).toBe('search_issues');

@@ -82,14 +82,10 @@ export function sanitizeToolDescriptions(
         : p,
     ),
   ];
+  // replaceAll treats a string pattern literally and requires the g flag
+  // on a RegExp, which the normalization above guarantees.
   const sanitize = (text: string): string =>
-    patterns.reduce<string>(
-      (acc, p) =>
-        typeof p === 'string'
-          ? acc.replaceAll(p, replacement)
-          : acc.replace(p, replacement),
-      text,
-    );
+    patterns.reduce<string>((acc, p) => acc.replaceAll(p, replacement), text);
 
   return async (req, next) => {
     const result = await next(req);
@@ -112,9 +108,9 @@ export function sanitizeToolDescriptions(
         ? tool
         : {
             ...tool,
-            ...(description !== tool.description && { description }),
-            ...(inputSchema !== tool.inputSchema && { inputSchema }),
-            ...(outputSchema !== tool.outputSchema && { outputSchema }),
+            ...(description === undefined ? {} : { description }),
+            inputSchema,
+            ...(outputSchema === undefined ? {} : { outputSchema }),
           };
     });
     return tools.some((tool, i) => tool !== result.tools[i])
