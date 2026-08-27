@@ -244,7 +244,8 @@ interface LocalTool {
   They appear in `tools/list` (first page only, so pagination does not duplicate them), route to their handler instead of the upstream, and still run through the full `toolMiddleware` pipeline, so audit and redaction apply to them.
   Precedence: `hiddenTools` beats a local tool, a local tool beats (and shadows) an upstream tool of the same name, and `passThroughTools` does not apply to local tools.
   The proxy advertises the `tools` capability when `localTools` is non-empty even if the upstream has none, and a duplicate local tool name throws at `createProxyServer`.
-  See [ADR-0007](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0007-local-tools-run-the-full-pipeline.md).
+  A handler runs with the proxy's own credentials, so attribute any outbound calls it makes via `outboundDelegationChain(context)`, and bound a call with `AbortSignal.any([ctx.signal, AbortSignal.timeout(ms)].filter((s) => s !== undefined))` inside the handler.
+  See [ADR-0007](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0007-local-tools-run-the-full-pipeline.md) and [ADR-0011](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0011-proxy-originated-call-attribution.md).
 - `stripRequestMeta` (default `true`) removes `params._meta` from every forwarded request, tool calls, resource reads, list and prompt calls alike, because MCP clients put correlation identifiers there (VS Code sends `progressToken`, a W3C `traceparent`, and `vscode/conversationId`) and the upstream is frequently a third party.
   The strip happens at the proxy boundary before the pipeline, so middleware can still add `_meta` deliberately, and it applies to pass-through tools too; disable only globally with `stripRequestMeta: false`.
   Progress relay is unaffected: the proxy reads the client's progress token from the request `extra`, and the SDK client stamps its own token on the upstream request.
@@ -357,6 +358,7 @@ type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
 Over stdio there is no session concept, which is why `@mcpose/audit` produces no `ReplayManifest` there.
 
 `delegatedFrom` records agent-to-agent handoffs, but core does not extract it from requests yet: it is populated only when your host application places it on the context.
+For the outbound direction, `outboundDelegationChain(context)` returns the oldest-first chain (delegatedFrom plus the current identity) to attach to calls the proxy makes on the caller's behalf, per [ADR-0011](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0011-proxy-originated-call-attribution.md).
 A delegation header spec is v3 work.
 
 ### Rejection reasons

@@ -29,5 +29,6 @@ Two `localTools` entries with the same name throw at `createProxyServer`, since 
 
 - Additive: proxies without `localTools` behave exactly as before.
 - A local tool's handler runs in-process with the proxy's own privileges; when it calls out to another system it does so with the proxy's credentials, not the client's. The attribution model for that is [#83](https://github.com/amir-gorji/mcpose/issues/83).
+  That model is now defined in ADR-0011.
 - The `tools` capability no longer implies the upstream has tools.
 - `listChanged` is still advertised only when the upstream supports it; local tools are static per server instance.

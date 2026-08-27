@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createProxyContext } from '../proxyContext.js';
+import type { Identity } from '../identity.js';
+import {
+  createProxyContext,
+  outboundDelegationChain,
+} from '../proxyContext.js';
 
 describe('createProxyContext()', () => {
   it('defaults to stdio transport with a generated request ID', () => {
@@ -69,5 +73,55 @@ describe('createProxyContext()', () => {
     const b = createProxyContext();
 
     expect(a.requestId).not.toEqual(b.requestId);
+  });
+});
+
+describe('outboundDelegationChain()', () => {
+  const identity = (sub: string): Identity => ({
+    sub,
+    type: 'agent',
+    roles: [],
+    claims: {},
+    resolvedAt: '2026-01-01T00:00:00Z',
+    source: 'custom',
+  });
+
+  it('appends identity after the existing delegatedFrom chain oldest-first', () => {
+    const root = identity('root');
+    const mid = identity('mid');
+    const caller = identity('caller');
+    const ctx = createProxyContext({
+      identity: caller,
+      delegatedFrom: [root, mid],
+    });
+
+    expect(outboundDelegationChain(ctx)).toEqual([root, mid, caller]);
+  });
+
+  it('returns an empty array when neither identity nor delegatedFrom is set', () => {
+    expect(outboundDelegationChain(createProxyContext())).toEqual([]);
+  });
+
+  it('returns only the identity when delegatedFrom is absent', () => {
+    const caller = identity('caller');
+    const ctx = createProxyContext({ identity: caller });
+
+    expect(outboundDelegationChain(ctx)).toEqual([caller]);
+  });
+
+  it('returns a fresh array and does not mutate or alias ctx.delegatedFrom', () => {
+    const root = identity('root');
+    const delegatedFrom = [root];
+    const ctx = createProxyContext({
+      identity: identity('caller'),
+      delegatedFrom,
+    });
+
+    const chain = outboundDelegationChain(ctx);
+
+    expect(chain).not.toBe(delegatedFrom);
+    expect(ctx.delegatedFrom).toBe(delegatedFrom);
+    expect(ctx.delegatedFrom).toEqual([root]);
+    expect(outboundDelegationChain(ctx)).not.toBe(chain);
   });
 });
