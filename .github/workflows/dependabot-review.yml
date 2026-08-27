@@ -1,0 +1,154 @@
+name: Dependabot Review
+
+# Reviews dependabot PRs autonomously: resolves conflicts, enforces AGENTS.md
+# policy (exact-pin tooling, pnpm-workspace.yaml overrides), runs the gate
+# chain, and holds back individual bumps that violate policy or break a gate
+# instead of blocking the whole PR. Never merges — see dependabot-merge.yml,
+# which merges once `mcpose CI` passes on a PR this workflow has approved.
+#
+# SECURITY NOTE: this job has contents:write + pull-requests:write and runs
+# `pnpm install` against dependabot's bump before those permissions are used.
+# A malicious new package version could get code execution here. Scoped to
+# dependabot-authored PRs only; see the security review in issue/PR history
+# for the accepted tradeoff.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  review:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          standalone: true
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Review, fix, and label
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: 'dependabot[bot]'
+          claude_args: |
+            --allowedTools "Bash(git:*),Bash(pnpm:*),Bash(rm:*),Bash(find:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh label list:*),Read,Edit,Write,Grep,Glob"
+            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr reopen:*),Bash(git push --force*),Bash(git rebase:*)"
+            --max-turns 60
+            --json-schema '{"type":"object","properties":{"status":{"type":"string","enum":["approved","held_back","blocked"]},"heldBack":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}},"required":["status","summary"]}'
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR BRANCH: ${{ github.event.pull_request.head.ref }}
+
+            This is a dependabot dependency-update PR, already checked out on
+            its branch. Review and land it autonomously, following this
+            repo's AGENTS.md and CLAUDE.md exactly (read them first). You
+            have git/pnpm/gh(read+comment+edit) access but NOT `gh pr merge`
+            — a separate workflow merges once CI is green on a PR you've
+            labeled `auto-merge-approved`.
+
+            Do this:
+
+            1. Fetch and merge `origin/main` into this branch. Resolve any
+               conflicts (package.json / pnpm-lock.yaml are the common case).
+               When a package.json conflict is just "both sides added a
+               devDependency", keep both.
+
+            2. Read AGENTS.md's exact-pin policy: `prettier`, `eslint`,
+               `typescript`, `publint`, `@arethetypeswrong/cli`, `knip`, and
+               `typescript-eslint` must stay pinned with no `^`/`~` prefix. If
+               this PR's bump left a range prefix on one of these, normalize
+               it back to an exact version string.
+
+            3. Read the `overrides:` block in `pnpm-workspace.yaml`. For each
+               dependency this PR bumps, check whether the new version
+               satisfies any override range that applies to it. If a bump
+               would violate an override, hold that one dependency back
+               (revert just its line in every package.json that has it back
+               to the pre-PR version) — never widen, remove, or edit the
+               override itself.
+
+            4. If you changed any package.json, regenerate the lockfile with
+               a full clean reinstall, not just `pnpm install`:
+               `rm -rf node_modules packages/*/node_modules examples/node_modules pnpm-lock.yaml && pnpm install`.
+               A plain `pnpm install` or `pnpm dedupe` can leave stale peer
+               resolutions in place and silently miss a real peer conflict —
+               this has bitten this exact automation before. Confirm with
+               `pnpm peers check` afterward; it must report no issues.
+
+            5. Run the full gate chain, in this order (build must run before
+               lint/ts:ci — type-aware linting needs the emitted .d.ts):
+               `pnpm format:check`, `pnpm build`, `pnpm lint`, `pnpm ts:ci`,
+               `pnpm test`, `pnpm knip`, `pnpm check:publish`.
+
+            6. If a gate fails for a reason clearly caused by one of the
+               bumped dependencies:
+               - If it's a held-back dependency from step 3, ignore it, it's
+                 already reverted.
+               - If it's a small, mechanical, test-shape fix (e.g. a mock
+                 needing an update for a new library API surface, with no
+                 behavior risk), apply the minimal fix.
+               - Otherwise, hold that dependency back too (same as step 3):
+                 revert its line(s), regenerate the lockfile (step 4), rerun
+                 the gates.
+               - Never weaken a test assertion to force a pass, and never
+                 edit `packages/audit/src` or `packages/testing/src` logic to
+                 route around a gate failure — if a bump needs that, hold it
+                 back instead. If you do need to touch those packages'
+                 source at all, load the `mcpose-audit-invariants` skill/doc
+                 first (`.claude/skills/mcpose-audit-invariants/SKILL.md`).
+               - Prefer holding back just the offending dependency over
+                 blocking the whole PR — most of these PRs bundle several
+                 independent bumps, and one bad one shouldn't sink the rest.
+
+            7. If you made any changes (conflict resolution, policy holds,
+               mechanical fixes), commit them. Reference this PR's number in
+               the commit message (e.g. "Hold back X, resolve conflict
+               (#${{ github.event.pull_request.number }})"), imperative
+               mood, no Co-Authored-By line. Push to this branch.
+
+            8. Decide the outcome:
+               - Nothing blocking (gates all green, whether or not you held
+                 anything back): label the PR `auto-merge-approved`.
+               - Something you can't safely resolve this way (ambiguous
+                 conflict, a gate failure not attributable to a simple
+                 hold-back, anything requiring a product/behavior judgment
+                 call): label the PR `needs-human-review` instead, and do
+                 NOT label it `auto-merge-approved`.
+               Add exactly one of these two labels with
+               `gh pr edit ${{ github.event.pull_request.number }} --add-label <label>`.
+
+            9. Leave exactly one PR comment
+               (`gh pr comment ${{ github.event.pull_request.number }}`)
+               summarizing what you did: what merged as-is, what you held
+               back and why, what you fixed and why, or why you're blocked.
+
+            Never touch `pnpm-workspace.yaml`, `CHANGELOG.md`, or anything
+            under `.github/workflows/`. Never force-push or rebase.
+
+            Return the required structured output when you're done.
+
+      - name: Write job summary
+        if: always() && steps.claude.outputs.structured_output
+        run: |
+          echo '${{ steps.claude.outputs.structured_output }}' | jq -r \
+            '"### Dependabot review result\n\n**Status:** \(.status)\n\n\(.summary)\n\n" + (if (.heldBack // []) | length > 0 then "**Held back:** " + ((.heldBack // []) | join(", ")) else "" end)' \
+            >> "$GITHUB_STEP_SUMMARY"
