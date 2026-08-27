@@ -52,7 +52,11 @@ jobs:
           PR_NUMBER: ${{ steps.number.outputs.value }}
           REPO: ${{ github.repository }}
         run: |
-          AUTHOR=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author --jq '.author.login')
+          # `gh pr view --json author` returns bot logins as "app/dependabot"
+          # (a gh CLI quirk), not "dependabot[bot]" as the REST API and the
+          # Actions webhook payload do. Use the REST API here so this
+          # actually matches.
+          AUTHOR=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.user.login')
           if [ "$AUTHOR" != "dependabot[bot]" ]; then
             echo "PR #$PR_NUMBER is not a dependabot PR, skipping."
             exit 0
