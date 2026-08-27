@@ -256,9 +256,10 @@ End to end, mcpose:
 - forwards prompts as-is when the upstream supports prompts,
 - applies `hiddenTools` filtering both before *and* after `listToolsMiddleware`, so middleware cannot re-add a hidden tool.
 
-One deliberate exception to transparency: `params._meta` is stripped from every forwarded request by default, because clients put correlation identifiers there (`traceparent`, `vscode/conversationId`) and the upstream is frequently a third party.
-Set `stripRequestMeta: false` to restore verbatim forwarding.
-See [ADR-0008](./docs/adr/0008-strip-request-meta.md).
+One deliberate exception to transparency, in both directions: `params._meta` is stripped from every forwarded request, and top-level `_meta` from every upstream result, by default.
+Clients put correlation identifiers in request `_meta` (`traceparent`, `vscode/conversationId`) and the upstream is frequently a third party; upstreams stamp their own into result `_meta` (the SDK stamps `io.modelcontextprotocol/related-task`) and the client is a third party to those.
+Set `stripRequestMeta: false` / `stripResultMeta: false` to restore verbatim forwarding.
+See [ADR-0008](./docs/adr/0008-strip-request-meta.md) and [ADR-0009](./docs/adr/0009-strip-result-meta.md).
 
 ## Guides
 
@@ -267,7 +268,7 @@ See [ADR-0008](./docs/adr/0008-strip-request-meta.md).
 The origin use case: a financial-grade MCP server where every response must be scrubbed of PII before it reaches the LLM *or* the audit log.
 
 ```ts
-import { hasToolContent, startHttpProxy } from 'mcpose';
+import { mapToolResult, startHttpProxy } from 'mcpose';
 import type { ToolMiddleware } from 'mcpose';
 import {
   createAuditMiddleware,
@@ -278,18 +279,17 @@ import {
 // Supplied by your application: backend, auditLog, manifestStore, extractJwt.
 
 function createPiiMiddleware(patterns: RegExp[]): ToolMiddleware {
-  return async (req, next) => {
-    const result = await next(req);
-    if (!hasToolContent(result)) return result;
-    return {
-      ...result,
-      content: result.content.map((item) =>
-        item.type === 'text'
-          ? { ...item, text: patterns.reduce((t, re) => t.replace(re, '[REDACTED]'), item.text) }
-          : item,
-      ),
-    };
-  };
+  const scrub = (text: string) =>
+    patterns.reduce((t, re) => t.replace(re, '[REDACTED]'), text);
+  // mapToolResult requires a handler per payload channel (text blocks,
+  // non-text blocks, structuredContent), so nothing slips through unmapped.
+  return async (req, next) =>
+    mapToolResult(await next(req), {
+      onText: (block) => ({ ...block, text: scrub(block.text) }),
+      onOther: () => null, // drop images/audio/resources we cannot scrub
+      onStructured: (structured) =>
+        JSON.parse(scrub(JSON.stringify(structured))),
+    });
 }
 
 const auditHandle = createAuditMiddleware({
@@ -340,6 +340,14 @@ const enrichDescriptions: ListToolsMiddleware = async (req, next) => {
 
 `hiddenTools` stays authoritative: filtering is applied after this middleware too, so it cannot re-add a hidden tool.
 
+For the common security case, the shipped `sanitizeToolDescriptions()` middleware strips URLs and configured patterns from tool and schema descriptions, because the catalog is an egress channel into model context ([ADR-0010](./docs/adr/0010-tool-catalog-egress-sanitizer.md)):
+
+```ts
+listToolsMiddleware: [sanitizeToolDescriptions({ patterns: ['acme-corp'] })],
+```
+
+Place it last in the array so it sanitizes the output of other list middleware and local tools.
+
 ## Examples
 
 Runnable, commented examples live in [`examples/`](./examples/).
@@ -365,7 +373,7 @@ Each package's README is the canonical reference for its own exports, and each i
 
 | Package | Reference covers |
 |---|---|
-| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `ProxyOptions` / `HttpProxyOptions` / `LocalTool` / `HiddenToolPredicate` / `RejectionReason` types. |
+| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `mapToolResult`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `ProxyOptions` / `HttpProxyOptions` / `LocalTool` / `HiddenToolPredicate` / `RejectionReason` types. |
 | [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware`, `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` schemas. |
 | [`@mcpose/testing`](./packages/testing/README.md#api) | `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`, each with what it does and does not prove. |
 

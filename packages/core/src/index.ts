@@ -7,7 +7,7 @@ export { createBackendClient } from './backendClient.js';
 export type { Identity } from './identity.js';
 
 export type { ProxyContext } from './proxyContext.js';
-export { createProxyContext } from './proxyContext.js';
+export { createProxyContext, outboundDelegationChain } from './proxyContext.js';
 
 export type { TelemetryEvent } from './telemetry.js';
 
@@ -23,6 +23,9 @@ export type {
 } from './hiddenTools.js';
 export { dispatcherAwareBlock } from './hiddenTools.js';
 
+export type { SanitizeToolDescriptionsOptions } from './sanitizeCatalog.js';
+export { sanitizeToolDescriptions } from './sanitizeCatalog.js';
+
 export type {
   ProxyOptions,
   HttpProxyOptions,
@@ -30,9 +33,11 @@ export type {
   ToolMiddleware,
   ResourceMiddleware,
   ListToolsMiddleware,
+  ToolResultHandlers,
 } from './core.js';
 export {
   hasToolContent,
+  mapToolResult,
   createProxyServer,
   startProxy,
   startHttpProxy,

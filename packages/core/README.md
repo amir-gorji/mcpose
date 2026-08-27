@@ -153,9 +153,11 @@ Behavior worth knowing before you deploy it:
 | `createProxyContext(overrides?)` | Construct a `ProxyContext`. Useful in tests. |
 | `createInMemoryEventStore()` | Default SSE reconnect event store; swap for a `PersistentEventStore`. |
 | `hasToolContent(result)` | Type guard narrowing `CompatibilityCallToolResult` to `CallToolResult`. |
+| `mapToolResult(result, handlers)` | Map every payload channel of a tool result (text blocks, non-text blocks, `structuredContent`) through required handlers, so a redaction cannot silently miss one. |
 | `dispatcherAwareBlock(options)` | `HiddenToolPredicate` blocking hidden tools both directly and through dispatcher (meta) tools. Fail-closed. |
+| `sanitizeToolDescriptions(options?)` | `ListToolsMiddleware` stripping URLs and configured patterns from tool and schema descriptions, because the catalog is an egress channel into model context. |
 
-**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
+**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ToolResultHandlers`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `SanitizeToolDescriptionsOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
 
 `PersistentEventStore` is an alias of the SDK's `EventStore` type, so any SDK-compatible store plugs in directly.
 
@@ -213,6 +215,7 @@ interface ProxyOptions {
   hiddenResources?:      ReadonlyArray<string>;
   localTools?:           ReadonlyArray<LocalTool>;
   stripRequestMeta?:     boolean;  // Default: true
+  stripResultMeta?:      boolean;  // Default: true
   onTelemetry?:          (event: TelemetryEvent) => void;
 }
 
@@ -232,17 +235,25 @@ interface LocalTool {
   The predicate receives `undefined` args during list filtering and always an object at call time, so it can keep the dispatcher listed while failing closed on a malformed call.
   `dispatcherAwareBlock({ tools, dispatchers, argPath })` implements the common case and blocks whenever the target name is missing or is not a string.
   See [ADR-0006](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0006-hidden-tools-accept-a-predicate.md).
+- `sanitizeToolDescriptions({ patterns?, replacement? })` builds a `ListToolsMiddleware` that strips http(s) URLs, plus any configured literal strings or regexes, from tool descriptions and from `description` fields nested in `inputSchema` / `outputSchema`, because the catalog is forwarded verbatim into model context and real upstreams leak org slugs and internal hostnames there.
+  Names, titles, and schema structure stay intact because clients route on them; place it last in `listToolsMiddleware` so it sanitizes the output of other list middleware and local tools.
+  See [ADR-0010](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0010-tool-catalog-egress-sanitizer.md).
 - `passThroughTools` / `passThroughResources` skip transforming middleware, but middleware wrapped in `markPassThroughObserver()` still runs for them.
   A tool that is both hidden and pass-through stays hidden.
 - `localTools` are tools the proxy implements itself.
   They appear in `tools/list` (first page only, so pagination does not duplicate them), route to their handler instead of the upstream, and still run through the full `toolMiddleware` pipeline, so audit and redaction apply to them.
   Precedence: `hiddenTools` beats a local tool, a local tool beats (and shadows) an upstream tool of the same name, and `passThroughTools` does not apply to local tools.
   The proxy advertises the `tools` capability when `localTools` is non-empty even if the upstream has none, and a duplicate local tool name throws at `createProxyServer`.
-  See [ADR-0007](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0007-local-tools-run-the-full-pipeline.md).
+  A handler runs with the proxy's own credentials, so attribute any outbound calls it makes via `outboundDelegationChain(context)`, and bound a call with `AbortSignal.any([ctx.signal, AbortSignal.timeout(ms)].filter((s) => s !== undefined))` inside the handler.
+  See [ADR-0007](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0007-local-tools-run-the-full-pipeline.md) and [ADR-0011](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0011-proxy-originated-call-attribution.md).
 - `stripRequestMeta` (default `true`) removes `params._meta` from every forwarded request, tool calls, resource reads, list and prompt calls alike, because MCP clients put correlation identifiers there (VS Code sends `progressToken`, a W3C `traceparent`, and `vscode/conversationId`) and the upstream is frequently a third party.
   The strip happens at the proxy boundary before the pipeline, so middleware can still add `_meta` deliberately, and it applies to pass-through tools too; disable only globally with `stripRequestMeta: false`.
   Progress relay is unaffected: the proxy reads the client's progress token from the request `extra`, and the SDK client stamps its own token on the upstream request.
   See [ADR-0008](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0008-strip-request-meta.md).
+- `stripResultMeta` (default `true`) is the response-direction mirror: top-level `_meta` is removed from every result returned from the upstream, because upstreams stamp correlation identifiers there (the SDK stamps `io.modelcontextprotocol/related-task`) and the client is a third party to them.
+  The strip happens at the upstream boundary inside the innermost `next`, so middleware sees the stripped result and middleware-added `_meta` still reaches the client.
+  Local tool results and nested `_meta` (per-tool in `tools[]`, per-block in `content`) are untouched; disable only globally with `stripResultMeta: false`.
+  See [ADR-0009](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0009-strip-result-meta.md).
 - `onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
   Results with `isError: true` are reported as outcome `'error'`, and a throwing sink is logged but never fails the call.
   An OpenTelemetry adapter (`@mcpose/otel`) is planned for v3.
@@ -347,6 +358,7 @@ type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
 Over stdio there is no session concept, which is why `@mcpose/audit` produces no `ReplayManifest` there.
 
 `delegatedFrom` records agent-to-agent handoffs, but core does not extract it from requests yet: it is populated only when your host application places it on the context.
+For the outbound direction, `outboundDelegationChain(context)` returns the oldest-first chain (delegatedFrom plus the current identity) to attach to calls the proxy makes on the caller's behalf, per [ADR-0011](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0011-proxy-originated-call-attribution.md).
 A delegation header spec is v3 work.
 
 ### Rejection reasons

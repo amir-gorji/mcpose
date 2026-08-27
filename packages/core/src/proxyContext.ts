@@ -17,6 +17,19 @@ export interface ProxyContext {
 }
 
 /**
+ * Canonical oldest-first delegation chain a host attaches to outbound calls
+ * made on behalf of the inbound caller (ADR-0011). Returns a fresh array and
+ * never mutates or aliases `ctx.delegatedFrom`, because the audit middleware
+ * reads the same context object when recording the inbound call.
+ */
+export function outboundDelegationChain(ctx: ProxyContext): Identity[] {
+  return [
+    ...(ctx.delegatedFrom ?? []),
+    ...(ctx.identity === undefined ? [] : [ctx.identity]),
+  ];
+}
+
+/**
  * Creates a middleware context with a fresh request ID.
  *
  * Every override may be passed explicitly as `undefined` — it means "not

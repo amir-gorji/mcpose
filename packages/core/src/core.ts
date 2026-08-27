@@ -24,6 +24,8 @@ import {
   type CallToolRequestParams,
   type CallToolResult,
   type CompatibilityCallToolResult,
+  type ContentBlock,
+  type TextContent,
   type ReadResourceRequest,
   type ReadResourceResult,
   type ServerCapabilities,
@@ -65,13 +67,82 @@ export type ResourceMiddleware = Middleware<
 export type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
 
 /**
- * Narrows `CompatibilityCallToolResult` to `CallToolResult` (has `.content` array).
- * Both union members carry `[x: string]: unknown`, so this avoids unsafe casts.
+ * The result channels of a `CallToolResult` — everything a redaction or
+ * transform middleware must account for:
+ *
+ * 1. `content` blocks (text, image, audio, resource link, embedded
+ *    resource), each carrying its own block-level `_meta`,
+ * 2. `structuredContent`, the machine-readable mirror of the content,
+ * 3. result-level `_meta`,
+ * 4. `isError`,
+ * 5. unknown extra keys via the index signature.
+ *
+ * Redaction that maps only `.content` misses 2, 3, and the non-text
+ * members of 1. Use {@link mapToolResult} to cover every payload channel
+ * by construction; channel 3 is stripped at the proxy boundary by default
+ * via `ProxyOptions.stripResultMeta` (ADR-0009).
+ *
+ * This guard narrows `CompatibilityCallToolResult` to `CallToolResult`
+ * (has `.content` array). Both union members carry `[x: string]: unknown`,
+ * so this avoids unsafe casts.
  */
 export function hasToolContent(
   r: CompatibilityCallToolResult,
 ): r is CallToolResult {
   return Array.isArray(r.content);
+}
+
+/**
+ * Handlers for {@link mapToolResult}, one per payload channel. All three
+ * are required, so forgetting a channel is a compile error rather than a
+ * silent leak.
+ */
+export interface ToolResultHandlers {
+  /** Maps a text content block. Return `null` to drop the block. */
+  onText: (block: TextContent) => ContentBlock | null;
+  /**
+   * Maps a non-text content block (image, audio, resource link, embedded
+   * resource). Return `null` to drop the block.
+   */
+  onOther: (block: Exclude<ContentBlock, TextContent>) => ContentBlock | null;
+  /**
+   * Maps `structuredContent`. Called only when the field is present.
+   * Return `undefined` to remove the field entirely.
+   */
+  onStructured: (
+    structured: Record<string, unknown>,
+  ) => Record<string, unknown> | undefined;
+}
+
+/**
+ * Maps every payload channel of a tool result through the given handlers.
+ *
+ * The legacy `{ toolResult }` shape (protocol 2024-10-07) is returned
+ * untouched. `isError`, result-level `_meta`, and unknown extra keys are
+ * preserved by spread — result-level `_meta` needs no handler because the
+ * proxy strips it by default (`stripResultMeta`, ADR-0009); with
+ * `stripResultMeta: false` forwarding it is the consumer's explicit choice.
+ */
+export function mapToolResult(
+  result: CompatibilityCallToolResult,
+  handlers: ToolResultHandlers,
+): CompatibilityCallToolResult {
+  if (!hasToolContent(result)) return result;
+  const content = result.content
+    .map((block) =>
+      block.type === 'text' ? handlers.onText(block) : handlers.onOther(block),
+    )
+    .filter((block): block is ContentBlock => block !== null);
+  const structured =
+    result.structuredContent === undefined
+      ? undefined
+      : handlers.onStructured(result.structuredContent);
+  const { structuredContent: _dropped, ...rest } = result;
+  return {
+    ...rest,
+    content,
+    ...(structured === undefined ? {} : { structuredContent: structured }),
+  };
 }
 
 /** HTTP transport options for {@link startHttpProxy}. */
@@ -282,6 +353,25 @@ export interface ProxyOptions {
   stripRequestMeta?: boolean;
 
   /**
+   * Strips top-level `_meta` from every result the proxy returns from the
+   * upstream (tool calls, resource reads, list and prompt calls).
+   * Default: `true`.
+   *
+   * The response-direction mirror of {@link stripRequestMeta}: upstreams
+   * stamp correlation identifiers there (the SDK stamps
+   * `io.modelcontextprotocol/related-task`), and the client is a third
+   * party to them. The strip happens at the upstream boundary, inside the
+   * innermost `next`, so middleware sees the stripped result and any
+   * `_meta` middleware adds deliberately still reaches the client.
+   *
+   * Local tool results are not stripped (they have no upstream), and
+   * nested `_meta` (per-tool in `tools[]`, per-block in `content`) is
+   * untouched. Applies to pass-through tools and resources too; disable
+   * only globally with `false`. See ADR-0009.
+   */
+  stripResultMeta?: boolean;
+
+  /**
    * Tools the proxy implements itself. Local tools appear in `tools/list`
    * (first page only, so pagination does not duplicate them) and route to
    * their handler instead of the upstream, from inside the innermost
@@ -460,6 +550,20 @@ function stripParamsMeta<
 }
 
 /**
+ * Removes top-level `_meta` from an upstream result at the proxy boundary,
+ * inside the innermost `next`, so middleware sees the stripped result and
+ * middleware-added `_meta` still reaches the client. Nested `_meta`
+ * (per-tool in `tools[]`, per-block in `content`) is untouched.
+ * Identity function when there is nothing to strip.
+ */
+function stripTopLevelMeta<Res extends { _meta?: unknown }>(res: Res): Res {
+  if (!('_meta' in res)) return res;
+  const { _meta: _stripped, ...rest } = res;
+  // Omit<Res, '_meta'> still satisfies Res: `_meta` is optional.
+  return rest as Res;
+}
+
+/**
  * Validates and indexes `localTools`. Throws on a duplicate name: there is
  * no correct way to pick one, and silently keeping the last would route
  * calls to a handler the configuration does not obviously name.
@@ -618,6 +722,11 @@ export function createProxyServer(
   >(
     req: Req,
   ): Req => (stripMeta ? stripParamsMeta(req) : req);
+  // The response-direction mirror: applied to every upstream result at the
+  // innermost `next`, never to local tool results (they have no upstream).
+  const stripResMeta = options.stripResultMeta !== false;
+  const stripResult = <Res extends { _meta?: unknown }>(res: Res): Res =>
+    stripResMeta ? stripTopLevelMeta(res) : res;
   const passThroughToolSet = new Set(options.passThroughTools ?? []);
   const hiddenResourceSet = new Set(options.hiddenResources ?? []);
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
@@ -648,7 +757,9 @@ export function createProxyServer(
         req,
         async (currentReq) => {
           const upstreamResult = upstreamHasTools
-            ? await backend.listTools(currentReq.params, requestOptions)
+            ? stripResult(
+                await backend.listTools(currentReq.params, requestOptions),
+              )
             : { tools: [] };
           if (!localToolMap.size) {
             return filterHiddenTools(upstreamResult, isHiddenTool);
@@ -728,7 +839,10 @@ export function createProxyServer(
         : localTool !== undefined
           ? (r) => localTool.handler(r.params, context)
           : upstreamHasTools
-            ? (r) => backend.callTool(r.params, undefined, requestOptions)
+            ? async (r) =>
+                stripResult(
+                  await backend.callTool(r.params, undefined, requestOptions),
+                )
             : async () => {
                 // Tools-less upstream: reject inside the pipeline rather
                 // than forwarding to an upstream that cannot serve it.
@@ -762,9 +876,11 @@ export function createProxyServer(
     server.setRequestHandler(
       ListResourcesRequestSchema,
       async (rawReq, extra) => {
-        const result = await backend.listResources(
-          stripRequest(rawReq).params,
-          createRequestOptions(extra),
+        const result = stripResult(
+          await backend.listResources(
+            stripRequest(rawReq).params,
+            createRequestOptions(extra),
+          ),
         );
         if (!hiddenResourceSet.size) return result;
         return {
@@ -790,11 +906,13 @@ export function createProxyServer(
         );
       }
       if (passThroughResourceSet.has(uri)) {
-        return backend.readResource(req.params, requestOptions);
+        return backend
+          .readResource(req.params, requestOptions)
+          .then(stripResult);
       }
       return resourcePipeline(
         req,
-        (r) => backend.readResource(r.params, requestOptions),
+        (r) => backend.readResource(r.params, requestOptions).then(stripResult),
         context,
       );
     });
@@ -804,17 +922,15 @@ export function createProxyServer(
 
   if (capabilities.prompts) {
     server.setRequestHandler(ListPromptsRequestSchema, (rawReq, extra) =>
-      backend.listPrompts(
-        stripRequest(rawReq).params,
-        createRequestOptions(extra),
-      ),
+      backend
+        .listPrompts(stripRequest(rawReq).params, createRequestOptions(extra))
+        .then(stripResult),
     );
 
     server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) =>
-      backend.getPrompt(
-        stripRequest(rawReq).params,
-        createRequestOptions(extra),
-      ),
+      backend
+        .getPrompt(stripRequest(rawReq).params, createRequestOptions(extra))
+        .then(stripResult),
     );
   }
 
