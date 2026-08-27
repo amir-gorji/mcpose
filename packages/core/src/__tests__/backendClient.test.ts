@@ -5,14 +5,12 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   StreamableHTTPClientTransport: vi.fn(),
 }));
 
-// Backed by a class rather than an arrow function: createBackendClient calls
-// `new Client(...)`, and only `function`/`class` implementations are constructible.
+// A class, not an arrow function: createBackendClient calls `new Client(...)`,
+// and only `function`/`class` implementations are constructible.
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
-  Client: vi.fn(
-    class {
-      connect = vi.fn().mockResolvedValue(undefined);
-    },
-  ),
+  Client: class {
+    connect = vi.fn().mockResolvedValue(undefined);
+  },
 }));
 
 import { createBackendClient } from '../backendClient.js';
