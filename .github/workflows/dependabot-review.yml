@@ -148,7 +148,12 @@ jobs:
 
       - name: Write job summary
         if: always() && steps.claude.outputs.structured_output
+        env:
+          # Passed as an env var, not interpolated into the script body:
+          # this is Claude's freeform output and may contain quotes or
+          # other shell metacharacters.
+          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
         run: |
-          echo '${{ steps.claude.outputs.structured_output }}' | jq -r \
+          printf '%s' "$STRUCTURED_OUTPUT" | jq -r \
             '"### Dependabot review result\n\n**Status:** \(.status)\n\n\(.summary)\n\n" + (if (.heldBack // []) | length > 0 then "**Held back:** " + ((.heldBack // []) | join(", ")) else "" end)' \
             >> "$GITHUB_STEP_SUMMARY"
