@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createProxyServer,
   type ListToolsMiddleware,
+  type PromptMiddleware,
   type ToolMiddleware,
 } from '../core.js';
 import type { BackendClient } from '../backendClient.js';
@@ -517,6 +518,12 @@ describe('createProxyServer() — capability mirroring', () => {
     await expect(invokeHandler(server, 'prompts/list')).rejects.toThrow(
       'No handler registered for method: prompts/list',
     );
+    // No prompts capability means no prompts/get handler either: the SDK
+    // refuses to register one, so there is no pipeline to reject inside
+    // and nothing for audit to record (ADR-0014).
+    await expect(invokeHandler(server, 'prompts/get')).rejects.toThrow(
+      'No handler registered for method: prompts/get',
+    );
     await expect(invokeHandler(server, 'resources/list')).rejects.toThrow(
       'No handler registered for method: resources/list',
     );
@@ -924,5 +931,92 @@ describe('createProxyServer() — telemetry outcomes', () => {
     });
     expect(consoleSpy).toHaveBeenCalled();
     consoleSpy.mockRestore();
+  });
+});
+
+describe('createProxyServer() — promptMiddleware', () => {
+  it('runs around prompts/get in 1:1 mode', async () => {
+    const backend = makeMockBackend();
+    const seen: string[] = [];
+    const mw: PromptMiddleware = async (req, next) => {
+      seen.push(req.params.name);
+      const result = await next(req);
+      return { ...result, description: 'wrapped' };
+    };
+    const server = createProxyServer(backend, {
+      promptMiddleware: [mw],
+      name: 'test-server',
+    });
+
+    const result = (await invokeHandler(server, 'prompts/get', {
+      name: 'brief',
+    })) as { description?: string };
+
+    expect(seen).toEqual(['brief']);
+    expect(result.description).toBe('wrapped');
+    expect(backend.getPrompt).toHaveBeenCalledWith(
+      { name: 'brief' },
+      undefined,
+    );
+  });
+
+  it('runs in response-processing order (first = innermost), per ADR-0002', async () => {
+    const backend = makeMockBackend();
+    const order: string[] = [];
+
+    const innerMW: PromptMiddleware = async (req, next) => {
+      order.push('inner-enter');
+      const result = await next(req);
+      order.push('inner-exit');
+      return result;
+    };
+    const outerMW: PromptMiddleware = async (req, next) => {
+      order.push('outer-enter');
+      const result = await next(req);
+      order.push('outer-exit');
+      return result;
+    };
+
+    const server = createProxyServer(backend, {
+      promptMiddleware: [innerMW, outerMW],
+      name: 'test-server',
+    });
+
+    await invokeHandler(server, 'prompts/get', { name: 'brief' });
+
+    expect(order).toEqual([
+      'outer-enter',
+      'inner-enter',
+      'inner-exit',
+      'outer-exit',
+    ]);
+  });
+
+  it('sees the stripped request and the stripped upstream result', async () => {
+    const backend = makeMockBackend();
+    vi.mocked(backend.getPrompt).mockResolvedValue({
+      messages: [],
+      _meta: { 'vendor/trace': 'abc' },
+    });
+    let observedReq: unknown;
+    let observedResult: unknown;
+    const mw: PromptMiddleware = async (req, next) => {
+      observedReq = req.params;
+      const result = await next(req);
+      observedResult = result;
+      return result;
+    };
+    const server = createProxyServer(backend, {
+      promptMiddleware: [mw],
+      name: 'test-server',
+    });
+
+    await invokeHandler(server, 'prompts/get', {
+      name: 'brief',
+      _meta: { 'vscode/conversationId': 'c1' },
+    });
+
+    expect(observedReq).not.toHaveProperty('_meta');
+    expect(observedResult).not.toHaveProperty('_meta');
   });
 });

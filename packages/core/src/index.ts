@@ -38,6 +38,7 @@ export type {
   LocalTool,
   ToolMiddleware,
   ResourceMiddleware,
+  PromptMiddleware,
   ListToolsMiddleware,
   ToolResultHandlers,
 } from './core.js';

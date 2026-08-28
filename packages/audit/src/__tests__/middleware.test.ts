@@ -562,3 +562,254 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
     expect(() => aesGcmDecrypt(second.inputEncrypted, key0, aad0)).toThrow();
   });
 });
+
+// ── Prompt calls (ADR-0014) ──────────────────────────────────────────────────
+
+/**
+ * Shaped like an McpError from rejectionMcpError() without importing the SDK:
+ * the middleware duck-types `err.data.rejectionReason`.
+ */
+function rejectionError(reason: string, message: string): Error {
+  return Object.assign(new Error(message), {
+    code: -32601,
+    data: { rejectionReason: reason },
+  });
+}
+
+function makePromptReq(name: string, args: Record<string, string> = {}) {
+  return {
+    method: 'prompts/get' as const,
+    params: { name, arguments: args },
+  };
+}
+
+const promptResult = { messages: [] };
+
+describe('createAuditMiddleware — prompt calls', () => {
+  it("marks prompt events with kind 'prompt' and leaves tool events without the key", async () => {
+    const events: AuditEvent[] = [];
+    const { middleware, promptMiddleware } = createAuditMiddleware(
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+    const ctx = makeCtx('sess-kind');
+
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+    await promptMiddleware(
+      makePromptReq('brief'),
+      async () => promptResult,
+      ctx,
+    );
+
+    expect('kind' in events[0]!).toBe(false);
+    expect(events[1]!.kind).toBe('prompt');
+    // The prompt name lands in `tool`; `kind` is what tells them apart.
+    expect(events[1]!.tool).toBe('brief');
+  });
+
+  it('resolves sensitivity from the prompt name, failing closed for an unknown one', async () => {
+    const events: AuditEvent[] = [];
+    const sensitivityResolver = vi.fn(
+      createSensitivityResolver({ search: 'low' }),
+    );
+    const { promptMiddleware } = createAuditMiddleware(
+      makeOptions({
+        sensitivityResolver,
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+
+    // The sentinel carries `-` and `!`, neither of which is in the base64
+    // alphabet, so it can never collide with a ciphertext substring.
+    const sentinel = 'q3-secret-plaintext!';
+    await promptMiddleware(
+      makePromptReq('brief', { topic: sentinel }),
+      async () => promptResult,
+      makeCtx('sess-prompt-tier'),
+    );
+
+    expect(sensitivityResolver).toHaveBeenCalledWith('brief', identity, {
+      topic: sentinel,
+    });
+    const event = events[0]!;
+    expect(event.sensitivityTier).toBe('high');
+    if (event.sensitivityTier === 'high') {
+      expect(typeof event.inputEncrypted).toBe('string');
+      expect(typeof event.outputEncrypted).toBe('string');
+      expect('inputRaw' in event).toBe(false);
+      expect('outputRaw' in event).toBe(false);
+      // The plaintext arguments must not survive anywhere on the event.
+      expect(JSON.stringify(event)).not.toContain(sentinel);
+    }
+  });
+
+  it('audits a rejected prompt call with its rejectionReason', async () => {
+    const events: AuditEvent[] = [];
+    const { promptMiddleware } = createAuditMiddleware(
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+
+    await expect(
+      promptMiddleware(
+        makePromptReq('brief'),
+        async () => {
+          throw rejectionError('BACKEND_UNROUTABLE', 'Prompt not found: brief');
+        },
+        makeCtx('sess-prompt-reject'),
+      ),
+    ).rejects.toThrow('Prompt not found: brief');
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.kind).toBe('prompt');
+    expect(events[0]!.outcome).toBe('rejected');
+    expect(events[0]!.rejectionReason).toBe('BACKEND_UNROUTABLE');
+  });
+
+  it('interleaves tool and prompt events in one session chain, sequentially', async () => {
+    const { verifyAuditChain } = await import('../verify.js');
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware, promptMiddleware } = createAuditMiddleware(
+      makeOptions({
+        signingKey,
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+    const ctx = makeCtx('sess-interleaved');
+
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+    await promptMiddleware(
+      makePromptReq('brief'),
+      async () => promptResult,
+      ctx,
+    );
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+    await promptMiddleware(
+      makePromptReq('summary'),
+      async () => promptResult,
+      ctx,
+    );
+
+    expect(events.map((e) => e.replayManifestPosition)).toEqual([0, 1, 2, 3]);
+    expect(events.map((e) => e.kind)).toEqual([
+      undefined,
+      'prompt',
+      undefined,
+      'prompt',
+    ]);
+    await expect(verifyAuditChain(events, signingKey)).resolves.toEqual({
+      valid: true,
+    });
+  });
+
+  it('detects adding, removing, or changing kind at that exact index', async () => {
+    const { verifyAuditChain } = await import('../verify.js');
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware, promptMiddleware } = createAuditMiddleware(
+      makeOptions({
+        signingKey,
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+    const ctx = makeCtx('sess-kind-tamper');
+
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+    await promptMiddleware(
+      makePromptReq('brief'),
+      async () => promptResult,
+      ctx,
+    );
+
+    await expect(verifyAuditChain(events, signingKey)).resolves.toEqual({
+      valid: true,
+    });
+
+    // Adding kind to a tool event.
+    const added = events.map((e, i) =>
+      i === 0 ? { ...e, kind: 'prompt' as const } : e,
+    );
+    await expect(verifyAuditChain(added, signingKey)).resolves.toEqual({
+      valid: false,
+      index: 0,
+      reason: 'chainHash mismatch',
+    });
+
+    // Stripping kind from a prompt event.
+    const stripped = events.map((e, i) => {
+      if (i !== 1) return e;
+      const { kind: _kind, ...rest } = e;
+      return rest;
+    });
+    await expect(verifyAuditChain(stripped, signingKey)).resolves.toEqual({
+      valid: false,
+      index: 1,
+      reason: 'chainHash mismatch',
+    });
+
+    // Changing kind to another value.
+    const changed = events.map((e, i) =>
+      i === 1 ? ({ ...e, kind: 'tool' } as unknown as AuditEvent) : e,
+    );
+    await expect(verifyAuditChain(changed, signingKey)).resolves.toEqual({
+      valid: false,
+      index: 1,
+      reason: 'chainHash mismatch',
+    });
+  });
+
+  it('signs a manifest over an interleaved session whose proofs all verify', async () => {
+    const { verifyManifestSignature } = await import('../verify.js');
+    const { computeMerkleRoot, verifyMerkleProof } =
+      await import('../chain.js');
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware, promptMiddleware, closeSession } =
+      createAuditMiddleware(
+        makeOptions({
+          signingKey,
+          onEvent: (e) => {
+            events.push(e);
+          },
+        }),
+      );
+    const ctx = makeCtx('sess-prompt-manifest');
+
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+    await promptMiddleware(
+      makePromptReq('brief'),
+      async () => promptResult,
+      ctx,
+    );
+    await middleware(makeReq('transfer'), async () => ({ content: [] }), ctx);
+
+    const manifest = await closeSession('sess-prompt-manifest');
+
+    expect(manifest!.eventCount).toBe(3);
+    await expect(verifyManifestSignature(manifest!, signingKey)).resolves.toBe(
+      true,
+    );
+
+    const hashes = events.map((e) => e.chainHash);
+    expect(manifest!.merkleRoot).toBe(computeMerkleRoot(hashes));
+    expect(manifest!.merkleProofs).toHaveLength(3);
+    for (const [i, proof] of manifest!.merkleProofs.entries()) {
+      expect(verifyMerkleProof(hashes[i]!, proof, manifest!.merkleRoot)).toBe(
+        true,
+      );
+    }
+  });
+});

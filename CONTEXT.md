@@ -46,7 +46,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 ### Audit
 
-**Audit event**: A tamper-evident record of a single tool call, HMAC-chained and covered by a session-level Merkle proof. `AuditEvent` is a discriminated union on `sensitivityTier`. _Avoid_: bare "event"
+**Audit event**: A tamper-evident record of a single tool call or prompt call, HMAC-chained and covered by a session-level Merkle proof. `AuditEvent` is a discriminated union on `sensitivityTier`. A prompt call is recorded with `kind: 'prompt'` and the prompt name in `tool`; an absent `kind` means a tool call (ADR-0014). _Avoid_: bare "event"
 
 **Sensitivity tier**: The discriminant of `AuditEvent` — `'low'`, `'medium'`, or `'high'`. Determines whether the event stores plaintext or an encrypted payload. _Avoid_: "data classification", bare "sensitivity"
 

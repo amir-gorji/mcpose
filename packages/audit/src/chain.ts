@@ -120,6 +120,7 @@ export function chainPreimageFields(
     // Optional covered field: omitted when absent, so events recorded
     // before it existed keep their original preimage (ADR-0012).
     ...(event.proxy === undefined ? {} : { proxy: event.proxy }),
+    ...(event.kind === undefined ? {} : { kind: event.kind }),
     identity: event.identity,
     tool: event.tool,
     duration_ms: event.duration_ms,

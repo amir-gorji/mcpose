@@ -25,6 +25,8 @@ import {
   type CallToolResult,
   type CompatibilityCallToolResult,
   type ContentBlock,
+  type GetPromptRequest,
+  type GetPromptResult,
   type TextContent,
   type ReadResourceRequest,
   type ReadResourceResult,
@@ -77,6 +79,9 @@ export type ResourceMiddleware = Middleware<
   ReadResourceRequest,
   ReadResourceResult
 >;
+
+/** Middleware for prompt fetches (`prompts/get`). */
+export type PromptMiddleware = Middleware<GetPromptRequest, GetPromptResult>;
 
 /** Middleware for tool-list responses. */
 export type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
@@ -317,6 +322,21 @@ export interface ProxyOptions {
 
   /** Resource middleware in response-processing order (first = innermost). */
   resourceMiddleware?: ReadonlyArray<ResourceMiddleware>;
+
+  /**
+   * Prompt middleware in response-processing order (first = innermost),
+   * per ADR-0002. Runs around every `prompts/get`, in both 1:1 and mesh
+   * mode.
+   *
+   * Mesh routing and the `BACKEND_UNROUTABLE` rejection for an unroutable
+   * prompt name happen inside the innermost `next` (the ADR-0007 pattern),
+   * so an observing middleware such as audit records every prompt call
+   * including the rejected ones.
+   *
+   * `prompts/list` has no pipeline yet; hiding and pass-through for prompts
+   * are deferred with it (ADR-0014).
+   */
+  promptMiddleware?: ReadonlyArray<PromptMiddleware>;
 
   /** Tool-list middleware in response-processing order (first = innermost). */
   listToolsMiddleware?: ReadonlyArray<ListToolsMiddleware>;
@@ -774,7 +794,8 @@ function registerListChangedForwarders(
  * Creates a proxy MCP server without connecting it to a transport.
  *
  * Mirrors upstream tool/resource/prompt lists and routes requests through
- * middleware pipelines. Prompts are forwarded as-is.
+ * middleware pipelines. `prompts/list` is forwarded as-is; `prompts/get`
+ * runs `promptMiddleware` (ADR-0014).
  *
  * Uses low-level `Server` (not `McpServer`) — transparent proxying requires
  * generic list interception; `McpServer.tool()` needs names upfront.
@@ -816,6 +837,7 @@ export function createProxyServer(
     (options.toolMiddleware ?? []).filter(isPassThroughObserver),
   );
   const resourcePipeline = pipe(options.resourceMiddleware ?? []);
+  const promptPipeline = pipe(options.promptMiddleware ?? []);
   const listToolsPipeline = pipe(options.listToolsMiddleware ?? []);
 
   const isHiddenTool = toHiddenToolPredicate(options.hiddenTools);
@@ -1102,7 +1124,9 @@ export function createProxyServer(
     });
   }
 
-  // ── Prompt handlers (pass-through) ────────────────────────────────────────
+  // ── Prompt handlers ───────────────────────────────────────────────────────
+  // `prompts/get` runs the promptMiddleware pipeline; `prompts/list` is still
+  // pass-through (ADR-0014).
 
   if (capabilities.prompts && mesh) {
     // Prompt names are plain strings, so they namespace and route exactly
@@ -1132,20 +1156,30 @@ export function createProxyServer(
 
     server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) => {
       const req = stripRequest(rawReq);
-      const routed = routeNamespaced(req.params.name, promptBackends.byKey);
-      if (routed === undefined) {
-        throw rejectionMcpError(
-          'BACKEND_UNROUTABLE',
-          ErrorCode.MethodNotFound,
-          `Prompt not found: ${req.params.name} — a mesh exposes prompts as "<backendKey>__<prompt>"`,
-        );
-      }
-      return routed.client
-        .getPrompt(
-          { ...req.params, name: routed.name },
-          createRequestOptions(extra),
-        )
-        .then(stripResult);
+      const requestOptions = createRequestOptions(extra);
+      const context = getMiddlewareContext(proxyIdentity, extra.signal);
+      // Routed at the innermost `next` from the post-pipeline name, so the
+      // rejection is thrown in-chain and middleware (audit) observes it.
+      return promptPipeline(
+        req,
+        async (r) => {
+          const routed = routeNamespaced(r.params.name, promptBackends.byKey);
+          if (routed === undefined) {
+            throw rejectionMcpError(
+              'BACKEND_UNROUTABLE',
+              ErrorCode.MethodNotFound,
+              `Prompt not found: ${r.params.name} — a mesh exposes prompts as "<backendKey>__<prompt>"`,
+            );
+          }
+          return stripResult(
+            await routed.client.getPrompt(
+              { ...r.params, name: routed.name },
+              requestOptions,
+            ),
+          );
+        },
+        context,
+      );
     });
   } else if (capabilities.prompts) {
     server.setRequestHandler(ListPromptsRequestSchema, (rawReq, extra) =>
@@ -1154,11 +1188,15 @@ export function createProxyServer(
         .then(stripResult),
     );
 
-    server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) =>
-      backend
-        .getPrompt(stripRequest(rawReq).params, createRequestOptions(extra))
-        .then(stripResult),
-    );
+    server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) => {
+      const requestOptions = createRequestOptions(extra);
+      return promptPipeline(
+        stripRequest(rawReq),
+        async (r) =>
+          stripResult(await backend.getPrompt(r.params, requestOptions)),
+        getMiddlewareContext(proxyIdentity, extra.signal),
+      );
+    });
   }
 
   return server;

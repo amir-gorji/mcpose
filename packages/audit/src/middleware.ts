@@ -23,6 +23,15 @@ import type {
   RejectionReason,
 } from 'mcpose';
 
+/**
+ * What the audit layer needs from an audited request. Tool calls and prompt
+ * fetches both expose a name and optional arguments, which is why one
+ * implementation can serve both.
+ */
+interface AuditableRequest {
+  params: { name: string; arguments?: Record<string, unknown> | undefined };
+}
+
 // Domain-separation labels for subkey derivation. The version segment lets the
 // derivation scheme rotate without colliding with chains written under an old
 // scheme. v1 → v2: canonical-JSON preimages, signed full manifest,
@@ -125,7 +134,16 @@ export function createAuditMiddleware(
     return subkeys;
   };
 
-  const inner: AuditMiddlewareHandle['middleware'] = async (req, next, ctx) => {
+  // One implementation for both audited surfaces. A tool call and a prompt
+  // fetch differ only in the event's `kind`: both requests carry a name and
+  // optional arguments, and both share the session chain, so duplicating the
+  // body would duplicate every invariant below with it (ADR-0014).
+  const observe = async <Req extends AuditableRequest, Res>(
+    kind: 'prompt' | undefined,
+    req: Req,
+    next: (req: Req) => Promise<Res>,
+    ctx: ProxyContext,
+  ): Promise<Res> => {
     // Subkey derivation runs BEFORE the upstream call: if the signing
     // provider is unavailable the call fails fast rather than running
     // unaudited.
@@ -171,7 +189,7 @@ export function createAuditMiddleware(
     //    pushing the event, so concurrent calls in one session cannot
     //    allocate duplicate positions (buildEvent is fully synchronous).
     // 2. Never throws — an audit failure is reported via onAuditError and
-    //    must not fail (or mask the failure of) the tool call itself.
+    //    must not fail (or mask the failure of) the audited call itself.
     try {
       const rejectionReason = threw ? getRejectionReason(thrown) : undefined;
       const outcome: AuditEvent['outcome'] = !threw
@@ -198,6 +216,7 @@ export function createAuditMiddleware(
         const event = buildEvent({
           ctx,
           identity,
+          kind,
           tool,
           args,
           result: threw ? undefined : result,
@@ -237,7 +256,17 @@ export function createAuditMiddleware(
     if (threw) throw thrown;
     return result as Awaited<ReturnType<typeof next>>;
   };
+
+  // Tool calls: wrapped so `passThroughTools` stay audited. Prompts have no
+  // pass-through concept, so the prompt middleware needs no wrapper.
+  const inner: AuditMiddlewareHandle['middleware'] = (req, next, ctx) =>
+    observe(undefined, req, next, ctx);
   const middleware = markPassThroughObserver(inner);
+  const promptMiddleware: AuditMiddlewareHandle['promptMiddleware'] = (
+    req,
+    next,
+    ctx,
+  ) => observe('prompt', req, next, ctx);
 
   const closeSession: AuditMiddlewareHandle['closeSession'] = async (
     sessionId,
@@ -279,7 +308,7 @@ export function createAuditMiddleware(
     return manifest;
   };
 
-  return { middleware, closeSession };
+  return { middleware, promptMiddleware, closeSession };
 }
 
 /** Rebuilds the exact signed payload for a manifest (used by verifiers). */
@@ -320,6 +349,8 @@ export function manifestSigningPayload(
 interface BuildParams {
   ctx: ProxyContext;
   identity: Identity;
+  /** `'prompt'` for a prompts/get event; undefined for a tool call. */
+  kind: 'prompt' | undefined;
   tool: string;
   args: Record<string, unknown>;
   result: unknown;
@@ -347,6 +378,7 @@ function buildEvent(p: BuildParams): AuditEvent {
       ? { delegatedFrom: p.ctx.delegatedFrom }
       : {}),
     ...(p.ctx.proxy !== undefined ? { proxy: p.ctx.proxy } : {}),
+    ...(p.kind !== undefined ? { kind: p.kind } : {}),
     identity: p.identity,
     tool: p.tool,
     duration_ms: p.duration_ms,
