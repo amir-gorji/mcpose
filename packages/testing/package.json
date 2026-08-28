@@ -49,7 +49,7 @@
     "node": ">=20"
   },
   "peerDependencies": {
-    "mcpose": ">=2.2.0 <4",
+    "mcpose": ">=3.0.0 <4",
     "@mcpose/audit": "^3.0.0"
   },
   "devDependencies": {
