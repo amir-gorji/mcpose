@@ -85,7 +85,7 @@ Look elsewhere when:
 ## How it compares
 
 mcpose composes with the tools below far more often than it replaces them.
-Versions noted where they matter: mcpose 2.2.0, `@mcpose/audit` 3.0.0.
+Versions noted where they matter: mcpose 3.0.0, `@mcpose/audit` 3.0.0.
 
 | If you are currently | It works well when | Where it runs out |
 |---|---|---|
