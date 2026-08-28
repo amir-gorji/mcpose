@@ -9,7 +9,14 @@ export type { Identity } from './identity.js';
 export type { ProxyContext, ProxyIdentity } from './proxyContext.js';
 export { createProxyContext, outboundDelegationChain } from './proxyContext.js';
 
-export type { TelemetryEvent } from './telemetry.js';
+export type {
+  TelemetryEvent,
+  ToolCallTelemetryEvent,
+  BackendDegradedTelemetryEvent,
+} from './telemetry.js';
+
+export type { Backends } from './mesh.js';
+export { BACKEND_NAMESPACE_SEPARATOR } from './mesh.js';
 
 export type { PersistentEventStore } from './eventStore.js';
 export { createInMemoryEventStore } from './eventStore.js';

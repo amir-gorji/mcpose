@@ -158,6 +158,24 @@ Point your MCP client at this process instead of the upstream, and every tool ca
 
 To serve over HTTP/SSE instead, with per-session identity, mTLS, session limits, and reconnect replay, swap `startProxy` for [`startHttpProxy`](./packages/core/README.md#serving-over-httpsse).
 
+### One endpoint over many upstreams
+
+Pass a record of named backends instead of one client, and the same proxy governs all of them through one pipeline and one audit trail:
+
+```ts
+await startProxy(
+  {
+    crm: await createBackendClient({ url: 'https://crm.internal/mcp' }),
+    docs: await createBackendClient({ command: 'node', args: ['./docs-server.mjs'] }),
+  },
+  { toolMiddleware: [loggingMW], hiddenTools: ['crm__delete_account'] },
+);
+```
+
+The record keys are backend keys, and the client sees `crm__lookup`, `docs__search`, and so on.
+Every option matches those namespaced names, an upstream that goes down degrades its own tools out of `tools/list` rather than failing it, and a call that carries no key that names a configured backend is rejected rather than guessed at.
+See [mesh mode](./packages/core/README.md#many-upstreams-mesh-mode-backends) for the full behaviour, and [ADR-0013](./docs/adr/0013-multi-backend-composition.md) for why it works that way.
+
 ## How it works
 
 ### Routing: hidden, pass-through, middleware
@@ -169,6 +187,7 @@ For each tool or resource, mcpose picks exactly one path:
 | **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses, and rejected at call time with `TOOL_HIDDEN` / `RESOURCE_HIDDEN`. `hiddenTools` also takes a predicate, so a dispatcher (meta-tool) cannot reach a hidden tool by argument; see `dispatcherAwareBlock`. |
 | **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded to the upstream untouched. Transforming middleware is skipped. |
 | **Local** | `localTools` | Served by the proxy itself instead of the upstream, still through the full `toolMiddleware` pipeline. Hidden beats local; local beats an upstream tool of the same name; pass-through does not apply. |
+| **Routed** | a `Record<string, BackendClient>` | In mesh mode, a tool named `<backendKey>__<tool>` is forwarded to that backend under its un-namespaced name. A name that resolves to no configured backend is rejected with `BACKEND_UNROUTABLE`. |
 | **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline. |
 
 Three consequences worth knowing up front:
@@ -373,7 +392,7 @@ Each package's README is the canonical reference for its own exports, and each i
 
 | Package | Reference covers |
 |---|---|
-| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `mapToolResult`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `ProxyOptions` / `HttpProxyOptions` / `LocalTool` / `HiddenToolPredicate` / `RejectionReason` types. |
+| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `mapToolResult`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `Backends` / `ProxyOptions` / `HttpProxyOptions` / `LocalTool` / `HiddenToolPredicate` / `RejectionReason` types. |
 | [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware`, `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` schemas. |
 | [`@mcpose/testing`](./packages/testing/README.md#api) | `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`, each with what it does and does not prove. |
 
@@ -424,6 +443,7 @@ Shipped:
 - [x] mTLS through `tlsOptions` on `HttpProxyOptions`
 - [x] `@mcpose/audit`: HMAC chain, Merkle proofs, signed `ReplayManifest`, sensitivity tiers
 - [x] `@mcpose/testing`: compliance assertions
+- [x] Multi-backend composition: one governed endpoint over many upstreams, with namespaced tools
 
 Planned for v3:
 

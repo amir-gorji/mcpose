@@ -13,6 +13,7 @@ import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 export type RejectionReason =
   | 'TOOL_HIDDEN' // tool exists but is hidden from this caller
   | 'RESOURCE_HIDDEN' // resource exists but is hidden from this caller
+  | 'BACKEND_UNROUTABLE' // mesh mode: name carries no `<backendKey>__` prefix naming a configured backend
   | 'POLICY_DENIED' // v3: RBAC policy blocked the call
   | 'IDENTITY_UNRESOLVED' // v3: identity could not be established
   | 'CONSENT_MISSING' // v3: GDPR/CCPA consent gate blocked the call
