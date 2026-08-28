@@ -394,6 +394,29 @@ describe('createProxyServer() — mesh degradation', () => {
     expect((events[0] as { error: Error }).error.message).toBe('upstream down');
   });
 
+  it('stamps the configured proxy identity onto a backend_degraded event', async () => {
+    const crm = makeMeshBackend(['lookup']);
+    const docs = makeMeshBackend(['search']);
+    vi.mocked(docs.listTools).mockRejectedValue(new Error('upstream down'));
+    const events: TelemetryEvent[] = [];
+    const server = createProxyServer(
+      { crm, docs },
+      {
+        onTelemetry: (e) => events.push(e),
+        name: 'payments-proxy',
+        version: '9.9.9',
+      },
+    );
+
+    await listToolNames(server);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'backend_degraded',
+      proxy: { name: 'payments-proxy', version: '9.9.9' },
+    });
+  });
+
   it('fails only the call routed to a down backend', async () => {
     const crm = makeMeshBackend(['lookup']);
     const docs = makeMeshBackend(['search']);

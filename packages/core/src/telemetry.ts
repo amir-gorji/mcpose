@@ -1,4 +1,5 @@
 import type { Identity } from './identity.js';
+import type { ProxyIdentity } from './proxyContext.js';
 import type { RejectionReason } from './rejection.js';
 
 /** Emitted after every tool call (success, error, or rejection). */
@@ -12,6 +13,8 @@ export interface ToolCallTelemetryEvent {
   /** Populated when `outcome` is `'rejected'`. */
   rejectionReason?: RejectionReason;
   identity?: Identity;
+  /** The proxy instance that handled the call (ADR-0012). */
+  proxy?: ProxyIdentity;
 }
 
 /**
@@ -31,6 +34,8 @@ export interface BackendDegradedTelemetryEvent {
   /** Whatever the backend threw. */
   error: unknown;
   identity?: Identity;
+  /** The proxy instance that handled the call (ADR-0012). */
+  proxy?: ProxyIdentity;
 }
 
 /**
