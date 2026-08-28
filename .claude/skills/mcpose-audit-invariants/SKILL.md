@@ -24,7 +24,7 @@ These two packages produce and verify mcpose's **tamper-evident audit trail**. T
 `chainHash = HMAC(chainKey, canonicalJson({domain: 'mcpose/v2/chain', prevChainHash, event: preimageFields}))`.
 
 - **Serialization is canonical** (`canonicalJson`: keys sorted at every depth, undefined keys skipped, strict — throws on BigInt/circular). Insertion order is NOT load-bearing anymore; **the field SET is**. The one true field list lives in `chainPreimageFields()` in `chain.ts`, shared by the producer (`middleware.ts`) and the verifier (`verifyAuditChain`) — never fork it.
-- **In the preimage**: `id, startedAt, endedAt, sessionId?, delegatedFrom?, proxy?, identity, tool, duration_ms, outcome, rejectionReason?, error?, inputHash, outputHash, replayManifestPosition`. Optional fields are omitted when absent, so adding one is additive within v2 and old events keep their original preimage (ADR-0012).
+- **In the preimage**: `id, startedAt, endedAt, sessionId?, delegatedFrom?, proxy?, kind?, identity, tool, duration_ms, outcome, rejectionReason?, error?, inputHash, outputHash, replayManifestPosition`. `kind` is `'prompt'` only on a prompt event and absent on a tool call (ADR-0014). Optional fields are omitted when absent, so adding one is additive within v2 and old events keep their original preimage (ADR-0012).
 - **NOT in the preimage**: `sensitivityTier` and the raw/encrypted payloads. Payloads are bound only via `inputHash`/`outputHash` (computed with `stableStringify` — total, key-order independent, never throws). Post-hoc tampering with `sensitivityTier` is **not** detected by the chain.
 - `chainHash` is excluded from its own preimage; the first entry uses `prevChainHash = ''`.
 

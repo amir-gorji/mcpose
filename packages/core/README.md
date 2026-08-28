@@ -157,7 +157,7 @@ Behavior worth knowing before you deploy it:
 | `dispatcherAwareBlock(options)` | `HiddenToolPredicate` blocking hidden tools both directly and through dispatcher (meta) tools. Fail-closed. |
 | `sanitizeToolDescriptions(options?)` | `ListToolsMiddleware` stripping URLs and configured patterns from tool and schema descriptions, because the catalog is an egress channel into model context. |
 
-**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ToolResultHandlers`, `ProxyContext`, `Identity`, `BackendConfig`, `Backends`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `SanitizeToolDescriptionsOptions`, `RejectionReason`, `TelemetryEvent`, `ToolCallTelemetryEvent`, `BackendDegradedTelemetryEvent`, `PersistentEventStore`.
+**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `PromptMiddleware`, `ListToolsMiddleware`, `ToolResultHandlers`, `ProxyContext`, `Identity`, `BackendConfig`, `Backends`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `SanitizeToolDescriptionsOptions`, `RejectionReason`, `TelemetryEvent`, `ToolCallTelemetryEvent`, `BackendDegradedTelemetryEvent`, `PersistentEventStore`.
 
 `PersistentEventStore` is an alias of the SDK's `EventStore` type, so any SDK-compatible store plugs in directly.
 
@@ -242,6 +242,7 @@ interface ProxyOptions {
   version?:              string;
   toolMiddleware?:       ReadonlyArray<ToolMiddleware>;
   resourceMiddleware?:   ReadonlyArray<ResourceMiddleware>;
+  promptMiddleware?:     ReadonlyArray<PromptMiddleware>;
   listToolsMiddleware?:  ReadonlyArray<ListToolsMiddleware>;
   passThroughTools?:     ReadonlyArray<string>;
   passThroughResources?: ReadonlyArray<string>;
@@ -272,6 +273,10 @@ interface LocalTool {
 - `sanitizeToolDescriptions({ patterns?, replacement? })` builds a `ListToolsMiddleware` that strips http(s) URLs, plus any configured literal strings or regexes, from tool descriptions and from `description` fields nested in `inputSchema` / `outputSchema`, because the catalog is forwarded verbatim into model context and real upstreams leak org slugs and internal hostnames there.
   Names, titles, and schema structure stay intact because clients route on them; place it last in `listToolsMiddleware` so it sanitizes the output of other list middleware and local tools.
   See [ADR-0010](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0010-tool-catalog-egress-sanitizer.md).
+- `promptMiddleware` runs around every `prompts/get`, in both 1:1 and mesh mode, in the same response-processing order as the other middleware arrays.
+  Mesh routing and the `BACKEND_UNROUTABLE` rejection for an unroutable prompt name happen inside the innermost `next`, so an observing middleware such as `@mcpose/audit`'s `promptMiddleware` records every prompt call and every rejection.
+  `prompts/list` has no pipeline yet, so there is no prompt equivalent of `hiddenTools` or `passThroughTools`.
+  See [ADR-0014](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0014-prompt-calls-run-a-pipeline-and-are-audited.md).
 - `passThroughTools` / `passThroughResources` skip transforming middleware, but middleware wrapped in `markPassThroughObserver()` still runs for them.
   A tool that is both hidden and pass-through stays hidden.
 - `localTools` are tools the proxy implements itself.
@@ -392,6 +397,7 @@ type Middleware<Req, Res> = (
 
 type ToolMiddleware      = Middleware<CallToolRequest, CompatibilityCallToolResult>;
 type ResourceMiddleware  = Middleware<ReadResourceRequest, ReadResourceResult>;
+type PromptMiddleware    = Middleware<GetPromptRequest, GetPromptResult>;
 type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
 ```
 

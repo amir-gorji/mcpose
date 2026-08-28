@@ -117,8 +117,8 @@ Two wiring details decide whether this actually works:
 
 ## How it works
 
-- **Audit event**: the record of one tool call: `identity`, `tool`, `outcome`, input and output hashes, and a `chainHash` linking it to its predecessor.
-  `AuditEvent` is a discriminated union on `sensitivityTier`.
+- **Audit event**: the record of one tool call or prompt call: `identity`, `tool`, `outcome`, input and output hashes, and a `chainHash` linking it to its predecessor.
+  `AuditEvent` is a discriminated union on `sensitivityTier`; prompt events additionally carry `kind: 'prompt'`.
 - **Sensitivity tier** (`low` | `medium` | `high`): decides whether the event stores plaintext (`inputRaw` / `outputRaw`) or AES-256-GCM ciphertext (`inputEncrypted` / `outputEncrypted`).
 - **Replay manifest**: produced at session close. A Merkle root over every event's `chainHash`, one proof per event, and a signature over the whole document.
   It proves *what happened*; it does not re-execute anything.
@@ -137,7 +137,7 @@ The signed manifest anchors the whole session, and high-tier payloads are encryp
 
 Each link is `HMAC(chainKey, canonicalJson({ domain, prevChainHash, event }))` over this field set:
 
-`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `proxy?`, `identity`, `tool`, `duration_ms`, `outcome`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
+`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `proxy?`, `kind?`, `identity`, `tool`, `duration_ms`, `outcome`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
 
 Optional fields are omitted from the preimage when absent, so events recorded before an optional field existed keep verifying unchanged (ADR-0012).
 
@@ -172,7 +172,7 @@ For production, implement `SigningKeyProvider` against your KMS rather than hold
 
 | Export | Purpose |
 |---|---|
-| `createAuditMiddleware(options)` | Returns `{ middleware, closeSession }`. Add `middleware` to the pipeline; call `closeSession(sessionId)` to emit the manifest. |
+| `createAuditMiddleware(options)` | Returns `{ middleware, promptMiddleware, closeSession }`. Add `middleware` to `toolMiddleware` and `promptMiddleware` to `promptMiddleware`; call `closeSession(sessionId)` to emit the manifest. |
 | `createSensitivityResolver(map, override?)` | Build a `SensitivityResolverFn`. Unknown or invalid tiers resolve to `high`. |
 | `createDefaultSigningKeyProvider(secret)` | In-process HMAC-SHA256 `SigningKeyProvider`. |
 | `verifyAuditChain(events, signingKey)` | **Keyed** chain verification: recomputes every `chainHash` and reports the first tampered index. An empty event list is invalid. |
@@ -216,6 +216,8 @@ interface AuditOptions {
 
 interface AuditMiddlewareHandle {
   middleware: ToolMiddleware;
+  /** Audits prompts/get. Wire into ProxyOptions.promptMiddleware. */
+  promptMiddleware: PromptMiddleware;
   closeSession(sessionId: string): Promise<ReplayManifest | undefined>;
 }
 ```
@@ -224,6 +226,20 @@ interface AuditMiddlewareHandle {
 
 `closeSession` returns `undefined` if the session had no events or is unknown; wire it to `HttpProxyOptions.onSessionClosed`.
 The returned `middleware` is already marked as a pass-through observer, so tools in `passThroughTools` stay audited with no extra setup.
+
+`promptMiddleware` audits `prompts/get` calls and shares the session chain with `middleware`, so tool and prompt events interleave in one trail and one manifest.
+Wire it alongside the tool middleware:
+
+```ts
+{
+  toolMiddleware: [piiMW, auditHandle.middleware],
+  promptMiddleware: [auditHandle.promptMiddleware],
+}
+```
+
+Prompt events carry `kind: 'prompt'`, with the prompt name in `tool`; an event with no `kind` is a tool call (ADR-0014).
+In mesh mode the `BACKEND_UNROUTABLE` rejection for an unroutable prompt name is thrown inside the pipeline, so it is audited like any other rejection.
+The sensitivity resolver receives the prompt name as its first argument, so a name-keyed map that does not list a prompt resolves it to `high` and encrypts it.
 
 The handle is a pair rather than a bare middleware for a structural reason: middleware is per-request and has no lifecycle, so session end has to be signalled from outside.
 
@@ -281,7 +297,8 @@ interface AuditEventBase {
   identity: Identity;
   delegatedFrom?: Identity[];
   proxy?: ProxyIdentity;         // { name, version } of the recording proxy instance
-  tool: string;
+  kind?: 'prompt';               // present only on prompt events; absent means a tool call
+  tool: string;                  // the tool name, or the prompt name when kind is 'prompt'
   duration_ms: number;
   outcome: 'success' | 'rejected' | 'error';
   /** Present when outcome is 'rejected' (from the MCP error's data field). */

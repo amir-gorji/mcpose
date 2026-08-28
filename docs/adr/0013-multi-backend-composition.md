@@ -84,3 +84,4 @@ Consumers that hold a `TelemetryEvent` and read `tool_call` fields now need to n
 - Mesh mode cannot serve resources, and a proxy that needs them stays 1:1 until #100 lands.
 - A `ListToolsMiddleware` that rewrites the outbound list request is inert in mesh mode, because only the cursor is forwarded.
 - An unroutable prompt is not audited, because prompts have no pipeline to reject inside.
+  Closed by [ADR-0014](./0014-prompt-calls-run-a-pipeline-and-are-audited.md): `prompts/get` runs a pipeline, the rejection is thrown inside it, and prompt calls are audited.

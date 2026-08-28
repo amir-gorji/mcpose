@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   createProxyServer,
   startHttpProxy,
+  type PromptMiddleware,
   type ToolMiddleware,
 } from '../core.js';
 import type { BackendClient } from '../backendClient.js';
@@ -746,6 +747,58 @@ describe('createProxyServer() — mesh prompts', () => {
     await expect(
       invokeHandler(server, 'prompts/get', { name: 'brief' }),
     ).rejects.toMatchObject({
+      code: ErrorCode.MethodNotFound,
+      data: { rejectionReason: 'BACKEND_UNROUTABLE' },
+    });
+  });
+
+  it('runs promptMiddleware around a routed prompts/get', async () => {
+    const wiki = makeMeshBackend([], {
+      capabilities: { prompts: {} },
+      prompts: ['brief'],
+    });
+    const seen: string[] = [];
+    const mw: PromptMiddleware = async (req, next) => {
+      seen.push(req.params.name);
+      return next(req);
+    };
+    const server = createProxyServer({ wiki }, { promptMiddleware: [mw] });
+
+    await invokeHandler(server, 'prompts/get', { name: 'wiki__brief' });
+
+    // The middleware sees the namespaced name; routing happens inside the
+    // innermost next, so the backend still receives the bare one.
+    expect(seen).toEqual(['wiki__brief']);
+    expect(wiki.getPrompt).toHaveBeenCalledWith({ name: 'brief' }, undefined);
+  });
+
+  it('throws BACKEND_UNROUTABLE inside the pipeline, so middleware observes it', async () => {
+    const observed: unknown[] = [];
+    const observer: PromptMiddleware = async (req, next) => {
+      try {
+        return await next(req);
+      } catch (err) {
+        observed.push(err);
+        throw err;
+      }
+    };
+    const server = createProxyServer(
+      {
+        wiki: makeMeshBackend([], {
+          capabilities: { prompts: {} },
+          prompts: ['brief'],
+        }),
+      },
+      { promptMiddleware: [observer] },
+    );
+
+    await expect(
+      invokeHandler(server, 'prompts/get', { name: 'brief' }),
+    ).rejects.toMatchObject({
+      data: { rejectionReason: 'BACKEND_UNROUTABLE' },
+    });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toMatchObject({
       code: ErrorCode.MethodNotFound,
       data: { rejectionReason: 'BACKEND_UNROUTABLE' },
     });

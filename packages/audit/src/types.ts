@@ -1,5 +1,6 @@
 import type {
   Identity,
+  PromptMiddleware,
   ProxyIdentity,
   RejectionReason,
   ToolMiddleware,
@@ -52,6 +53,13 @@ export interface AuditEventBase {
    * Provenance, not a principal — never part of `delegatedFrom` (ADR-0012).
    */
   proxy?: ProxyIdentity;
+  /**
+   * Present ONLY on events recorded for a prompt call (`prompts/get`), where
+   * `tool` holds the prompt name. An absent `kind` means a tool call, so
+   * every event recorded before prompts were audited keeps its meaning and
+   * its chain preimage (additive within v2, ADR-0012 and ADR-0014).
+   */
+  kind?: 'prompt';
   tool: string;
   duration_ms: number;
   outcome: 'success' | 'rejected' | 'error';
@@ -153,6 +161,13 @@ export interface AuditOptions {
 
 export interface AuditMiddlewareHandle {
   middleware: ToolMiddleware;
+  /**
+   * Audits `prompts/get` calls. Wire it into
+   * `ProxyOptions.promptMiddleware`; it shares the session chain with
+   * `middleware`, so tool and prompt events interleave in one trail.
+   * Prompt events carry `kind: 'prompt'` (ADR-0014).
+   */
+  promptMiddleware: PromptMiddleware;
   /**
    * Signal that a session has ended. Computes the Merkle tree over all audit
    * events for the session, signs the full manifest, fires onManifest, and
