@@ -624,14 +624,17 @@ describe('createAuditMiddleware — prompt calls', () => {
       }),
     );
 
+    // The sentinel carries `-` and `!`, neither of which is in the base64
+    // alphabet, so it can never collide with a ciphertext substring.
+    const sentinel = 'q3-secret-plaintext!';
     await promptMiddleware(
-      makePromptReq('brief', { topic: 'q3' }),
+      makePromptReq('brief', { topic: sentinel }),
       async () => promptResult,
       makeCtx('sess-prompt-tier'),
     );
 
     expect(sensitivityResolver).toHaveBeenCalledWith('brief', identity, {
-      topic: 'q3',
+      topic: sentinel,
     });
     const event = events[0]!;
     expect(event.sensitivityTier).toBe('high');
@@ -641,7 +644,7 @@ describe('createAuditMiddleware — prompt calls', () => {
       expect('inputRaw' in event).toBe(false);
       expect('outputRaw' in event).toBe(false);
       // The plaintext arguments must not survive anywhere on the event.
-      expect(JSON.stringify(event)).not.toContain('q3');
+      expect(JSON.stringify(event)).not.toContain(sentinel);
     }
   });
 
