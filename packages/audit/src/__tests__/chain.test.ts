@@ -195,6 +195,64 @@ describe('verifyAuditChain (keyed)', () => {
   });
 });
 
+describe('sensitivityTier is covered by the chain (ADR-0015)', () => {
+  /** Index 0 is a mapped low tool; index 1 is unmapped, so it fails closed to high. */
+  async function produceMixedSession(sessionId: string) {
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware } = createAuditMiddleware({
+      signingKey,
+      sensitivityResolver: createSensitivityResolver({ search: 'low' }),
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    for (const name of ['search', 'wire-transfer']) {
+      await middleware(
+        { method: 'tools/call' as const, params: { name, arguments: {} } },
+        async () => ({ content: [] }),
+        createProxyContext({ transport: 'http', identity, sessionId }),
+      );
+    }
+    return { events, signingKey };
+  }
+
+  it('records the resolved tier and still verifies untampered', async () => {
+    const { events, signingKey } = await produceMixedSession('s-tier-ok');
+    expect(events.map((e) => e.sensitivityTier)).toEqual(['low', 'high']);
+    expect(await verifyAuditChain(events, signingKey)).toEqual({ valid: true });
+  });
+
+  it.each([
+    ['a high event relabelled as low', 1, 'low'],
+    ['a low event relabelled as high', 0, 'high'],
+  ] as const)('detects %s at exactly that index', async (_case, i, tier) => {
+    const { events, signingKey } = await produceMixedSession('s-tier-tamper');
+    const tampered = events.map((e, k) =>
+      k === i ? ({ ...e, sensitivityTier: tier } as AuditEvent) : e,
+    );
+    expect(await verifyAuditChain(tampered, signingKey)).toEqual({
+      valid: false,
+      index: i,
+      reason: 'chainHash mismatch',
+    });
+  });
+
+  it('detects a tier dropped from a stored event entirely', async () => {
+    const { events, signingKey } = await produceMixedSession('s-tier-drop');
+    const stripped = events.map((e, k) => {
+      if (k !== 0) return e;
+      const { sensitivityTier: _dropped, ...rest } = e;
+      return rest as unknown as AuditEvent;
+    });
+    expect(await verifyAuditChain(stripped, signingKey)).toEqual({
+      valid: false,
+      index: 0,
+      reason: 'chainHash mismatch',
+    });
+  });
+});
+
 describe('verifyManifestSignature', () => {
   it('verifies an untampered manifest', async () => {
     const { manifest, signingKey } = await produceSession('m-ok', 3);

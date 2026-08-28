@@ -424,8 +424,8 @@ Tail truncation also leaves a valid prefix, so `assertAuditChainIntegrity` alone
 
 Two more boundaries worth stating plainly:
 
-- The chain binds payloads through `inputHash` / `outputHash`, and does not cover `sensitivityTier`.
-  Post-hoc tampering with the tier alone is not chain-detectable.
+- The chain binds payloads through `inputHash` / `outputHash`, so the raw and encrypted bodies themselves are not in the preimage.
+  The `sensitivityTier` is covered, so relabelling a high event as low is chain-detectable (ADR-0015).
 - Chaining requires a session id.
   Over stdio there is no session, so every event carries position 0 and no manifest is produced.
 
