@@ -35,7 +35,11 @@ import {
 import { pipe, isPassThroughObserver, type Middleware } from './middleware.js';
 import type { HiddenToolPredicate } from './hiddenTools.js';
 import type { BackendClient } from './backendClient.js';
-import { createProxyContext, type ProxyContext } from './proxyContext.js';
+import {
+  createProxyContext,
+  type ProxyContext,
+  type ProxyIdentity,
+} from './proxyContext.js';
 import type { Identity } from './identity.js';
 import type { TelemetryEvent } from './telemetry.js';
 import { createInMemoryEventStore } from './eventStore.js';
@@ -521,10 +525,14 @@ function normalizeHeaders(
   return Object.keys(normalized).length ? normalized : undefined;
 }
 
-function getMiddlewareContext(signal?: AbortSignal): ProxyContext {
+function getMiddlewareContext(
+  proxy: ProxyIdentity,
+  signal?: AbortSignal,
+): ProxyContext {
   return createProxyContext({
     ...httpProxyContext.getStore(),
     ...(signal === undefined ? {} : { signal }),
+    proxy,
   });
 }
 
@@ -731,13 +739,17 @@ export function createProxyServer(
   const hiddenResourceSet = new Set(options.hiddenResources ?? []);
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
 
-  const server = new Server(
-    {
-      name: options.name ?? DEFAULT_PROXY_NAME,
-      version: options.version ?? VERSION,
-    },
-    { capabilities },
-  );
+  // Stamped onto every ProxyContext so middleware and the audit trail can
+  // attribute events to this proxy instance (#85, ADR-0012). Frozen because
+  // the one object is aliased into the SDK Server, every context, and every
+  // audit event: a middleware mutating it would rewrite provenance already
+  // recorded elsewhere.
+  const proxyIdentity: ProxyIdentity = Object.freeze({
+    name: options.name ?? DEFAULT_PROXY_NAME,
+    version: options.version ?? VERSION,
+  });
+
+  const server = new Server(proxyIdentity, { capabilities });
 
   registerListChangedForwarders(backend, server, capabilities);
 
@@ -747,7 +759,7 @@ export function createProxyServer(
     server.setRequestHandler(ListToolsRequestSchema, async (rawReq, extra) => {
       const req = stripRequest(rawReq);
       const requestOptions = createRequestOptions(extra);
-      const context = getMiddlewareContext(extra.signal);
+      const context = getMiddlewareContext(proxyIdentity, extra.signal);
       // Local tools are overlaid inside the innermost `next`, so
       // listToolsMiddleware sees them exactly as it sees upstream tools.
       // They are added to the first page only (no cursor), so a paginating
@@ -782,7 +794,7 @@ export function createProxyServer(
       const req = stripRequest(rawReq);
       const name = req.params.name;
       const requestOptions = createRequestOptions(extra);
-      const context = getMiddlewareContext(extra.signal);
+      const context = getMiddlewareContext(proxyIdentity, extra.signal);
       const start = performance.now();
 
       const emitTelemetry = (
@@ -896,7 +908,7 @@ export function createProxyServer(
       const req = stripRequest(rawReq);
       const uri = req.params.uri;
       const requestOptions = createRequestOptions(extra);
-      const context = getMiddlewareContext(extra.signal);
+      const context = getMiddlewareContext(proxyIdentity, extra.signal);
 
       if (hiddenResourceSet.has(uri)) {
         throw rejectionMcpError(

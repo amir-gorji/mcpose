@@ -32,6 +32,8 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Delegation chain**: The full sequence of agents that handed off the request before reaching mcpose. `delegatedFrom?: Identity[]` on `ProxyContext`. Core does not populate it yet (no delegation header spec until v3); it is stamped on audit events only when the host places it on the context. _Avoid_: "agent chain", "call chain"
 
+**Proxy identity**: Which proxy instance handled a request — `proxy?: ProxyIdentity` (`{ name, version }`) on `ProxyContext`, stamped by `createProxyServer` from `ProxyOptions` with defaults applied. Provenance, not a principal: never an entry in `delegatedFrom`, and no part of the caller-attribution model (ADR-0012). _Avoid_: "server identity", "instance id"
+
 ### Sessions
 
 **Session**: The audit boundary that produces one replay manifest on close. On HTTP, maps 1:1 to the `mcp-session-id` lifetime. On stdio, an audit-only concept — core has no session concept on stdio.

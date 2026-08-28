@@ -1,4 +1,9 @@
-import type { Identity, RejectionReason, ToolMiddleware } from 'mcpose';
+import type {
+  Identity,
+  ProxyIdentity,
+  RejectionReason,
+  ToolMiddleware,
+} from 'mcpose';
 
 // ── Sensitivity ────────────────────────────────────────────────────────────────
 
@@ -42,6 +47,11 @@ export interface AuditEventBase {
   sessionId?: string;
   identity: Identity;
   delegatedFrom?: Identity[];
+  /**
+   * The proxy instance that recorded this event, from `ProxyContext.proxy`.
+   * Provenance, not a principal — never part of `delegatedFrom` (ADR-0012).
+   */
+  proxy?: ProxyIdentity;
   tool: string;
   duration_ms: number;
   outcome: 'success' | 'rejected' | 'error';
@@ -86,6 +96,12 @@ export interface MerkleProof {
 export interface ReplayManifest {
   sessionId: string;
   identity: Identity;
+  /**
+   * The proxy instance that produced this session's trail, captured when
+   * the session was first seen. Covered by the signature like every other
+   * field (ADR-0004, ADR-0012).
+   */
+  proxy?: ProxyIdentity;
   startedAt: string;
   closedAt: string;
   eventCount: number;

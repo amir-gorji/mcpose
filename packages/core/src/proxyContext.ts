@@ -1,6 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import type { Identity } from './identity.js';
 
+/**
+ * The proxy instance a request passed through, as resolved from
+ * `ProxyOptions.name`/`version` (defaults included). Provenance, not a
+ * principal: it is never an entry in `delegatedFrom` and takes no part in
+ * the caller-attribution model (ADR-0011, ADR-0012).
+ */
+export interface ProxyIdentity {
+  readonly name: string;
+  readonly version: string;
+}
+
 /** Normalized request metadata that mcpose passes through middleware layers. */
 export interface ProxyContext {
   requestId: string;
@@ -12,6 +23,8 @@ export interface ProxyContext {
   identity?: Identity;
   /** Agent delegation chain — populated when an upstream A2A agent delegates through mcpose. */
   delegatedFrom?: Identity[];
+  /** The proxy instance handling this request. Stamped by {@link createProxyServer}. */
+  proxy?: ProxyIdentity;
   /** @experimental Reserved for the v3 policy engine — do not depend on it. */
   policy?: never;
 }
@@ -56,5 +69,6 @@ export function createProxyContext(
     ...(overrides.delegatedFrom === undefined
       ? {}
       : { delegatedFrom: overrides.delegatedFrom }),
+    ...(overrides.proxy === undefined ? {} : { proxy: overrides.proxy }),
   };
 }
