@@ -19,16 +19,17 @@ const DOMAIN_KEYID = 'mcpose/v2/keyid';
 export function createDefaultSigningKeyProvider(
   secret: Buffer | string,
 ): SigningKeyProvider {
-  const secretBuf = typeof secret === 'string' ? Buffer.from(secret) : secret;
-  const keyId = createHmac('sha256', secretBuf)
-    .update(DOMAIN_KEYID)
-    .digest('hex');
+  // The secret is handed to createHmac as given. Normalizing a string to a
+  // Buffer first was a no-op: createHmac encodes a string key as utf8, byte
+  // for byte what Buffer.from produces, so no input could tell the two
+  // apart. The equivalence is pinned by a test (#110).
+  const keyId = createHmac('sha256', secret).update(DOMAIN_KEYID).digest('hex');
 
   return {
     algorithm: 'HMAC-SHA256',
     keyId,
     async sign(data: Buffer): Promise<Buffer> {
-      return createHmac('sha256', secretBuf).update(data).digest();
+      return createHmac('sha256', secret).update(data).digest();
     },
   };
 }

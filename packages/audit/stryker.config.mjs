@@ -17,5 +17,8 @@ export default {
   // Set to the measured baseline mutation score rounded down minus 2 points.
   // Baseline on 2026-08-26: 83.18 (352 killed, 9 timeout, 57 survived, 16 no cov),
   // measured after the fast-check property suite landed (#60). It was 73.73.
+  // Re-measured on 2026-08-29 at 83.82 (390 killed, 9 timeout, 61 survived,
+  // 16 no cov) after #110 removed signingKey.ts's four equivalent mutants.
+  // floor(83.82) - 2 is 81, so the threshold is unchanged rather than raised.
   thresholds: { high: 90, low: 84, break: 81 },
 };

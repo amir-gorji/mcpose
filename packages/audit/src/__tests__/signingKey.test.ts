@@ -48,9 +48,29 @@ describe('createDefaultSigningKeyProvider', () => {
     expect(s1.toString('hex')).not.toBe(s2.toString('hex'));
   });
 
-  it('accepts Buffer as secret', async () => {
-    const provider = createDefaultSigningKeyProvider(Buffer.from('secret'));
-    const sig = await provider.sign(Buffer.from('data'));
-    expect(sig).toBeInstanceOf(Buffer);
+  it('accepts a Buffer secret and keys it identically to its utf8 string form', async () => {
+    // Pins why the provider hands the secret to createHmac as given rather
+    // than normalizing a string to a Buffer first: createHmac encodes a
+    // string key as utf8 itself, so the conversion was unobservable and its
+    // mutants unkillable (#110). A non-ASCII secret makes the encoding
+    // load-bearing rather than incidental.
+    const text = 'sécret';
+    const fromString = createDefaultSigningKeyProvider(text);
+    const fromBuffer = createDefaultSigningKeyProvider(Buffer.from(text));
+
+    expect(fromBuffer.keyId).toBe(fromString.keyId);
+    expect(fromBuffer.keyId).toBe(
+      createHmac('sha256', Buffer.from(text, 'utf8'))
+        .update('mcpose/v2/keyid')
+        .digest('hex'),
+    );
+
+    const data = Buffer.from('data');
+    const [fromBufferSig, fromStringSig] = await Promise.all([
+      fromBuffer.sign(data),
+      fromString.sign(data),
+    ]);
+    expect(fromBufferSig).toBeInstanceOf(Buffer);
+    expect(fromBufferSig.toString('hex')).toBe(fromStringSig.toString('hex'));
   });
 });
