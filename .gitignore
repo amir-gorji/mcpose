@@ -58,3 +58,4 @@ Thumbs.db
 
 # Agent run artifacts
 .gnhf/
+.claude/worktrees/

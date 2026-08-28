@@ -299,6 +299,57 @@ describe('createAuditMiddleware — proxy identity (ADR-0012)', () => {
     expect(manifest!.proxy).toEqual(proxy);
   });
 
+  it('backfills the manifest proxy when the first request predates stamping', async () => {
+    const events: AuditEvent[] = [];
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx('sess-backfill'),
+    );
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeProxyCtx('sess-backfill'),
+    );
+
+    const manifest = await closeSession('sess-backfill');
+
+    expect('proxy' in events[0]!).toBe(false);
+    expect(events[1]!.proxy).toEqual(proxy);
+    expect(manifest!.proxy).toEqual(proxy);
+  });
+
+  it('keeps the first proxy identity seen when later contexts differ', async () => {
+    const { middleware, closeSession } = createAuditMiddleware(makeOptions());
+    const other = { name: 'other-proxy', version: '0.0.1' };
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeProxyCtx('sess-first-wins'),
+    );
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      createProxyContext({
+        transport: 'http',
+        identity,
+        sessionId: 'sess-first-wins',
+        proxy: other,
+      }),
+    );
+
+    const manifest = await closeSession('sess-first-wins');
+
+    expect(manifest!.proxy).toEqual(proxy);
+  });
+
   it('omits the proxy key entirely when the context has none', async () => {
     const events: AuditEvent[] = [];
     const { middleware, closeSession } = createAuditMiddleware(

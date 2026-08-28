@@ -143,6 +143,7 @@ Optional fields are omitted from the preimage when absent, so events recorded be
 
 Serialization is canonical (keys sorted at every depth), so key insertion order is not load-bearing and an independently written verifier reproduces the same hash.
 The **field set** is what matters, and it is defined once in the source and shared by producer and verifier.
+An independently written verifier must track the current field set: one pinned to an older set mis-hashes events that carry a newer optional field.
 
 ### What it does not cover
 

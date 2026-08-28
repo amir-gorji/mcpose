@@ -740,11 +740,14 @@ export function createProxyServer(
   const passThroughResourceSet = new Set(options.passThroughResources ?? []);
 
   // Stamped onto every ProxyContext so middleware and the audit trail can
-  // attribute events to this proxy instance (#85, ADR-0012).
-  const proxyIdentity: ProxyIdentity = {
+  // attribute events to this proxy instance (#85, ADR-0012). Frozen because
+  // the one object is aliased into the SDK Server, every context, and every
+  // audit event: a middleware mutating it would rewrite provenance already
+  // recorded elsewhere.
+  const proxyIdentity: ProxyIdentity = Object.freeze({
     name: options.name ?? DEFAULT_PROXY_NAME,
     version: options.version ?? VERSION,
-  };
+  });
 
   const server = new Server(proxyIdentity, { capabilities });
 

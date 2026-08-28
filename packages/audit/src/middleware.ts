@@ -135,14 +135,22 @@ export function createAuditMiddleware(
     const identity = ctx.identity ?? anonymousIdentity();
     const sessionId = ctx.sessionId;
 
-    if (sessionId && !sessions.has(sessionId)) {
-      sessions.set(sessionId, {
-        events: [],
-        prevChainHash: '',
-        startedAt,
-        identity,
-        ...(ctx.proxy === undefined ? {} : { proxy: ctx.proxy }),
-      });
+    if (sessionId) {
+      const session = sessions.get(sessionId);
+      if (!session) {
+        sessions.set(sessionId, {
+          events: [],
+          prevChainHash: '',
+          startedAt,
+          identity,
+          ...(ctx.proxy === undefined ? {} : { proxy: ctx.proxy }),
+        });
+      } else if (session.proxy === undefined && ctx.proxy !== undefined) {
+        // Backfill: a session's first request may predate proxy stamping
+        // (host-built context). The manifest records the first proxy
+        // identity seen; each event still records its own.
+        session.proxy = ctx.proxy;
+      }
     }
 
     const tool = req.params.name;

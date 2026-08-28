@@ -8,8 +8,8 @@ import type { Identity } from './identity.js';
  * the caller-attribution model (ADR-0011, ADR-0012).
  */
 export interface ProxyIdentity {
-  name: string;
-  version: string;
+  readonly name: string;
+  readonly version: string;
 }
 
 /** Normalized request metadata that mcpose passes through middleware layers. */
