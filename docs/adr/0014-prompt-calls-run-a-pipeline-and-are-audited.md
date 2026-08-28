@@ -12,6 +12,12 @@ The decision has two halves.
 **Core gains `ProxyOptions.promptMiddleware`**, a `Middleware<GetPromptRequest, GetPromptResult>` array in response-processing order like every other `ProxyOptions` middleware array (ADR-0002).
 It runs around every `prompts/get` in both 1:1 and mesh mode.
 Mesh routing and the `BACKEND_UNROUTABLE` rejection moved inside the innermost `next`, the ADR-0007 pattern already used for hidden tools and tools-less upstreams, so an observing middleware records every prompt call and every rejection in-chain rather than watching the proxy reject one behind its back.
+
+The pattern reaches exactly as far as the advertised capability allows.
+A `prompts/get` handler can only be registered when the proxy advertises the `prompts` capability, because the SDK's `setRequestHandler` throws otherwise, and the proxy advertises it only when an upstream does.
+So there is no prompts-less analogue of the tools-less handler: the tools-less case exists only because `localTools` can make the proxy advertise `tools` while no upstream serves them, and prompts have no local equivalent.
+When no upstream advertises prompts, `prompts/get` is rejected by the SDK dispatcher before any handler exists, exactly as `tools/call` is on a proxy with neither upstream tools nor local tools.
+An unaudited prompt call is therefore only possible against a proxy that advertises no prompts at all.
 Request and result `_meta` stripping keep their existing boundaries: the request is stripped before the pipeline (ADR-0008) and the upstream result inside the innermost `next` (ADR-0009).
 
 **The audit middleware gains a second middleware on its handle**, `promptMiddleware`, and audit events gain an optional `kind`.

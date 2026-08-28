@@ -241,7 +241,7 @@ Prompt events carry `kind: 'prompt'`, with the prompt name in `tool`; an event w
 In mesh mode the `BACKEND_UNROUTABLE` rejection for an unroutable prompt name is thrown inside the pipeline, so it is audited like any other rejection.
 The sensitivity resolver receives the prompt name as its first argument, so a name-keyed map that does not list a prompt resolves it to `high` and encrypts it.
 
-The handle is a pair rather than a bare middleware for a structural reason: middleware is per-request and has no lifecycle, so session end has to be signalled from outside.
+The handle is a triple rather than a bare middleware for a structural reason: middleware is per-request and has no lifecycle, so session end has to be signalled from outside, and the tool and prompt surfaces are separate pipelines in core.
 
 ### `createSensitivityResolver(map, override?)`
 

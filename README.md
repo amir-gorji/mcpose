@@ -61,7 +61,7 @@ Add [`@mcpose/audit`](./packages/audit/README.md) and every call through that pi
 - **Composable middleware** with a predictable onion model: each layer runs before *and* after the layers inside it.
 - **Hide or gate tools and resources** per caller, with a structured `RejectionReason` on every blocked call instead of an opaque error.
 - **Resolve caller identity once per session**, then read the same `Identity` from every request in that session.
-- **Tamper-evident audit trails** via [`@mcpose/audit`](./packages/audit/README.md): HMAC-chained events, a signed Merkle `ReplayManifest`, and AES-256-GCM encryption for high-sensitivity payloads.
+- **Tamper-evident audit trails** via [`@mcpose/audit`](./packages/audit/README.md): HMAC-chained events covering tool *and* prompt calls, a signed Merkle `ReplayManifest`, and AES-256-GCM encryption for high-sensitivity payloads.
 - **Prove it in CI** with [`@mcpose/testing`](./packages/testing/README.md): runner-agnostic assertions that a trail is intact, redacted, and internally consistent.
 - **Production-minded.** Native ESM, first-class TypeScript types, Node.js 20+, no runtime dependencies beyond the MCP SDK.
 
@@ -187,7 +187,7 @@ For each tool or resource, mcpose picks exactly one path:
 | **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses, and rejected at call time with `TOOL_HIDDEN` / `RESOURCE_HIDDEN`. `hiddenTools` also takes a predicate, so a dispatcher (meta-tool) cannot reach a hidden tool by argument; see `dispatcherAwareBlock`. |
 | **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded to the upstream untouched. Transforming middleware is skipped. |
 | **Local** | `localTools` | Served by the proxy itself instead of the upstream, still through the full `toolMiddleware` pipeline. Hidden beats local; local beats an upstream tool of the same name; pass-through does not apply. |
-| **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline. |
+| **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline. A `prompts/get` call runs the `promptMiddleware` pipeline the same way. |
 
 Three consequences worth knowing up front:
 
@@ -201,6 +201,8 @@ Three consequences worth knowing up front:
 Mesh mode adds no fifth path.
 Choosing which upstream a call goes to happens *inside* the innermost `next` of whichever path above applies, so a mesh call runs exactly the pipeline a 1:1 call runs, audit included.
 A name that resolves to no configured backend is rejected there too, with `BACKEND_UNROUTABLE`, so observing middleware records the attempt.
+That holds for prompts as well: `prompts/get` runs `promptMiddleware`, and its unroutable-name rejection is thrown inside the pipeline, so audit sees prompt calls and prompt rejections ([ADR-0014](./docs/adr/0014-prompt-calls-run-a-pipeline-and-are-audited.md)).
+Prompt hiding and prompt pass-through do not exist yet, because `prompts/list` has no pipeline.
 
 ### The middleware onion
 
@@ -275,7 +277,7 @@ End to end, mcpose:
 - forwards abort signals to upstream tool, resource, and prompt calls,
 - relays upstream progress updates back to the client,
 - advertises and fans out list-changed notifications when the upstream supports them,
-- forwards prompts as-is when the upstream supports prompts,
+- forwards `prompts/list` as-is when the upstream supports prompts, and runs `prompts/get` through `promptMiddleware`,
 - applies `hiddenTools` filtering both before *and* after `listToolsMiddleware`, so middleware cannot re-add a hidden tool.
 
 One deliberate exception to transparency, in both directions: `params._meta` is stripped from every forwarded request, and top-level `_meta` from every upstream result, by default.
@@ -328,6 +330,8 @@ await startHttpProxy(
       createPiiMiddleware([/\b\d{9}\b/g, /[A-Z]{2}\d{6}/g]), // redaction runs first
       auditHandle.middleware,                                // so audit records clean data
     ],
+    // Prompt calls cross the same trust boundary, so audit them too.
+    promptMiddleware: [auditHandle.promptMiddleware],
   },
   {
     resolveIdentity: extractJwt,
@@ -395,8 +399,8 @@ Each package's README is the canonical reference for its own exports, and each i
 
 | Package | Reference covers |
 |---|---|
-| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `mapToolResult`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `Backends` / `ProxyOptions` / `HttpProxyOptions` / `LocalTool` / `HiddenToolPredicate` / `RejectionReason` types. |
-| [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware`, `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` schemas. |
+| [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `mapToolResult`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `Backends` / `ProxyOptions` / `HttpProxyOptions` / `LocalTool` / `HiddenToolPredicate` / `RejectionReason` types, plus the `ToolMiddleware` / `ResourceMiddleware` / `PromptMiddleware` / `ListToolsMiddleware` middleware types. |
+| [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware` (returning `middleware`, `promptMiddleware`, and `closeSession`), `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` schemas. |
 | [`@mcpose/testing`](./packages/testing/README.md#api) | `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`, each with what it does and does not prove. |
 
 Test helpers for the proxy itself (`createMockBackendClient`, `runToolMiddleware`, `runListToolsMiddleware`, `runResourceMiddleware`) ship in the core package under the `mcpose/testing` subpath.

@@ -772,6 +772,28 @@ describe('createProxyServer() — mesh prompts', () => {
     expect(wiki.getPrompt).toHaveBeenCalledWith({ name: 'brief' }, undefined);
   });
 
+  it('forwards a middleware edit to params.arguments to the backend', async () => {
+    const wiki = makeMeshBackend([], {
+      capabilities: { prompts: {} },
+      prompts: ['brief'],
+    });
+    const rewrite: PromptMiddleware = (req, next) =>
+      next({ ...req, params: { ...req.params, arguments: { topic: 'q4' } } });
+    const server = createProxyServer({ wiki }, { promptMiddleware: [rewrite] });
+
+    await invokeHandler(server, 'prompts/get', {
+      name: 'wiki__brief',
+      arguments: { topic: 'q3' },
+    });
+
+    // Routing rebuilds params from the post-pipeline request, so the edit
+    // survives the name rewrite instead of being clobbered by it.
+    expect(wiki.getPrompt).toHaveBeenCalledWith(
+      { name: 'brief', arguments: { topic: 'q4' } },
+      undefined,
+    );
+  });
+
   it('throws BACKEND_UNROUTABLE inside the pipeline, so middleware observes it', async () => {
     const observed: unknown[] = [];
     const observer: PromptMiddleware = async (req, next) => {
