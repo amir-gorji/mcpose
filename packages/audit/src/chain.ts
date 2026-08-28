@@ -103,8 +103,8 @@ const DOMAIN_CHAIN_HASH = 'mcpose/v2/chain';
  * the event. Used by both the producer (middleware) and any verifier
  * ({@link verifyAuditChain}) so the two cannot drift.
  *
- * NOT covered (bound only via inputHash/outputHash, or not at all):
- * `sensitivityTier` and the raw/encrypted payloads.
+ * NOT covered (bound only via inputHash/outputHash): the raw/encrypted
+ * payloads.
  */
 export function chainPreimageFields(
   event: Omit<AuditEvent, 'chainHash'> | AuditEvent,
@@ -125,6 +125,9 @@ export function chainPreimageFields(
     tool: event.tool,
     duration_ms: event.duration_ms,
     outcome: event.outcome,
+    // Required on every event, so it is a plain always-present field rather
+    // than an omission-guarded optional one (ADR-0015).
+    sensitivityTier: event.sensitivityTier,
     ...(event.rejectionReason === undefined
       ? {}
       : { rejectionReason: event.rejectionReason }),

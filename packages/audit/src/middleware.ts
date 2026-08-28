@@ -369,6 +369,13 @@ interface BuildParams {
 
 /** Fully synchronous — position allocation relies on that (no await between read and append). */
 function buildEvent(p: BuildParams): AuditEvent {
+  // Fail CLOSED: only explicit low/medium get plaintext; any other tier
+  // value — including garbage from a user-supplied resolver — encrypts.
+  // Decided before the preimage is built, because the tier is a covered
+  // field and must be the one the event actually ships with (ADR-0015).
+  const sensitivityTier =
+    p.tier === 'low' || p.tier === 'medium' ? p.tier : 'high';
+
   const withoutChainHash = {
     id: p.ctx.requestId,
     startedAt: p.startedAt,
@@ -383,6 +390,7 @@ function buildEvent(p: BuildParams): AuditEvent {
     tool: p.tool,
     duration_ms: p.duration_ms,
     outcome: p.outcome,
+    sensitivityTier,
     ...(p.rejectionReason !== undefined
       ? { rejectionReason: p.rejectionReason }
       : {}),
@@ -400,12 +408,10 @@ function buildEvent(p: BuildParams): AuditEvent {
 
   const base = { ...withoutChainHash, chainHash };
 
-  // Fail CLOSED: only explicit low/medium get plaintext; any other tier
-  // value — including garbage from a user-supplied resolver — encrypts.
-  if (p.tier === 'low' || p.tier === 'medium') {
+  if (sensitivityTier !== 'high') {
     return {
       ...base,
-      sensitivityTier: p.tier,
+      sensitivityTier,
       inputRaw: p.args,
       outputRaw: p.result,
     };

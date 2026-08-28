@@ -80,7 +80,8 @@ const identityArb: fc.Arbitrary<Identity> = fc.record(
 
 /**
  * Every field the chain preimage covers (ADR-0004), minus
- * `replayManifestPosition`, which the verifier checks separately.
+ * `replayManifestPosition`, which the verifier checks separately, and the
+ * optional `proxy` / `kind`, covered by the middleware tests.
  */
 interface PreimageFields {
   id: string;
@@ -92,6 +93,7 @@ interface PreimageFields {
   tool: string;
   duration_ms: number;
   outcome: AuditEvent['outcome'];
+  sensitivityTier: AuditEvent['sensitivityTier'];
   rejectionReason?: RejectionReason | undefined;
   error?: { name: string; message: string } | undefined;
   inputHash: string;
@@ -108,6 +110,7 @@ const PREIMAGE_FIELDS = [
   'tool',
   'duration_ms',
   'outcome',
+  'sensitivityTier',
   'rejectionReason',
   'error',
   'inputHash',
@@ -125,6 +128,7 @@ const eventFieldsArb: fc.Arbitrary<PreimageFields> = fc.record(
     tool: fc.string({ minLength: 1, maxLength: 10 }),
     duration_ms: fc.nat({ max: 100_000 }),
     outcome: fc.constantFrom('success', 'rejected', 'error'),
+    sensitivityTier: fc.constantFrom('low', 'medium', 'high'),
     rejectionReason: fc.constantFrom<RejectionReason[]>(
       'TOOL_HIDDEN',
       'POLICY_DENIED',
@@ -146,6 +150,7 @@ const eventFieldsArb: fc.Arbitrary<PreimageFields> = fc.record(
       'tool',
       'duration_ms',
       'outcome',
+      'sensitivityTier',
       'inputHash',
       'outputHash',
     ],
@@ -186,9 +191,9 @@ function buildChain(fields: readonly PreimageFields[]): AuditEvent[] {
     const withoutChainHash = {
       ...f,
       replayManifestPosition: i,
-      sensitivityTier: 'low',
-      inputRaw: {},
-      outputRaw: null,
+      ...(f.sensitivityTier === 'high'
+        ? { inputEncrypted: '', outputEncrypted: '' }
+        : { inputRaw: {}, outputRaw: null }),
     } as Omit<AuditEvent, 'chainHash'>;
     const chainHash = computeChainHash(
       chainPreimageFields(withoutChainHash),

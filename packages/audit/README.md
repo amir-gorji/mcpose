@@ -137,9 +137,10 @@ The signed manifest anchors the whole session, and high-tier payloads are encryp
 
 Each link is `HMAC(chainKey, canonicalJson({ domain, prevChainHash, event }))` over this field set:
 
-`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `proxy?`, `kind?`, `identity`, `tool`, `duration_ms`, `outcome`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
+`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `proxy?`, `kind?`, `identity`, `tool`, `duration_ms`, `outcome`, `sensitivityTier`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
 
 Optional fields are omitted from the preimage when absent, so events recorded before an optional field existed keep verifying unchanged (ADR-0012).
+`sensitivityTier` is required on every event and is therefore always present, which is why covering it amended format v2 in place rather than extending it (ADR-0015).
 
 Serialization is canonical (keys sorted at every depth), so key insertion order is not load-bearing and an independently written verifier reproduces the same hash.
 The **field set** is what matters, and it is defined once in the source and shared by producer and verifier.
@@ -149,7 +150,6 @@ An independently written verifier must track the current field set: one pinned t
 
 Stating the boundaries precisely is the point of an audit trail, so:
 
-- **`sensitivityTier` is not in the preimage.** Post-hoc tampering with the tier alone is not chain-detectable.
 - **Payloads are bound only by hash.** `inputHash` / `outputHash` commit to the payload; the raw and encrypted bodies themselves are not in the preimage.
 - **The keyless assertions in `@mcpose/testing` do not prove authenticity.** They prove internal consistency, catching reordering, renumbering, duplication, head or middle deletion, and a swapped Merkle root. A forger who rewrites every event and regenerates the root and proofs produces a document they accept, and does not need the signing secret to do it, because the forger supplies the hashes. See [that package's README](https://www.npmjs.com/package/@mcpose/testing) for the per-assertion limits.
 - **Tail truncation leaves a valid prefix.** Head and middle deletion renumber everything after them and are caught; truncating the tail is not, so `assertAuditChainIntegrity` accepts it on its own. The manifest's `eventCount` is what catches it.
