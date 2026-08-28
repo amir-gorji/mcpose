@@ -518,6 +518,12 @@ describe('createProxyServer() — capability mirroring', () => {
     await expect(invokeHandler(server, 'prompts/list')).rejects.toThrow(
       'No handler registered for method: prompts/list',
     );
+    // No prompts capability means no prompts/get handler either: the SDK
+    // refuses to register one, so there is no pipeline to reject inside
+    // and nothing for audit to record (ADR-0014).
+    await expect(invokeHandler(server, 'prompts/get')).rejects.toThrow(
+      'No handler registered for method: prompts/get',
+    );
     await expect(invokeHandler(server, 'resources/list')).rejects.toThrow(
       'No handler registered for method: resources/list',
     );
