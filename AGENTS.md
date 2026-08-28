@@ -78,6 +78,11 @@ Dependabot PRs are reviewed and merged autonomously by two workflows, run by the
 
 `.github/dependabot.yml` intentionally has no `groups:` block: dependabot opens one PR per dependency, so a bad bump only ever holds back or blocks itself, not a bundle of unrelated updates.
 
+It does carry an `ignore` rule for major bumps of `vitest` and `@vitest/coverage-v8`.
+A major that the repository has decided not to take yet belongs there, not in `pnpm-workspace.yaml`: an override cap resolves the bump away silently and lets a merged PR claim an update that never happened, while an ignore rule stops the PR from being opened at all and leaves the declared spec honest.
+See [issue #105](https://github.com/amir-gorji/mcpose/issues/105) for the vitest 4 hold-back reasoning.
+Ignore rules only suppress version updates, so a security advisory on the ignored line still opens a PR.
+
 ## Policies
 
 **Coverage thresholds are raise-only ratchets.**
