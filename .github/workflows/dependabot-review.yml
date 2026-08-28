@@ -19,6 +19,14 @@ name: Dependabot Review
 # the workflow definition from main with Actions secrets and a write token,
 # which is exactly the permission set the note above already assumes. The
 # PR head is checked out explicitly below and treated as untrusted.
+#
+# The action is given the workflow's own GITHUB_TOKEN instead of its default
+# OIDC-exchanged app token, because the exchange rejects dependabot-actor
+# runs ('Invalid OIDC token', #137). Accepted ceiling: pushes made with
+# GITHUB_TOKEN do not retrigger workflows, so a review that pushes fixes
+# leaves the PR labeled but unmergeable (mcpose CI never reruns on the new
+# head and dependabot-merge.yml refuses) until CI is rerun by hand. Clean
+# bumps, the common case, are unaffected.
 
 on:
   pull_request_target:
@@ -28,7 +36,6 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
-  id-token: write
 
 # One review run per PR, newest wins: a superseded run finishing late must
 # not label a head it never assessed (see the stale-approval strip below).
@@ -76,6 +83,7 @@ jobs:
         uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10 # v1.0.210
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_bots: 'dependabot[bot]'
           claude_args: |
             --allowedTools "Bash(git:*),Bash(pnpm:*),Bash(rm:*),Bash(find:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh label list:*),Read,Edit,Write,Grep,Glob"
