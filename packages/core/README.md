@@ -312,8 +312,8 @@ interface HttpProxyOptions {
   onRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>;
   onError?: (err: unknown) => void;
   maxBodyBytes?: number; // Default: 4 MB (4,194,304); excess returns 413
-  maxSessions?: number;  // Excess requests return 503
-  sessionTtlMs?: number; // Sessions auto-close after this duration
+  maxSessions?: number;  // Default: 1000; excess requests return 503; Infinity opts out
+  sessionTtlMs?: number; // Default: 30 minutes (1,800,000); Infinity opts out
   /** Resolves caller identity once per session. Errors abort the session with 401. */
   resolveIdentity?: (req: http.IncomingMessage) => Identity | Promise<Identity>;
   /** Re-validates an existing session on every routed request. Return false (or throw) for a 401. */
@@ -345,6 +345,17 @@ function startHttpProxy(
 </details>
 
 `httpOptions` is meaningful only for HTTP/SSE transport; omit it when serving over stdio.
+
+**Session lifecycle is bounded by default.**
+`maxSessions` defaults to 1000 and `sessionTtlMs` defaults to 30 minutes, the same safe-by-default posture `maxBodyBytes` already had at 4 MB.
+Unlimited sessions that never expire are a memory exhaustion path open to any client that can initialize, and each live session also pins whatever per-session state a host keeps beside it.
+Both are overridable, and `Infinity` is the explicit opt-out for either.
+`maxSessions: 0` is not an opt-out: it already means "reject every session", so it keeps that meaning.
+A `maxSessions` below zero, or a `sessionTtlMs` of zero or below, throws at startup rather than silently disabling the bound.
+
+This is a behavior change: both options used to be opt-in, so a proxy started with defaults accepted unlimited sessions that never expired.
+A long-lived deployment that relied on that must now pass `sessionTtlMs: Infinity`, `maxSessions: Infinity`, or values that match its own limits.
+TTL expiry fires `onSessionClosed`, so a host holding per-session state should wire that hook rather than assume sessions only end on a client DELETE.
 `allowedHosts`, `allowedOrigins`, and `enableDnsRebindingProtection` are forwarded to the SDK transport, which only validates against a non-empty list; that is why mcpose derives enforcing defaults for a loopback bind instead of shipping an inert flag.
 An explicit `allowedHosts` or `allowedOrigins` is used verbatim and never merged with the derived list.
 See [ADR-0005](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0005-loopback-bind-by-default.md) and the network posture section of [`SECURITY.md`](https://github.com/amir-gorji/mcpose/blob/main/SECURITY.md).

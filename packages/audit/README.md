@@ -115,6 +115,15 @@ Two wiring details decide whether this actually works:
 - **Middleware order.** `ProxyOptions` arrays are in response-processing order, so `[piiMW, auditHandle.middleware]` redacts *before* it audits. Reversing it logs raw PII.
 - **`onSessionClosed`.** Without it, no manifest is ever produced, because nothing tells the audit layer a session ended.
 
+**The host owns the close call, and the proxy closes sessions on its own.**
+`createAuditMiddleware` holds an in-memory event array per session and releases it only when `closeSession` runs.
+`startHttpProxy` fires `onSessionClosed` on every way a session can end: a client DELETE, `sessionTtlMs` expiry, and server shutdown.
+Wiring `onSessionClosed` to `closeSession`, as above, is therefore the whole pattern: an abandoned session still expires on the TTL, and its manifest still gets signed and handed to `onManifest`.
+Skip the wiring and an abandoned session leaves its events unsigned in memory for the life of the process, which is both a leak and a silent hole in the audit record.
+
+`sessionTtlMs` defaults to 30 minutes and `maxSessions` to 1000, so that expiry happens whether or not a host configures either.
+A deployment that opts out with `sessionTtlMs: Infinity` takes back the job of ending abandoned sessions itself.
+
 ## How it works
 
 - **Audit event**: the record of one tool call or prompt call: `identity`, `tool`, `outcome`, input and output hashes, and a `chainHash` linking it to its predecessor.
