@@ -9,7 +9,7 @@ import type { BackendClient } from './backendClient.js';
  * `<backendKey>__<name>`. A key may not contain it, so the first occurrence
  * always splits the two, even when the upstream name contains one itself.
  */
-export const BACKEND_NAMESPACE_SEPARATOR = '__';
+const BACKEND_NAMESPACE_SEPARATOR = '__';
 
 /**
  * Pages drained from one backend before the proxy gives up on it. A backend

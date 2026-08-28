@@ -430,9 +430,18 @@ type ProxyRequestExtra = {
   }) => Promise<void>;
 };
 
+/**
+ * Subscribers to one backend's list-changed notifications, with the
+ * capabilities each proxy server advertises. The handlers are registered
+ * from the backend's own capabilities rather than any one subscriber's, so
+ * a backend shared between proxies that advertise different surfaces
+ * forwards every surface it has, and the fan-out filters per subscriber.
+ */
 type ListChangedBus = {
-  servers: Set<Server>;
+  servers: Map<Server, ServerCapabilities>;
 };
+
+type ListChangedSurface = 'tools' | 'prompts' | 'resources';
 
 const listChangedBuses = new WeakMap<BackendClient, ListChangedBus>();
 const httpProxyContext = new AsyncLocalStorage<
@@ -614,6 +623,28 @@ function buildLocalToolMap(
   return localToolMap;
 }
 
+/**
+ * The backends advertising one surface, ready to list across and to route
+ * by backend key. Only these are queried or routed to, so an otherwise-valid
+ * prefix naming a backend without the surface is unroutable rather than a
+ * call the upstream cannot serve.
+ */
+function surfaceBackends(
+  entries: ReadonlyArray<MeshEntry>,
+  surface: 'tools' | 'prompts',
+): {
+  entries: ReadonlyArray<MeshEntry>;
+  byKey: ReadonlyMap<string, BackendClient>;
+} {
+  const selected = entries.filter(
+    (entry) => entry.client.getServerCapabilities()?.[surface] !== undefined,
+  );
+  return {
+    entries: selected,
+    byKey: new Map(selected.map((entry) => [entry.key, entry.client] as const)),
+  };
+}
+
 /** Normalizes the `hiddenTools` option to its predicate form. */
 function toHiddenToolPredicate(
   hiddenTools: ReadonlyArray<string> | HiddenToolPredicate | undefined,
@@ -638,9 +669,9 @@ function filterHiddenTools(
  * Subscribes `server` to every backend's list-changed notifications, so a
  * mesh fans them in through the same per-backend bus a 1:1 proxy uses.
  *
- * A surface is forwarded only when both the backend and the proxy advertise
- * it: in mesh mode the proxy has no `resources` capability, and the SDK
- * would reject a notification for a surface the server never advertised.
+ * A notification reaches a subscriber only when that subscriber advertises
+ * the surface: in mesh mode the proxy has no `resources` capability, and the
+ * SDK rejects a notification for a surface the server never advertised.
  */
 function registerListChangedForwarders(
   entries: ReadonlyArray<MeshEntry>,
@@ -651,47 +682,57 @@ function registerListChangedForwarders(
 
   for (const { client } of entries) {
     const upstream = client.getServerCapabilities() ?? {};
-    const forwards = {
-      tools:
-        capabilities.tools?.listChanged === true &&
-        upstream.tools?.listChanged === true,
-      prompts:
-        capabilities.prompts?.listChanged === true &&
-        upstream.prompts?.listChanged === true,
-      resources:
-        capabilities.resources?.listChanged === true &&
-        upstream.resources?.listChanged === true,
-    };
-    if (!forwards.tools && !forwards.prompts && !forwards.resources) continue;
+    const surfaces: ReadonlyArray<ListChangedSurface> = [
+      'tools',
+      'prompts',
+      'resources',
+    ];
+    if (
+      !surfaces.some(
+        (surface) =>
+          capabilities[surface]?.listChanged === true &&
+          upstream[surface]?.listChanged === true,
+      )
+    ) {
+      continue;
+    }
 
     let bus = listChangedBuses.get(client);
 
     if (!bus) {
-      const servers = new Set<Server>();
+      const servers = new Map<Server, ServerCapabilities>();
       const fanOut = async (
+        surface: ListChangedSurface,
         notify: (proxyServer: Server) => Promise<void>,
       ): Promise<void> => {
         await Promise.allSettled(
-          [...servers].map((proxyServer) => notify(proxyServer)),
+          [...servers]
+            .filter(([, advertised]) => advertised[surface]?.listChanged)
+            .map(([proxyServer]) => notify(proxyServer)),
         );
       };
 
-      if (forwards.tools) {
+      if (upstream.tools?.listChanged) {
         client.setNotificationHandler(ToolListChangedNotificationSchema, () =>
-          fanOut((proxyServer) => proxyServer.sendToolListChanged()),
+          fanOut('tools', (proxyServer) => proxyServer.sendToolListChanged()),
         );
       }
 
-      if (forwards.prompts) {
+      if (upstream.prompts?.listChanged) {
         client.setNotificationHandler(PromptListChangedNotificationSchema, () =>
-          fanOut((proxyServer) => proxyServer.sendPromptListChanged()),
+          fanOut('prompts', (proxyServer) =>
+            proxyServer.sendPromptListChanged(),
+          ),
         );
       }
 
-      if (forwards.resources) {
+      if (upstream.resources?.listChanged) {
         client.setNotificationHandler(
           ResourceListChangedNotificationSchema,
-          () => fanOut((proxyServer) => proxyServer.sendResourceListChanged()),
+          () =>
+            fanOut('resources', (proxyServer) =>
+              proxyServer.sendResourceListChanged(),
+            ),
         );
       }
 
@@ -700,7 +741,7 @@ function registerListChangedForwarders(
     }
 
     const joined = bus;
-    joined.servers.add(server);
+    joined.servers.set(server, capabilities);
 
     let active = true;
     leaveBuses.push(() => {
@@ -759,22 +800,9 @@ export function createProxyServer(
   const backend = entries[0]!.client;
 
   const localToolMap = buildLocalToolMap(options.localTools);
-  // Only backends that advertise a surface are queried or routed to, so an
-  // otherwise-valid prefix naming a tools-less backend is unroutable rather
-  // than a call the upstream cannot serve.
-  const toolBackends = entries.filter(
-    (entry) => entry.client.getServerCapabilities()?.tools !== undefined,
-  );
-  const promptBackends = entries.filter(
-    (entry) => entry.client.getServerCapabilities()?.prompts !== undefined,
-  );
-  const toolBackendsByKey = new Map(
-    toolBackends.map((entry) => [entry.key, entry.client] as const),
-  );
-  const promptBackendsByKey = new Map(
-    promptBackends.map((entry) => [entry.key, entry.client] as const),
-  );
-  const upstreamHasTools = toolBackends.length > 0;
+  const toolBackends = surfaceBackends(entries, 'tools');
+  const promptBackends = surfaceBackends(entries, 'prompts');
+  const upstreamHasTools = toolBackends.entries.length > 0;
 
   const capabilities = createProxyCapabilities(
     entries,
@@ -873,7 +901,7 @@ export function createProxyServer(
                 // A mesh has no cursor that means "page 3 of the union", so
                 // every backend is drained into one complete page.
                 tools: await listAcrossMesh(
-                  toolBackends,
+                  toolBackends.entries,
                   async (client, cursor) => {
                     const page = stripResult(
                       await client.listTools(
@@ -977,7 +1005,7 @@ export function createProxyServer(
                 // so middleware can re-route a call deliberately.
                 const routed = routeNamespaced(
                   r.params.name,
-                  toolBackendsByKey,
+                  toolBackends.byKey,
                 );
                 if (routed === undefined) {
                   throw rejectionMcpError(
@@ -1086,7 +1114,7 @@ export function createProxyServer(
         const context = getMiddlewareContext(proxyIdentity, extra.signal);
         return {
           prompts: await listAcrossMesh(
-            promptBackends,
+            promptBackends.entries,
             async (client, cursor) => {
               const page = stripResult(
                 await client.listPrompts(
@@ -1104,7 +1132,7 @@ export function createProxyServer(
 
     server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) => {
       const req = stripRequest(rawReq);
-      const routed = routeNamespaced(req.params.name, promptBackendsByKey);
+      const routed = routeNamespaced(req.params.name, promptBackends.byKey);
       if (routed === undefined) {
         throw rejectionMcpError(
           'BACKEND_UNROUTABLE',

@@ -227,6 +227,7 @@ An empty record or an invalid key throws at `createProxyServer` (and at `startHt
 | Lists | Unpaginated: cursors are per-backend, so a mesh drains every backend and returns one complete page with no `nextCursor`. |
 | Resources | Not served. A resource is addressed by URI, and a URI cannot be namespaced without rewriting an identifier every party treats as opaque. A mesh advertises no `resources` capability. |
 
+Degradation covers runtime failures, not startup: every backend in the record must already be connected, and `createProxyServer` throws and names the key of one that is not, exactly as it does for a single unconnected backend.
 Without an `onTelemetry` sink a degraded mesh is invisible, so wire one when you run a mesh.
 See [ADR-0013](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0013-multi-backend-composition.md); mesh resource composition is [#100](https://github.com/amir-gorji/mcpose/issues/100).
 

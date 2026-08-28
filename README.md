@@ -187,7 +187,6 @@ For each tool or resource, mcpose picks exactly one path:
 | **Hidden** | `hiddenTools` / `hiddenResources` | Omitted from list responses, and rejected at call time with `TOOL_HIDDEN` / `RESOURCE_HIDDEN`. `hiddenTools` also takes a predicate, so a dispatcher (meta-tool) cannot reach a hidden tool by argument; see `dispatcherAwareBlock`. |
 | **Pass-through** | `passThroughTools` / `passThroughResources` | Forwarded to the upstream untouched. Transforming middleware is skipped. |
 | **Local** | `localTools` | Served by the proxy itself instead of the upstream, still through the full `toolMiddleware` pipeline. Hidden beats local; local beats an upstream tool of the same name; pass-through does not apply. |
-| **Routed** | a `Record<string, BackendClient>` | In mesh mode, a tool named `<backendKey>__<tool>` is forwarded to that backend under its un-namespaced name. A name that resolves to no configured backend is rejected with `BACKEND_UNROUTABLE`. |
 | **Middleware** | everything else | Routed through the full `toolMiddleware` / `resourceMiddleware` pipeline. |
 
 Three consequences worth knowing up front:
@@ -198,6 +197,10 @@ Three consequences worth knowing up front:
 - Pass-through skips *transforming* middleware only.
   Middleware wrapped in `markPassThroughObserver()` still runs, which is how audit and telemetry keep full coverage.
   The middleware from `createAuditMiddleware` is wrapped for you.
+
+Mesh mode adds no fifth path.
+Choosing which upstream a call goes to happens *inside* the innermost `next` of whichever path above applies, so a mesh call runs exactly the pipeline a 1:1 call runs, audit included.
+A name that resolves to no configured backend is rejected there too, with `BACKEND_UNROUTABLE`, so observing middleware records the attempt.
 
 ### The middleware onion
 

@@ -668,15 +668,48 @@ describe('createProxyServer() — mesh list-changed fan-in', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('does not forward a surface the mesh does not advertise', () => {
+  it('does not forward a surface the mesh does not advertise', async () => {
     const crm = makeMeshBackend(['lookup'], {
-      capabilities: { tools: {}, resources: { listChanged: true } },
+      capabilities: {
+        tools: { listChanged: true },
+        resources: { listChanged: true },
+      },
     });
-    createProxyServer({ crm });
+    const mesh = createProxyServer({ crm });
+    const send = vi
+      .spyOn(mesh, 'sendResourceListChanged')
+      .mockResolvedValue(undefined);
 
-    expect(
-      crm.__notificationHandlers.has('notifications/resources/list_changed'),
-    ).toBe(false);
+    await crm.__notificationHandlers.get(
+      'notifications/resources/list_changed',
+    )?.();
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('keeps a backend shared with a 1:1 proxy forwarding every surface', async () => {
+    const shared = makeMeshBackend(['lookup'], {
+      capabilities: {
+        tools: { listChanged: true },
+        resources: { listChanged: true },
+      },
+    });
+    // The mesh creates the bus first, and advertises no resources.
+    const mesh = createProxyServer({ crm: shared });
+    const direct = createProxyServer(shared);
+    const meshSend = vi
+      .spyOn(mesh, 'sendResourceListChanged')
+      .mockResolvedValue(undefined);
+    const directSend = vi
+      .spyOn(direct, 'sendResourceListChanged')
+      .mockResolvedValue(undefined);
+
+    await shared.__notificationHandlers.get(
+      'notifications/resources/list_changed',
+    )?.();
+
+    expect(directSend).toHaveBeenCalledOnce();
+    expect(meshSend).not.toHaveBeenCalled();
   });
 });
 

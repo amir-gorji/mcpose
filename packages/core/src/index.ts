@@ -16,7 +16,6 @@ export type {
 } from './telemetry.js';
 
 export type { Backends } from './mesh.js';
-export { BACKEND_NAMESPACE_SEPARATOR } from './mesh.js';
 
 export type { PersistentEventStore } from './eventStore.js';
 export { createInMemoryEventStore } from './eventStore.js';

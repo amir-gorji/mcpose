@@ -12,7 +12,8 @@ Backend keys are validated at `createProxyServer`: an empty record, an empty key
 Because a key can never contain the separator, the first `__` in an exposed name always splits key from upstream name, even when the upstream name contains one itself.
 
 **A tool call that does not route fails loudly.**
-An un-namespaced name, an unknown prefix, or a prefix naming a backend without a `tools` capability is rejected with `MethodNotFound` and the new `BACKEND_UNROUTABLE` rejection reason, thrown inside the pipeline so audit records it like any other rejection.
+An un-namespaced name, an unknown prefix, or a prefix naming a backend without a `tools` capability is rejected with `MethodNotFound` and the new `BACKEND_UNROUTABLE` rejection reason.
+For a tool call that rejection is thrown inside the pipeline, so audit records it like any other rejection.
 There is no "resolve it if only one backend has that name" fallback: a mesh that silently re-routes a call when a backend is added is exactly the failure a governance proxy must not have.
 
 **Configuration stays global and matches the namespaced name.**
@@ -24,6 +25,10 @@ Per-backend expressiveness falls out of the prefix, so no per-backend configurat
 The degradation is reported as a `backend_degraded` telemetry event naming the key, the method, and the error.
 A call routed to a down backend fails only that call.
 
+Isolation covers runtime failures, not startup.
+A backend whose `getServerCapabilities()` returns `undefined` was never connected, and every entry is checked at `createProxyServer`, which throws and names the offending key.
+That is the same programming-error check a 1:1 proxy has always made, and it stays loud on purpose: an unconnected client in the record is a wiring mistake, not an upstream having a bad day, and degrading it away would hide a proxy that can never serve those tools at all.
+
 **One audit session spans the mesh.**
 The middleware pipeline is untouched and still runs exactly once, around whichever backend the call routes to.
 Per-event backend attribution already falls out of the namespaced `tool` field plus the ADR-0012 `proxy` field, so nothing in `packages/audit` changes, there is no new identity model, and `delegatedFrom` semantics are exactly as ADR-0011 left them.
@@ -32,11 +37,14 @@ Per-event backend attribution already falls out of the namespaced `tool` field p
 ADR-0007 precedence is unchanged and now reads against exposed names: `hiddenTools` beats a local tool, and a local tool named `crm__lookup` shadows the upstream tool exposed under that name.
 Capabilities are the union across backends, plus the ADR-0007 rule that a non-empty `localTools` advertises `tools` on its own.
 `listChanged` is advertised when any backend advertises it, and every backend's notification is forwarded to every connected proxy server, so the fan-in reuses the existing per-backend bus with no new machinery.
+That bus now registers its handlers from the backend's own capabilities and filters at fan-out by what each subscribed server advertises, because a backend shared between a mesh and a 1:1 proxy would otherwise be frozen with whichever proxy created the bus first, and could hand a mesh server a notification for a surface the mesh never advertised.
 
 ## What this ADR settles beyond the tool surface
 
 **Prompts are namespaced exactly like tools.**
 Prompt names are plain strings, so `<key>__<name>` and prefix routing apply unchanged, with the same loud failure and the same degradation on list.
+The prompt rejection carries the same `BACKEND_UNROUTABLE` reason but is thrown from the raw handler, because prompts are forwarded as-is and there is no prompt pipeline to throw inside.
+Audit therefore never sees an unroutable prompt, exactly as it never sees any other prompt call; closing that gap means giving prompts a pipeline, which is out of scope here.
 
 **Resources are not exposed in mesh mode.**
 A resource is addressed by URI, and a URI is not a name: prefixing `file:///notes.md` breaks it, and a wrapper scheme such as `mcpose+crm://` would rewrite an identifier that clients, upstreams, and audit records all treat as opaque.
@@ -50,6 +58,7 @@ Cursors are opaque and per-backend, so there is no cursor that means "page 3 of 
 Mesh mode drains every backend's pages and returns one complete page with no `nextCursor`; a cursor sent by a client is ignored, and local tools are therefore always present.
 A backend that never finishes paginating is cut off after 100 pages and reported as a degradation, because a governance proxy must not hang on a misbehaving upstream.
 Single-backend pagination is untouched and still forwards the upstream's cursors verbatim.
+Mesh list calls also forward only a cursor, dropping the rest of the outbound request params, so a `ListToolsMiddleware` that rewrites the request it passes to `next` still shapes the merged response but no longer reaches the upstreams, unlike in 1:1 mode.
 
 **`TelemetryEvent` becomes a discriminated union** on the `type` field it already carried, gaining `backend_degraded` alongside `tool_call`.
 Degradation is an observability signal, so it belongs on the observability hook rather than on a second one.
@@ -73,3 +82,5 @@ Consumers that hold a `TelemetryEvent` and read `tool_call` fields now need to n
 - A degraded mesh is invisible without an `onTelemetry` sink, so an operator running a mesh should wire one.
 - Backend keys become part of the public contract of a proxy: renaming one renames every tool the client sees.
 - Mesh mode cannot serve resources, and a proxy that needs them stays 1:1 until #100 lands.
+- A `ListToolsMiddleware` that rewrites the outbound list request is inert in mesh mode, because only the cursor is forwarded.
+- An unroutable prompt is not audited, because prompts have no pipeline to reject inside.
