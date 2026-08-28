@@ -15,6 +15,6 @@ export default {
   // Ratchet policy: raise-only, the same rule as the coverage thresholds in
   // vitest.config.ts. Lowering `break` requires an ADR-level justification.
   // Set to the measured baseline mutation score rounded down minus 2 points.
-  // Baseline on 2026-08-28: 75.06 (866 killed, 1 timeout, 231 survived, 57 no cov).
-  thresholds: { high: 75, low: 67, break: 73 },
+  // Baseline on 2026-08-28: 76.40 (870 killed, 1 timeout, 222 survived, 47 no cov).
+  thresholds: { high: 75, low: 67, break: 74 },
 };
