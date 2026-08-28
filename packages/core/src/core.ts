@@ -189,9 +189,19 @@ export interface HttpProxyOptions {
   onError?: (err: unknown) => void;
   /** Maximum request body size in bytes. Default: 4 MB. */
   maxBodyBytes?: number;
-  /** Maximum number of concurrent MCP sessions. Excess requests return 503. */
+  /**
+   * Maximum number of concurrent MCP sessions. Excess requests return 503.
+   * Default: 1000. Set to `Infinity` to opt out of the cap.
+   *
+   * `0` is a valid value and means "reject every session", so it is not the
+   * opt-out.
+   */
   maxSessions?: number;
-  /** Session TTL in milliseconds. Sessions are closed after this duration. */
+  /**
+   * Session TTL in milliseconds. Sessions are closed after this duration,
+   * which fires {@link onSessionClosed}. Default: 30 minutes. Set to
+   * `Infinity` to opt out of the TTL.
+   */
   sessionTtlMs?: number;
   /**
    * Resolves caller identity from the initial session request.
@@ -1324,6 +1334,23 @@ export function startHttpProxy(
   const loopback = isLoopbackHost(host);
   const dnsRebindingProtection =
     httpOptions.enableDnsRebindingProtection ?? loopback;
+  // Bounded by default (#107): unlimited sessions that never expire are a
+  // memory exhaustion path for any client that can initialize. `Infinity`
+  // is the opt-out for both; `maxSessions: 0` already means "reject every
+  // session", so it cannot double as one. The `!(x >= n)` form also
+  // rejects NaN, which a plain `x < n` would let through.
+  const maxSessions = httpOptions.maxSessions ?? 1000;
+  const sessionTtlMs = httpOptions.sessionTtlMs ?? 30 * 60 * 1000;
+  if (!(maxSessions >= 0)) {
+    throw new Error(
+      `mcpose: maxSessions must be >= 0 or Infinity, got ${String(httpOptions.maxSessions)}`,
+    );
+  }
+  if (!(sessionTtlMs > 0)) {
+    throw new Error(
+      `mcpose: sessionTtlMs must be > 0 or Infinity, got ${String(httpOptions.sessionTtlMs)}`,
+    );
+  }
   // Filled in once the server is listening (the real port is only known
   // then); sessions are only created after that. The SDK transport
   // validates Host/Origin only against a non-empty list, so an enabled flag
@@ -1469,10 +1496,7 @@ export function startHttpProxy(
 
         // Count this initialize as pending so concurrent initializes
         // cannot overshoot maxSessions while identity resolution awaits.
-        if (
-          httpOptions.maxSessions !== undefined &&
-          sessions.size + pendingSessions >= httpOptions.maxSessions
-        ) {
+        if (sessions.size + pendingSessions >= maxSessions) {
           res.writeHead(503, { 'content-type': 'application/json' }).end(
             JSON.stringify({
               error: {
@@ -1511,10 +1535,11 @@ export function startHttpProxy(
             enableDnsRebindingProtection: dnsRebindingProtection,
             onsessioninitialized: (id) => {
               let ttlTimer: NodeJS.Timeout | undefined;
-              if (httpOptions.sessionTtlMs !== undefined) {
+              // Infinity opts out; setTimeout would clamp it to 1ms.
+              if (Number.isFinite(sessionTtlMs)) {
                 ttlTimer = setTimeout(() => {
                   void destroySession(id);
-                }, httpOptions.sessionTtlMs);
+                }, sessionTtlMs);
                 ttlTimer.unref();
               }
               sessions.set(id, {

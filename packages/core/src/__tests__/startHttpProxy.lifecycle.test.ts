@@ -121,6 +121,107 @@ describe('startHttpProxy() session lifecycle', () => {
     });
   });
 
+  describe('bounded-by-default lifecycle (#107)', () => {
+    describe('default TTL', () => {
+      beforeEach(() => vi.useFakeTimers());
+      afterEach(() => vi.useRealTimers());
+
+      it('closes a session after the default 30 minutes when sessionTtlMs is omitted', async () => {
+        const closed: string[] = [];
+        const server = await startHttpProxy(
+          makeMockBackend(),
+          { name: 'test-server' },
+          { port: 0, path: '/mcp', onSessionClosed: (id) => closed.push(id) },
+        );
+        const baseUrl = `http://localhost:${getPort(server)}`;
+
+        try {
+          const sessionId = await initSession(baseUrl);
+
+          // Just under the default: still alive.
+          await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1);
+          expect(closed).toEqual([]);
+
+          await vi.advanceTimersByTimeAsync(2);
+          expect(closed).toEqual([sessionId]);
+        } finally {
+          await closeServer(server);
+        }
+      });
+
+      it('keeps a session alive past the default TTL when sessionTtlMs is Infinity', async () => {
+        const closed: string[] = [];
+        const server = await startHttpProxy(
+          makeMockBackend(),
+          { name: 'test-server' },
+          {
+            port: 0,
+            path: '/mcp',
+            sessionTtlMs: Infinity,
+            onSessionClosed: (id) => closed.push(id),
+          },
+        );
+        const baseUrl = `http://localhost:${getPort(server)}`;
+
+        try {
+          const sessionId = await initSession(baseUrl);
+
+          await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+          expect(closed).toEqual([]);
+
+          const after = await postOnFreshConnection(
+            `${baseUrl}/mcp`,
+            { ...MCP_HEADERS, 'mcp-session-id': sessionId },
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 2,
+              method: 'tools/list',
+              params: {},
+            }),
+          );
+          expect(after).not.toBe(404);
+        } finally {
+          await closeServer(server);
+        }
+      });
+    });
+
+    describe('option validation', () => {
+      // The default cap of 1000 is not exercised end to end: opening 1001
+      // real sessions costs more than the assertion is worth. `maxSessions: 1`
+      // above covers the enforcement path the default feeds.
+      it.each([
+        ['maxSessions', -1],
+        ['maxSessions', Number.NaN],
+        ['sessionTtlMs', 0],
+        ['sessionTtlMs', -1],
+        ['sessionTtlMs', Number.NaN],
+      ])('rejects %s: %s at startup', (option, value) => {
+        expect(() =>
+          startHttpProxy(
+            makeMockBackend(),
+            { name: 'test-server' },
+            { port: 0, path: '/mcp', [option]: value },
+          ),
+        ).toThrow(new RegExp(`mcpose: ${option}`));
+      });
+
+      it('accepts maxSessions: Infinity', async () => {
+        const server = await startHttpProxy(
+          makeMockBackend(),
+          { name: 'test-server' },
+          { port: 0, path: '/mcp', maxSessions: Infinity },
+        );
+        const baseUrl = `http://localhost:${getPort(server)}`;
+        try {
+          await initSession(baseUrl);
+        } finally {
+          await closeServer(server);
+        }
+      });
+    });
+  });
+
   describe('client DELETE', () => {
     it('fires onSessionClosed once and clears the TTL timer', async () => {
       const closed: string[] = [];
