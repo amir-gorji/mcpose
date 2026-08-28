@@ -57,7 +57,7 @@ npm install @mcpose/audit mcpose
 ```
 
 Requires Node.js 20+ (uses `node:crypto`).
-`mcpose` (`>=2.2.0 <4`) is a peer dependency.
+`mcpose` (`>=3.0.0 <4`) is a peer dependency: the audit event and handle types reference `ProxyIdentity` and `PromptMiddleware`, which core exports from 3.0.0 on.
 
 > **Format note:** version 3.0.0 writes the **v2 audit format** (`mcpose/v2/*` domain labels).
 > Chains and manifests written by a 2.x release do not verify under 3.x.
