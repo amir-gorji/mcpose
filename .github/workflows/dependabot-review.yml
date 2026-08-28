@@ -11,9 +11,17 @@ name: Dependabot Review
 # A malicious new package version could get code execution here. Scoped to
 # dependabot-authored PRs only; see the security review in issue/PR history
 # for the accepted tradeoff.
+#
+# The trigger is pull_request_target, not pull_request (#137): GitHub treats
+# dependabot-triggered pull_request runs like fork PRs, with a read-only
+# GITHUB_TOKEN and only the Dependabot secrets store, so the OAuth secret
+# arrived empty and even labeling was impossible. pull_request_target runs
+# the workflow definition from main with Actions secrets and a write token,
+# which is exactly the permission set the note above already assumes. The
+# PR head is checked out explicitly below and treated as untrusted.
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
 
 permissions:
@@ -30,7 +38,12 @@ concurrency:
 
 jobs:
   review:
-    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    # Same-repo guard alongside the author check: dependabot PRs always come
+    # from branches in this repo, and pull_request_target must never check
+    # out a fork head with secrets in scope.
+    if: |
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
