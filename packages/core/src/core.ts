@@ -907,6 +907,7 @@ export function createProxyServer(
         ...(context.identity === undefined
           ? {}
           : { identity: context.identity }),
+        ...(context.proxy === undefined ? {} : { proxy: context.proxy }),
       });
     } catch (err) {
       console.error(err);
@@ -996,6 +997,7 @@ export function createProxyServer(
             ...(context.identity === undefined
               ? {}
               : { identity: context.identity }),
+            ...(context.proxy === undefined ? {} : { proxy: context.proxy }),
           });
         } catch (err) {
           // A throwing telemetry sink must never fail the tool call.

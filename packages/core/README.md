@@ -157,7 +157,7 @@ Behavior worth knowing before you deploy it:
 | `dispatcherAwareBlock(options)` | `HiddenToolPredicate` blocking hidden tools both directly and through dispatcher (meta) tools. Fail-closed. |
 | `sanitizeToolDescriptions(options?)` | `ListToolsMiddleware` stripping URLs and configured patterns from tool and schema descriptions, because the catalog is an egress channel into model context. |
 
-**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `PromptMiddleware`, `ListToolsMiddleware`, `ToolResultHandlers`, `ProxyContext`, `Identity`, `BackendConfig`, `Backends`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `SanitizeToolDescriptionsOptions`, `RejectionReason`, `TelemetryEvent`, `ToolCallTelemetryEvent`, `BackendDegradedTelemetryEvent`, `PersistentEventStore`.
+**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `PromptMiddleware`, `ListToolsMiddleware`, `ToolResultHandlers`, `ProxyContext`, `ProxyIdentity`, `Identity`, `BackendConfig`, `Backends`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `SanitizeToolDescriptionsOptions`, `RejectionReason`, `TelemetryEvent`, `ToolCallTelemetryEvent`, `BackendDegradedTelemetryEvent`, `PersistentEventStore`.
 
 `PersistentEventStore` is an alias of the SDK's `EventStore` type, so any SDK-compatible store plugs in directly.
 
@@ -296,6 +296,7 @@ interface LocalTool {
 - `onTelemetry` receives a `TelemetryEvent`, a union discriminated on `type`.
   A `'tool_call'` event fires after every tool call with timing, outcome, tool name, and identity; results with `isError: true` are reported as outcome `'error'`.
   A `'backend_degraded'` event fires when one backend of a mesh drops out of a list call, naming the backend key, the method, and the error.
+  Both variants carry an optional `proxy: ProxyIdentity`, the same frozen `{ name, version }` stamped on `ProxyContext` (ADR-0012), so a fleet of proxies feeding one telemetry sink can attribute events to an instance.
   A throwing sink is logged but never fails the call.
   An OpenTelemetry adapter (`@mcpose/otel`) is planned for v3.
 

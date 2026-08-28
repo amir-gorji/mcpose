@@ -668,6 +668,29 @@ describe('createProxyServer() — onTelemetry', () => {
     expect(typeof events[0]!.duration_ms).toBe('number');
   });
 
+  it('stamps the configured proxy identity onto every tool_call event', async () => {
+    const backend = makeMockBackend();
+    const events: ToolCallTelemetryEvent[] = [];
+    const server = createProxyServer(backend, {
+      onTelemetry: (e) => {
+        if (e.type === 'tool_call') events.push(e);
+      },
+      name: 'payments-proxy',
+      version: '9.9.9',
+    });
+
+    await invokeHandler(server, 'tools/call', {
+      name: 'echo',
+      arguments: { msg: 'hi' },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.proxy).toEqual({
+      name: 'payments-proxy',
+      version: '9.9.9',
+    });
+  });
+
   it('emits a rejected event with TOOL_HIDDEN when a hidden tool is called', async () => {
     const backend = makeMockBackend();
     const events: ToolCallTelemetryEvent[] = [];
