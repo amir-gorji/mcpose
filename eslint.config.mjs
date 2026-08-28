@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/build/**',
       '**/coverage/**',
       '.gnhf/**',
+      '.claude/worktrees/**',
       '**/.turbo/**',
       '**/*.js',
       '**/*.d.ts',
