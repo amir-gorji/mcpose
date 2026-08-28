@@ -41,7 +41,18 @@ import {
   type ProxyIdentity,
 } from './proxyContext.js';
 import type { Identity } from './identity.js';
-import type { TelemetryEvent } from './telemetry.js';
+import type {
+  BackendDegradedTelemetryEvent,
+  TelemetryEvent,
+  ToolCallTelemetryEvent,
+} from './telemetry.js';
+import {
+  listAcrossMesh,
+  normalizeBackends,
+  routeNamespaced,
+  type Backends,
+  type MeshEntry,
+} from './mesh.js';
 import { createInMemoryEventStore } from './eventStore.js';
 import type { EventStore } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { rejectionMcpError } from './rejection.js';
@@ -419,34 +430,56 @@ type ProxyRequestExtra = {
   }) => Promise<void>;
 };
 
+/**
+ * Subscribers to one backend's list-changed notifications, with the
+ * capabilities each proxy server advertises. The handlers are registered
+ * from the backend's own capabilities rather than any one subscriber's, so
+ * a backend shared between proxies that advertise different surfaces
+ * forwards every surface it has, and the fan-out filters per subscriber.
+ */
 type ListChangedBus = {
-  servers: Set<Server>;
+  servers: Map<Server, ServerCapabilities>;
 };
+
+type ListChangedSurface = 'tools' | 'prompts' | 'resources';
 
 const listChangedBuses = new WeakMap<BackendClient, ListChangedBus>();
 const httpProxyContext = new AsyncLocalStorage<
   Omit<ProxyContext, 'requestId'>
 >();
 
+/**
+ * Union of every backend's capabilities, plus the ADR-0007 rule that a
+ * non-empty `localTools` advertises `tools` on its own.
+ *
+ * Mesh mode advertises no `resources`: a resource is addressed by URI, and a
+ * URI cannot be namespaced without rewriting an identifier every party
+ * treats as opaque (ADR-0013, deferred to #100).
+ */
 function createProxyCapabilities(
-  backend: BackendClient,
+  entries: ReadonlyArray<MeshEntry>,
   hasLocalTools: boolean,
+  mesh: boolean,
 ): ServerCapabilities {
-  const upstream = backend.getServerCapabilities();
+  const upstreams = entries.map((entry) =>
+    entry.client.getServerCapabilities(),
+  );
+  const listChanged = (supported: boolean) =>
+    supported ? { listChanged: true } : {};
 
   return {
-    ...(upstream?.tools || hasLocalTools
-      ? { tools: upstream?.tools?.listChanged ? { listChanged: true } : {} }
+    ...(upstreams.some((u) => u?.tools) || hasLocalTools
+      ? { tools: listChanged(upstreams.some((u) => u?.tools?.listChanged)) }
       : {}),
-    ...(upstream?.resources
+    ...(!mesh && upstreams.some((u) => u?.resources)
       ? {
-          resources: upstream.resources.listChanged
-            ? { listChanged: true }
-            : {},
+          resources: listChanged(
+            upstreams.some((u) => u?.resources?.listChanged),
+          ),
         }
       : {}),
-    ...(upstream?.prompts
-      ? { prompts: upstream.prompts.listChanged ? { listChanged: true } : {} }
+    ...(upstreams.some((u) => u?.prompts)
+      ? { prompts: listChanged(upstreams.some((u) => u?.prompts?.listChanged)) }
       : {}),
   };
 }
@@ -590,6 +623,28 @@ function buildLocalToolMap(
   return localToolMap;
 }
 
+/**
+ * The backends advertising one surface, ready to list across and to route
+ * by backend key. Only these are queried or routed to, so an otherwise-valid
+ * prefix naming a backend without the surface is unroutable rather than a
+ * call the upstream cannot serve.
+ */
+function surfaceBackends(
+  entries: ReadonlyArray<MeshEntry>,
+  surface: 'tools' | 'prompts',
+): {
+  entries: ReadonlyArray<MeshEntry>;
+  byKey: ReadonlyMap<string, BackendClient>;
+} {
+  const selected = entries.filter(
+    (entry) => entry.client.getServerCapabilities()?.[surface] !== undefined,
+  );
+  return {
+    entries: selected,
+    byKey: new Map(selected.map((entry) => [entry.key, entry.client] as const)),
+  };
+}
+
 /** Normalizes the `hiddenTools` option to its predicate form. */
 function toHiddenToolPredicate(
   hiddenTools: ReadonlyArray<string> | HiddenToolPredicate | undefined,
@@ -610,63 +665,94 @@ function filterHiddenTools(
   return tools.length === result.tools.length ? result : { ...result, tools };
 }
 
+/**
+ * Subscribes `server` to every backend's list-changed notifications, so a
+ * mesh fans them in through the same per-backend bus a 1:1 proxy uses.
+ *
+ * A notification reaches a subscriber only when that subscriber advertises
+ * the surface: in mesh mode the proxy has no `resources` capability, and the
+ * SDK rejects a notification for a surface the server never advertised.
+ */
 function registerListChangedForwarders(
-  backend: BackendClient,
+  entries: ReadonlyArray<MeshEntry>,
   server: Server,
   capabilities: ServerCapabilities,
 ): void {
-  if (
-    !capabilities.tools?.listChanged &&
-    !capabilities.resources?.listChanged &&
-    !capabilities.prompts?.listChanged
-  ) {
-    return;
+  const leaveBuses: Array<() => void> = [];
+
+  for (const { client } of entries) {
+    const upstream = client.getServerCapabilities() ?? {};
+    const surfaces: ReadonlyArray<ListChangedSurface> = [
+      'tools',
+      'prompts',
+      'resources',
+    ];
+    if (
+      !surfaces.some(
+        (surface) =>
+          capabilities[surface]?.listChanged === true &&
+          upstream[surface]?.listChanged === true,
+      )
+    ) {
+      continue;
+    }
+
+    let bus = listChangedBuses.get(client);
+
+    if (!bus) {
+      const servers = new Map<Server, ServerCapabilities>();
+      const fanOut = async (
+        surface: ListChangedSurface,
+        notify: (proxyServer: Server) => Promise<void>,
+      ): Promise<void> => {
+        await Promise.allSettled(
+          [...servers]
+            .filter(([, advertised]) => advertised[surface]?.listChanged)
+            .map(([proxyServer]) => notify(proxyServer)),
+        );
+      };
+
+      if (upstream.tools?.listChanged) {
+        client.setNotificationHandler(ToolListChangedNotificationSchema, () =>
+          fanOut('tools', (proxyServer) => proxyServer.sendToolListChanged()),
+        );
+      }
+
+      if (upstream.prompts?.listChanged) {
+        client.setNotificationHandler(PromptListChangedNotificationSchema, () =>
+          fanOut('prompts', (proxyServer) =>
+            proxyServer.sendPromptListChanged(),
+          ),
+        );
+      }
+
+      if (upstream.resources?.listChanged) {
+        client.setNotificationHandler(
+          ResourceListChangedNotificationSchema,
+          () =>
+            fanOut('resources', (proxyServer) =>
+              proxyServer.sendResourceListChanged(),
+            ),
+        );
+      }
+
+      bus = { servers };
+      listChangedBuses.set(client, bus);
+    }
+
+    const joined = bus;
+    joined.servers.set(server, capabilities);
+
+    let active = true;
+    leaveBuses.push(() => {
+      if (!active) return;
+      active = false;
+      joined.servers.delete(server);
+      if (!joined.servers.size) listChangedBuses.delete(client);
+    });
   }
 
-  let bus = listChangedBuses.get(backend);
-
-  if (!bus) {
-    const servers = new Set<Server>();
-    const fanOut = async (
-      notify: (proxyServer: Server) => Promise<void>,
-    ): Promise<void> => {
-      await Promise.allSettled(
-        [...servers].map((proxyServer) => notify(proxyServer)),
-      );
-    };
-
-    if (capabilities.tools?.listChanged) {
-      backend.setNotificationHandler(ToolListChangedNotificationSchema, () =>
-        fanOut((proxyServer) => proxyServer.sendToolListChanged()),
-      );
-    }
-
-    if (capabilities.prompts?.listChanged) {
-      backend.setNotificationHandler(PromptListChangedNotificationSchema, () =>
-        fanOut((proxyServer) => proxyServer.sendPromptListChanged()),
-      );
-    }
-
-    if (capabilities.resources?.listChanged) {
-      backend.setNotificationHandler(
-        ResourceListChangedNotificationSchema,
-        () => fanOut((proxyServer) => proxyServer.sendResourceListChanged()),
-      );
-    }
-
-    bus = { servers };
-    listChangedBuses.set(backend, bus);
-  }
-
-  bus.servers.add(server);
-
-  let active = true;
-  const removeFromBus = () => {
-    if (!active) return;
-    active = false;
-    bus.servers.delete(server);
-    if (!bus.servers.size) listChangedBuses.delete(backend);
-  };
+  if (leaveBuses.length === 0) return;
 
   // Accessor instead of plain assignment: a consumer setting `server.onclose`
   // after createProxyServer() must not clobber the bus cleanup (which would
@@ -675,7 +761,7 @@ function registerListChangedForwarders(
   Object.defineProperty(server, 'onclose', {
     configurable: true,
     get: () => () => {
-      removeFromBus();
+      for (const leaveBus of leaveBuses) leaveBus();
       consumerOnClose?.();
     },
     set: (fn: (() => void) | undefined) => {
@@ -693,24 +779,36 @@ function registerListChangedForwarders(
  * Uses low-level `Server` (not `McpServer`) — transparent proxying requires
  * generic list interception; `McpServer.tool()` needs names upfront.
  *
- * @param backend - Connected (or mock) upstream MCP client.
+ * @param backends - Connected (or mock) upstream MCP client for a 1:1 proxy,
+ * or a record of named backends for mesh mode (ADR-0013), where every
+ * upstream tool and prompt is exposed as `<backendKey>__<name>`.
  * @param options - Middleware stacks, hidden/passthrough sets.
  * @returns Configured {@link Server} ready to connect.
  */
 export function createProxyServer(
-  backend: BackendClient,
+  backends: Backends,
   options: ProxyOptions = {},
 ): Server {
-  if (backend.getServerCapabilities() === undefined) {
-    throw new Error(
-      'mcpose: backend is not connected (getServerCapabilities() returned undefined). Connect the backend before calling createProxyServer().',
-    );
+  const { mesh, entries } = normalizeBackends(backends);
+  for (const { key, client } of entries) {
+    if (client.getServerCapabilities() === undefined) {
+      throw new Error(
+        `mcpose: backend${mesh ? ` "${key}"` : ''} is not connected (getServerCapabilities() returned undefined). Connect the backend before calling createProxyServer().`,
+      );
+    }
   }
+  const backend = entries[0]!.client;
 
   const localToolMap = buildLocalToolMap(options.localTools);
-  const upstreamHasTools = backend.getServerCapabilities()?.tools !== undefined;
+  const toolBackends = surfaceBackends(entries, 'tools');
+  const promptBackends = surfaceBackends(entries, 'prompts');
+  const upstreamHasTools = toolBackends.entries.length > 0;
 
-  const capabilities = createProxyCapabilities(backend, localToolMap.size > 0);
+  const capabilities = createProxyCapabilities(
+    entries,
+    localToolMap.size > 0,
+    mesh,
+  );
   const toolPipeline = pipe(options.toolMiddleware ?? []);
   // Pass-through tools skip transforming middleware but are still seen by
   // observers (audit, telemetry) marked via markPassThroughObserver().
@@ -751,7 +849,37 @@ export function createProxyServer(
 
   const server = new Server(proxyIdentity, { capabilities });
 
-  registerListChangedForwarders(backend, server, capabilities);
+  registerListChangedForwarders(entries, server, capabilities);
+
+  /**
+   * Reports a backend that dropped out of a mesh list. Failure isolation is
+   * only safe if the gap is visible, and a throwing sink must not turn a
+   * degraded list into a failed one.
+   */
+  const reportDegraded = (
+    context: ProxyContext,
+    backendKey: string,
+    method: BackendDegradedTelemetryEvent['method'],
+    error: unknown,
+  ): void => {
+    try {
+      options.onTelemetry?.({
+        type: 'backend_degraded',
+        requestId: context.requestId,
+        ...(context.sessionId === undefined
+          ? {}
+          : { sessionId: context.sessionId }),
+        backend: backendKey,
+        method,
+        error,
+        ...(context.identity === undefined
+          ? {}
+          : { identity: context.identity }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   // ── Tool handlers ──────────────────────────────────────────────────────────
 
@@ -768,17 +896,38 @@ export function createProxyServer(
       const result = await listToolsPipeline(
         req,
         async (currentReq) => {
-          const upstreamResult = upstreamHasTools
-            ? stripResult(
-                await backend.listTools(currentReq.params, requestOptions),
-              )
-            : { tools: [] };
+          const upstreamResult: ListToolsResult = mesh
+            ? {
+                // A mesh has no cursor that means "page 3 of the union", so
+                // every backend is drained into one complete page.
+                tools: await listAcrossMesh(
+                  toolBackends.entries,
+                  async (client, cursor) => {
+                    const page = stripResult(
+                      await client.listTools(
+                        cursor === undefined ? {} : { cursor },
+                        requestOptions,
+                      ),
+                    );
+                    return { items: page.tools, nextCursor: page.nextCursor };
+                  },
+                  (key, error) =>
+                    reportDegraded(context, key, 'tools/list', error),
+                ),
+              }
+            : upstreamHasTools
+              ? stripResult(
+                  await backend.listTools(currentReq.params, requestOptions),
+                )
+              : { tools: [] };
           if (!localToolMap.size) {
             return filterHiddenTools(upstreamResult, isHiddenTool);
           }
           const tools = [
             ...upstreamResult.tools.filter((t) => !localToolMap.has(t.name)),
-            ...(currentReq.params?.cursor === undefined
+            // A mesh response is always the only page, so local tools belong
+            // on it whatever cursor the client sent.
+            ...(mesh || currentReq.params?.cursor === undefined
               ? [...localToolMap.values()].map((lt) => lt.tool)
               : []),
           ];
@@ -798,7 +947,7 @@ export function createProxyServer(
       const start = performance.now();
 
       const emitTelemetry = (
-        outcome: TelemetryEvent['outcome'],
+        outcome: ToolCallTelemetryEvent['outcome'],
         rejectionReason?: RejectionReason,
       ) => {
         try {
@@ -850,19 +999,42 @@ export function createProxyServer(
           }
         : localTool !== undefined
           ? (r) => localTool.handler(r.params, context)
-          : upstreamHasTools
-            ? async (r) =>
-                stripResult(
-                  await backend.callTool(r.params, undefined, requestOptions),
-                )
-            : async () => {
-                // Tools-less upstream: reject inside the pipeline rather
-                // than forwarding to an upstream that cannot serve it.
-                throw new McpError(
-                  ErrorCode.MethodNotFound,
-                  `Tool not found: ${name}`,
+          : mesh
+            ? async (r) => {
+                // Routed at the innermost `next` from the post-pipeline name,
+                // so middleware can re-route a call deliberately.
+                const routed = routeNamespaced(
+                  r.params.name,
+                  toolBackends.byKey,
                 );
-              };
+                if (routed === undefined) {
+                  throw rejectionMcpError(
+                    'BACKEND_UNROUTABLE',
+                    ErrorCode.MethodNotFound,
+                    `Tool not found: ${r.params.name} — a mesh exposes tools as "<backendKey>__<tool>"`,
+                  );
+                }
+                return stripResult(
+                  await routed.client.callTool(
+                    { ...r.params, name: routed.name },
+                    undefined,
+                    requestOptions,
+                  ),
+                );
+              }
+            : upstreamHasTools
+              ? async (r) =>
+                  stripResult(
+                    await backend.callTool(r.params, undefined, requestOptions),
+                  )
+              : async () => {
+                  // Tools-less upstream: reject inside the pipeline rather
+                  // than forwarding to an upstream that cannot serve it.
+                  throw new McpError(
+                    ErrorCode.MethodNotFound,
+                    `Tool not found: ${name}`,
+                  );
+                };
 
       try {
         const result = await pipeline(req, callBackend, context);
@@ -932,7 +1104,50 @@ export function createProxyServer(
 
   // ── Prompt handlers (pass-through) ────────────────────────────────────────
 
-  if (capabilities.prompts) {
+  if (capabilities.prompts && mesh) {
+    // Prompt names are plain strings, so they namespace and route exactly
+    // like tool names (ADR-0013).
+    server.setRequestHandler(
+      ListPromptsRequestSchema,
+      async (_rawReq, extra) => {
+        const requestOptions = createRequestOptions(extra);
+        const context = getMiddlewareContext(proxyIdentity, extra.signal);
+        return {
+          prompts: await listAcrossMesh(
+            promptBackends.entries,
+            async (client, cursor) => {
+              const page = stripResult(
+                await client.listPrompts(
+                  cursor === undefined ? {} : { cursor },
+                  requestOptions,
+                ),
+              );
+              return { items: page.prompts, nextCursor: page.nextCursor };
+            },
+            (key, error) => reportDegraded(context, key, 'prompts/list', error),
+          ),
+        };
+      },
+    );
+
+    server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) => {
+      const req = stripRequest(rawReq);
+      const routed = routeNamespaced(req.params.name, promptBackends.byKey);
+      if (routed === undefined) {
+        throw rejectionMcpError(
+          'BACKEND_UNROUTABLE',
+          ErrorCode.MethodNotFound,
+          `Prompt not found: ${req.params.name} — a mesh exposes prompts as "<backendKey>__<prompt>"`,
+        );
+      }
+      return routed.client
+        .getPrompt(
+          { ...req.params, name: routed.name },
+          createRequestOptions(extra),
+        )
+        .then(stripResult);
+    });
+  } else if (capabilities.prompts) {
     server.setRequestHandler(ListPromptsRequestSchema, (rawReq, extra) =>
       backend
         .listPrompts(stripRequest(rawReq).params, createRequestOptions(extra))
@@ -955,10 +1170,10 @@ export function createProxyServer(
  * Use `createProxyServer` directly for testable access to the server.
  */
 export async function startProxy(
-  backend: BackendClient,
+  backends: Backends,
   options: ProxyOptions = {},
 ): Promise<void> {
-  const server = createProxyServer(backend, options);
+  const server = createProxyServer(backends, options);
   await server.connect(new StdioServerTransport());
 }
 
@@ -1055,13 +1270,15 @@ function isLoopbackHost(host: string): boolean {
  * when `tlsOptions` is supplied).
  */
 export function startHttpProxy(
-  backend: BackendClient,
+  backends: Backends,
   options: ProxyOptions = {},
   httpOptions: HttpProxyOptions = {},
 ): Promise<http.Server> {
   // Sessions build their proxy server lazily, so surface configuration
-  // errors (duplicate local tool names) at startup, not on first initialize.
+  // errors (duplicate local tool names, invalid backend keys) at startup,
+  // not on first initialize.
   buildLocalToolMap(options.localTools);
+  normalizeBackends(backends);
 
   const mcpPath = httpOptions.path ?? '/mcp';
   const port = httpOptions.port ?? 3000;
@@ -1242,7 +1459,7 @@ export function startHttpProxy(
             }
           }
 
-          const proxyServer = createProxyServer(backend, options);
+          const proxyServer = createProxyServer(backends, options);
           // An explicit list is used verbatim; the derived loopback list
           // only fills the gap so the default actually validates something.
           const allowedHosts = httpOptions.allowedHosts ?? derivedAllowedHosts;

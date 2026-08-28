@@ -12,6 +12,12 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Proxy**: mcpose's role between a client and an upstream. _Avoid_: "middleware layer"
 
+**Mesh**: A proxy configured with a record of named upstreams instead of one, serving all of them through a single pipeline, session, and audit trail. The single-upstream shape stays a 1:1 proxy (ADR-0013). _Avoid_: "cluster", "federation", "multiplexer"
+
+**Backend key**: The record key naming one upstream of a mesh. Non-empty, never contains `__`, and forms the `<backendKey>__<name>` prefix the client sees. Part of the proxy's public contract: renaming one renames every tool. _Avoid_: "backend id", "namespace" for the key itself
+
+**Namespaced name**: The name a mesh exposes for an upstream tool or prompt, `<backendKey>__<name>`. Every `ProxyOptions` predicate, list, and middleware sees this name, never the upstream one. _Avoid_: "prefixed name", "qualified name"
+
 **mcpose**: The core proxy library — pipeline, transport adapters, ProxyContext. Published as `mcpose` on npm (`packages/core`). _Avoid_: using to mean the full ecosystem
 
 **mcpose ecosystem**: The full suite — `mcpose` core plus `@mcpose/audit`, `@mcpose/testing`, and future packages (`@mcpose/otel` is planned for v3; it does not exist yet).
@@ -66,7 +72,9 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 ### Events and replay
 
-**Telemetry event**: An observability signal emitted to `onTelemetry` for routing to OTEL or a custom backend. _Avoid_: bare "event"
+**Telemetry event**: An observability signal emitted to `onTelemetry` for routing to OTEL or a custom backend, discriminated on `type`: `'tool_call'` per call, `'backend_degraded'` when a mesh backend drops out of a list. _Avoid_: bare "event"
+
+**Degradation**: A mesh returning the live backends' entries after one upstream failed a list call, reported as a `'backend_degraded'` telemetry event. Distinct from a rejection: nothing was refused, something is missing. _Avoid_: "partial failure", "fallback"
 
 **SSE event**: A server-sent event stored in `PersistentEventStore` for reconnect replay. Transport detail only. _Avoid_: bare "event"
 
@@ -77,6 +85,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 ## Relationships
 
 - A **client** sends requests to the **proxy**; the proxy forwards them to the **upstream**
+- A **mesh** forwards to one of many **upstreams**, chosen by the **backend key** in the **namespaced name**
 - A **session** groups **audit events** and closes with a **replay manifest**
 - An **audit event**'s **sensitivity tier** determines whether it stores plaintext or encrypted payload
 - A **delegation chain** on `ProxyContext` records which agents delegated to which before reaching mcpose

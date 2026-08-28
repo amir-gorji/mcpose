@@ -4,12 +4,12 @@ import { fileURLToPath } from 'node:url';
 import {
   createProxyServer,
   type ListToolsMiddleware,
-  type ProxyOptions,
   type ToolMiddleware,
 } from '../core.js';
 import type { BackendClient } from '../backendClient.js';
 import { markPassThroughObserver } from '../middleware.js';
 import type { ProxyContext } from '../proxyContext.js';
+import type { ToolCallTelemetryEvent } from '../telemetry.js';
 import {
   ErrorCode,
   PromptListChangedNotificationSchema,
@@ -639,10 +639,11 @@ describe('createProxyServer() — request options', () => {
 describe('createProxyServer() — onTelemetry', () => {
   it('emits a success event after a successful tool call', async () => {
     const backend = makeMockBackend();
-    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] =
-      [];
+    const events: ToolCallTelemetryEvent[] = [];
     const server = createProxyServer(backend, {
-      onTelemetry: (e) => events.push(e),
+      onTelemetry: (e) => {
+        if (e.type === 'tool_call') events.push(e);
+      },
       name: 'test-server',
     });
 
@@ -662,11 +663,12 @@ describe('createProxyServer() — onTelemetry', () => {
 
   it('emits a rejected event with TOOL_HIDDEN when a hidden tool is called', async () => {
     const backend = makeMockBackend();
-    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] =
-      [];
+    const events: ToolCallTelemetryEvent[] = [];
     const server = createProxyServer(backend, {
       hiddenTools: ['sensitive_tool'],
-      onTelemetry: (e) => events.push(e),
+      onTelemetry: (e) => {
+        if (e.type === 'tool_call') events.push(e);
+      },
       name: 'test-server',
     });
 
@@ -691,10 +693,11 @@ describe('createProxyServer() — onTelemetry', () => {
     vi.mocked(backend.callTool).mockRejectedValueOnce(
       new Error('upstream failure'),
     );
-    const events: Parameters<NonNullable<ProxyOptions['onTelemetry']>>[0][] =
-      [];
+    const events: ToolCallTelemetryEvent[] = [];
     const server = createProxyServer(backend, {
-      onTelemetry: (e) => events.push(e),
+      onTelemetry: (e) => {
+        if (e.type === 'tool_call') events.push(e);
+      },
       name: 'test-server',
     });
 
@@ -860,9 +863,11 @@ describe('createProxyServer() — telemetry outcomes', () => {
       content: [{ type: 'text', text: 'tool-level failure' }],
       isError: true,
     });
-    const events: { outcome: string }[] = [];
+    const events: ToolCallTelemetryEvent[] = [];
     const server = createProxyServer(backend, {
-      onTelemetry: (e) => events.push(e),
+      onTelemetry: (e) => {
+        if (e.type === 'tool_call') events.push(e);
+      },
       name: 'test-server',
     });
 
@@ -876,10 +881,12 @@ describe('createProxyServer() — telemetry outcomes', () => {
 
   it('emits rejected telemetry with TOOL_HIDDEN for hidden tools', async () => {
     const backend = makeMockBackend();
-    const events: { outcome: string; rejectionReason?: string }[] = [];
+    const events: ToolCallTelemetryEvent[] = [];
     const server = createProxyServer(backend, {
       hiddenTools: ['sensitive_tool'],
-      onTelemetry: (e) => events.push(e),
+      onTelemetry: (e) => {
+        if (e.type === 'tool_call') events.push(e);
+      },
       name: 'test-server',
     });
 

@@ -144,9 +144,9 @@ Behavior worth knowing before you deploy it:
 | Export | Purpose |
 |---|---|
 | `createBackendClient(config)` | Connect to an upstream over stdio (`command`/`args`) or HTTP (`url`). |
-| `startProxy(backend, options?)` | Serve the proxy over **stdio**. Resolves when the transport closes. |
-| `startHttpProxy(backend, proxyOptions?, httpOptions?)` | Serve over **HTTP/SSE**: identity, mTLS, sessions, reconnect replay. Resolves with a listening `http.Server`. |
-| `createProxyServer(backend, options?)` | Build the underlying `Server` without binding a transport. Throws if the backend is not connected, so a mis-wired proxy fails at startup rather than on the first call. |
+| `startProxy(backends, options?)` | Serve the proxy over **stdio**. Resolves when the transport closes. |
+| `startHttpProxy(backends, proxyOptions?, httpOptions?)` | Serve over **HTTP/SSE**: identity, mTLS, sessions, reconnect replay. Resolves with a listening `http.Server`. |
+| `createProxyServer(backends, options?)` | Build the underlying `Server` without binding a transport. Throws if a backend is not connected, so a mis-wired proxy fails at startup rather than on the first call. |
 | `compose(middlewares)` | Compose middleware into one, **outermost-first**. |
 | `markPassThroughObserver(mw)` | Return a new middleware that still runs for `passThroughTools`. For observers only, never transformers. |
 | `rejectionMcpError(reason, code, message)` | Build an `McpError` carrying a `RejectionReason` in `error.data`. |
@@ -157,7 +157,7 @@ Behavior worth knowing before you deploy it:
 | `dispatcherAwareBlock(options)` | `HiddenToolPredicate` blocking hidden tools both directly and through dispatcher (meta) tools. Fail-closed. |
 | `sanitizeToolDescriptions(options?)` | `ListToolsMiddleware` stripping URLs and configured patterns from tool and schema descriptions, because the catalog is an egress channel into model context. |
 
-**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ToolResultHandlers`, `ProxyContext`, `Identity`, `BackendConfig`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `SanitizeToolDescriptionsOptions`, `RejectionReason`, `TelemetryEvent`, `PersistentEventStore`.
+**Key types:** `Middleware<Req, Res>`, `ToolMiddleware`, `ResourceMiddleware`, `ListToolsMiddleware`, `ToolResultHandlers`, `ProxyContext`, `Identity`, `BackendConfig`, `Backends`, `ProxyOptions`, `HttpProxyOptions`, `LocalTool`, `HiddenToolPredicate`, `DispatcherAwareBlockOptions`, `SanitizeToolDescriptionsOptions`, `RejectionReason`, `TelemetryEvent`, `ToolCallTelemetryEvent`, `BackendDegradedTelemetryEvent`, `PersistentEventStore`.
 
 `PersistentEventStore` is an alias of the SDK's `EventStore` type, so any SDK-compatible store plugs in directly.
 
@@ -196,6 +196,40 @@ const backend = await createBackendClient({ url: 'https://mcp.example.com/sse', 
 ```
 
 See [`oauth-upstream-client.ts`](https://github.com/amir-gorji/mcpose/blob/main/examples/oauth-upstream-client.ts) for a complete implementation.
+
+### Many upstreams: mesh mode (`Backends`)
+
+`createProxyServer`, `startProxy`, and `startHttpProxy` all take a `Backends`: either a single `BackendClient`, which is the 1:1 proxy described everywhere else in this document, or a `Record<string, BackendClient>` of named backends, which is **mesh mode**.
+
+```ts
+await startProxy(
+  {
+    crm: await createBackendClient({ url: 'https://crm.internal/mcp' }),
+    docs: await createBackendClient({ command: 'node', args: ['./docs-server.mjs'] }),
+  },
+  { hiddenTools: ['crm__delete_account'] },
+);
+```
+
+The record keys are **backend keys**, and a mesh exposes every upstream tool and prompt as `<backendKey>__<name>`: `crm__lookup`, `docs__search`.
+A key must be non-empty and must not itself contain `__`, so the first separator in an exposed name always splits key from upstream name, even for an upstream name that contains one.
+An empty record or an invalid key throws at `createProxyServer` (and at `startHttpProxy`, before the first session).
+
+| Behaviour | Mesh mode |
+|---|---|
+| Routing | By the `<backendKey>__` prefix, resolved at the innermost `next`, so middleware can re-route deliberately. |
+| Un-namespaced or unknown prefix | Rejected with `MethodNotFound` and `BACKEND_UNROUTABLE`, thrown inside the pipeline so audit records it. There is no "resolve it if only one backend has that name" fallback. |
+| Configuration | Global and matched against the **namespaced** name. `hiddenTools: ['crm__delete_account']` hides one tool on one upstream; a `HiddenToolPredicate` can hide a whole backend with `name.startsWith('crm__')`. |
+| One backend down | `tools/list` and `prompts/list` return the live backends' entries and report a `backend_degraded` telemetry event naming the key. A call routed to a down backend fails only that call. |
+| Audit | One session and one pipeline span the mesh. Backend attribution comes from the namespaced `tool` field plus `ProxyContext.proxy`. |
+| Local tools | Not namespaced, because they belong to the proxy. A local tool named `crm__lookup` shadows the upstream tool exposed under that name. |
+| Capabilities | The union across backends, plus the `localTools` rule. `listChanged` is advertised when any backend advertises it, and every backend's notification is forwarded. |
+| Lists | Unpaginated: cursors are per-backend, so a mesh drains every backend and returns one complete page with no `nextCursor`. |
+| Resources | Not served. A resource is addressed by URI, and a URI cannot be namespaced without rewriting an identifier every party treats as opaque. A mesh advertises no `resources` capability. |
+
+Degradation covers runtime failures, not startup: every backend in the record must already be connected, and `createProxyServer` throws and names the key of one that is not, exactly as it does for a single unconnected backend.
+Without an `onTelemetry` sink a degraded mesh is invisible, so wire one when you run a mesh.
+See [ADR-0013](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0013-multi-backend-composition.md); mesh resource composition is [#100](https://github.com/amir-gorji/mcpose/issues/100).
 
 ### Proxy options (`ProxyOptions`)
 
@@ -254,8 +288,10 @@ interface LocalTool {
   The strip happens at the upstream boundary inside the innermost `next`, so middleware sees the stripped result and middleware-added `_meta` still reaches the client.
   Local tool results and nested `_meta` (per-tool in `tools[]`, per-block in `content`) are untouched; disable only globally with `stripResultMeta: false`.
   See [ADR-0009](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0009-strip-result-meta.md).
-- `onTelemetry` fires after every tool call with timing, outcome, tool name, and identity.
-  Results with `isError: true` are reported as outcome `'error'`, and a throwing sink is logged but never fails the call.
+- `onTelemetry` receives a `TelemetryEvent`, a union discriminated on `type`.
+  A `'tool_call'` event fires after every tool call with timing, outcome, tool name, and identity; results with `isError: true` are reported as outcome `'error'`.
+  A `'backend_degraded'` event fires when one backend of a mesh drops out of a list call, naming the backend key, the method, and the error.
+  A throwing sink is logged but never fails the call.
   An OpenTelemetry adapter (`@mcpose/otel`) is planned for v3.
 
 ### HTTP options (`HttpProxyOptions`)
