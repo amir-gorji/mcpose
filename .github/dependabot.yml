@@ -4,6 +4,15 @@ updates:
     directory: '/'
     schedule:
       interval: 'weekly'
+    # vitest 4 rewrote the v8 coverage provider to AST-aware remapping, which
+    # remeasures packages/core branch coverage below its raise-only ratchet.
+    # Held back until that gap is closed by tests, not by a lowered threshold.
+    # See issue #105. Security updates are unaffected by an ignore rule.
+    ignore:
+      - dependency-name: 'vitest'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@vitest/coverage-v8'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:
