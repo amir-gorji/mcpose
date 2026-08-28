@@ -16,7 +16,12 @@ import {
   stableStringify,
 } from './chain.js';
 import { markPassThroughObserver } from 'mcpose';
-import type { Identity, ProxyContext, RejectionReason } from 'mcpose';
+import type {
+  Identity,
+  ProxyContext,
+  ProxyIdentity,
+  RejectionReason,
+} from 'mcpose';
 
 // Domain-separation labels for subkey derivation. The version segment lets the
 // derivation scheme rotate without colliding with chains written under an old
@@ -34,6 +39,7 @@ interface SessionState {
   prevChainHash: string;
   startedAt: string;
   identity: Identity;
+  proxy?: ProxyIdentity;
 }
 
 function aesEncrypt(plaintext: string, key: Buffer, aad: string): string {
@@ -135,6 +141,7 @@ export function createAuditMiddleware(
         prevChainHash: '',
         startedAt,
         identity,
+        ...(ctx.proxy === undefined ? {} : { proxy: ctx.proxy }),
       });
     }
 
@@ -242,6 +249,7 @@ export function createAuditMiddleware(
     const unsigned: Omit<ReplayManifest, 'signature'> = {
       sessionId,
       identity: session.identity,
+      ...(session.proxy === undefined ? {} : { proxy: session.proxy }),
       startedAt: session.startedAt,
       closedAt: new Date().toISOString(),
       eventCount: session.events.length,
@@ -273,6 +281,7 @@ export function manifestSigningPayload(
   const {
     sessionId,
     identity,
+    proxy,
     startedAt,
     closedAt,
     eventCount,
@@ -285,6 +294,9 @@ export function manifestSigningPayload(
     manifest: {
       sessionId,
       identity,
+      // Optional covered field: omitted when absent, so manifests signed
+      // before it existed rebuild their original payload (ADR-0012).
+      ...(proxy === undefined ? {} : { proxy }),
       startedAt,
       closedAt,
       eventCount,
@@ -326,6 +338,7 @@ function buildEvent(p: BuildParams): AuditEvent {
     ...(p.ctx.delegatedFrom !== undefined
       ? { delegatedFrom: p.ctx.delegatedFrom }
       : {}),
+    ...(p.ctx.proxy !== undefined ? { proxy: p.ctx.proxy } : {}),
     identity: p.identity,
     tool: p.tool,
     duration_ms: p.duration_ms,

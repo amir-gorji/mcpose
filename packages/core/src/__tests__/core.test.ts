@@ -359,6 +359,57 @@ describe('createProxyServer() — passThroughTools', () => {
     expect(seenContext?.requestId).toEqual(expect.any(String));
     expect(seenContext?.sessionId).toBeUndefined();
     expect(seenContext?.headers).toBeUndefined();
+    expect(seenContext?.proxy).toEqual({
+      name: 'test-server',
+      version: pkgVersion,
+    });
+  });
+
+  it('stamps the default proxy identity when name and version are omitted', async () => {
+    const backend = makeMockBackend();
+    let seenContext: ProxyContext | undefined;
+
+    const captureContext: ToolMiddleware = async (req, next, context) => {
+      seenContext = context;
+      return next(req);
+    };
+
+    const server = createProxyServer(backend, {
+      toolMiddleware: [captureContext],
+    });
+
+    await invokeHandler(server, 'tools/call', {
+      name: 'normal_tool',
+      arguments: {},
+    });
+
+    expect(seenContext?.proxy).toEqual({ name: 'mcpose', version: pkgVersion });
+  });
+
+  it('stamps a custom proxy identity onto the context', async () => {
+    const backend = makeMockBackend();
+    let seenContext: ProxyContext | undefined;
+
+    const captureContext: ToolMiddleware = async (req, next, context) => {
+      seenContext = context;
+      return next(req);
+    };
+
+    const server = createProxyServer(backend, {
+      toolMiddleware: [captureContext],
+      name: 'payments-proxy',
+      version: '9.9.9',
+    });
+
+    await invokeHandler(server, 'tools/call', {
+      name: 'normal_tool',
+      arguments: {},
+    });
+
+    expect(seenContext?.proxy).toEqual({
+      name: 'payments-proxy',
+      version: '9.9.9',
+    });
   });
 });
 

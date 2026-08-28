@@ -137,7 +137,7 @@ Behavior worth knowing before you deploy it:
   Reversing that order fails silently: `[auditMW, piiMW]` fills the audit store with unredacted payloads while the client still receives redacted data; see [the array order rule](https://github.com/amir-gorji/mcpose#array-order-the-one-surprising-rule).
   Note that `compose()` uses the opposite, outermost-first convention, so the two are not interchangeable.
   See [ADR-0002](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0002-proxy-options-array-response-processing-order.md).
-- **ProxyContext**: per-request metadata threaded through the pipeline: `requestId`, `transport`, `sessionId`, the resolved `identity`, and the `delegatedFrom` delegation chain.
+- **ProxyContext**: per-request metadata threaded through the pipeline: `requestId`, `transport`, `sessionId`, the resolved `identity`, the `delegatedFrom` delegation chain, and the `proxy` instance identity.
 
 ## API surface
 
@@ -327,8 +327,15 @@ interface ProxyContext {
   identity?: Identity;
   /** Agent delegation chain. Stamped by the host; core does not populate it yet. */
   delegatedFrom?: Identity[];
+  /** The proxy instance handling this request. Stamped by createProxyServer. */
+  proxy?: ProxyIdentity;
   /** Reserved for the v3 policy engine. */
   policy?: never;
+}
+
+interface ProxyIdentity {
+  name: string;     // ProxyOptions.name, defaulted to 'mcpose'
+  version: string;  // ProxyOptions.version, defaulted to the mcpose library version
 }
 
 interface Identity {
@@ -360,6 +367,9 @@ Over stdio there is no session concept, which is why `@mcpose/audit` produces no
 `delegatedFrom` records agent-to-agent handoffs, but core does not extract it from requests yet: it is populated only when your host application places it on the context.
 For the outbound direction, `outboundDelegationChain(context)` returns the oldest-first chain (delegatedFrom plus the current identity) to attach to calls the proxy makes on the caller's behalf, per [ADR-0011](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0011-proxy-originated-call-attribution.md).
 A delegation header spec is v3 work.
+
+`proxy` records which proxy instance handled the request, resolved from `ProxyOptions.name` and `version` including their defaults.
+It is provenance, not a principal: it never appears in `delegatedFrom` and takes no part in the caller-attribution model, per [ADR-0012](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0012-proxy-identity-recorded-as-provenance.md).
 
 ### Rejection reasons
 

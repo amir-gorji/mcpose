@@ -74,6 +74,14 @@ describe('createProxyContext()', () => {
 
     expect(a.requestId).not.toEqual(b.requestId);
   });
+
+  it('preserves the proxy identity reference and omits the key when absent', () => {
+    const proxy = { name: 'payments-proxy', version: '1.2.3' };
+
+    expect(createProxyContext({ proxy }).proxy).toBe(proxy);
+    expect('proxy' in createProxyContext()).toBe(false);
+    expect('proxy' in createProxyContext({ proxy: undefined })).toBe(false);
+  });
 });
 
 describe('outboundDelegationChain()', () => {

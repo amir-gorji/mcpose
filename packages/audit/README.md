@@ -137,7 +137,9 @@ The signed manifest anchors the whole session, and high-tier payloads are encryp
 
 Each link is `HMAC(chainKey, canonicalJson({ domain, prevChainHash, event }))` over this field set:
 
-`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `identity`, `tool`, `duration_ms`, `outcome`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
+`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `proxy?`, `identity`, `tool`, `duration_ms`, `outcome`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
+
+Optional fields are omitted from the preimage when absent, so events recorded before an optional field existed keep verifying unchanged (ADR-0012).
 
 Serialization is canonical (keys sorted at every depth), so key insertion order is not load-bearing and an independently written verifier reproduces the same hash.
 The **field set** is what matters, and it is defined once in the source and shared by producer and verifier.
@@ -277,6 +279,7 @@ interface AuditEventBase {
   sessionId?: string;
   identity: Identity;
   delegatedFrom?: Identity[];
+  proxy?: ProxyIdentity;         // { name, version } of the recording proxy instance
   tool: string;
   duration_ms: number;
   outcome: 'success' | 'rejected' | 'error';
@@ -307,6 +310,7 @@ Any third party can verify a single event without access to the full log.
 interface ReplayManifest {
   sessionId: string;
   identity: Identity;
+  proxy?: ProxyIdentity;  // { name, version } of the producing proxy instance
   startedAt: string;
   closedAt: string;
   eventCount: number;

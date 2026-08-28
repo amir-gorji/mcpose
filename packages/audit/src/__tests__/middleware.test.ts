@@ -268,6 +268,114 @@ function deriveEventKey(
     .digest();
 }
 
+describe('createAuditMiddleware — proxy identity (ADR-0012)', () => {
+  const proxy = { name: 'payments-proxy', version: '1.2.3' };
+
+  function makeProxyCtx(sessionId?: string) {
+    return createProxyContext({
+      transport: 'http',
+      identity,
+      sessionId,
+      proxy,
+    });
+  }
+
+  it('stamps ctx.proxy onto every event and the session manifest', async () => {
+    const events: AuditEvent[] = [];
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+    const ctx = makeProxyCtx('sess-proxy');
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+
+    const manifest = await closeSession('sess-proxy');
+
+    expect(events.map((e) => e.proxy)).toEqual([proxy, proxy]);
+    expect(manifest!.proxy).toEqual(proxy);
+  });
+
+  it('omits the proxy key entirely when the context has none', async () => {
+    const events: AuditEvent[] = [];
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx('sess-no-proxy'),
+    );
+
+    const manifest = await closeSession('sess-no-proxy');
+
+    expect('proxy' in events[0]!).toBe(false);
+    expect('proxy' in manifest!).toBe(false);
+  });
+
+  it('a tampered proxy field breaks keyed chain verification', async () => {
+    const { verifyAuditChain } = await import('../verify.js');
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware } = createAuditMiddleware(
+      makeOptions({
+        signingKey,
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+    const ctx = makeProxyCtx('sess-tamper');
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+
+    await expect(verifyAuditChain(events, signingKey)).resolves.toEqual({
+      valid: true,
+    });
+
+    const tampered = events.map((e, i) =>
+      i === 1 ? { ...e, proxy: { ...proxy, name: 'rogue-proxy' } } : e,
+    );
+    await expect(verifyAuditChain(tampered, signingKey)).resolves.toEqual({
+      valid: false,
+      index: 1,
+      reason: 'chainHash mismatch',
+    });
+  });
+
+  it('a tampered manifest proxy field breaks the signature', async () => {
+    const { verifyManifestSignature } = await import('../verify.js');
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({ signingKey }),
+    );
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeProxyCtx('sess-manifest-tamper'),
+    );
+
+    const manifest = await closeSession('sess-manifest-tamper');
+
+    await expect(verifyManifestSignature(manifest!, signingKey)).resolves.toBe(
+      true,
+    );
+    await expect(
+      verifyManifestSignature(
+        { ...manifest!, proxy: { ...proxy, name: 'rogue-proxy' } },
+        signingKey,
+      ),
+    ).resolves.toBe(false);
+  });
+});
+
 describe('createAuditMiddleware — subkey confidentiality (regression)', () => {
   // Guards the fix for the keyId-as-key-material footgun: subkeys must derive
   // from the SECRET via the sign() oracle, never from the public keyId (which is
