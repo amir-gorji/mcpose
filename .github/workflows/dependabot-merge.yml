@@ -2,20 +2,21 @@ name: Dependabot Merge
 
 # Merges a dependabot PR once mcpose CI (build/lint/test/gitleaks/osv-scan)
 # is green on it and dependabot-review.yml has labeled it
-# auto-merge-approved. Two triggers cover both orderings of "review labels
-# it" vs "CI finishes":
-#   - workflow_run: mcpose CI finishes after the label was already applied
-#     (the common path when the review needed to push a fix, which
-#     retriggers CI).
-#   - pull_request/labeled: the label is applied after mcpose CI's original
-#     run already finished (the common path when the PR needed no changes,
-#     since the review job's own gate chain usually takes longer than CI's).
+# auto-merge-approved. Triggers cover every ordering of "review labels it"
+# vs "CI finishes":
+#   - workflow_run on mcpose CI: CI finishes after the label was applied.
+#   - workflow_run on Dependabot Review: the review completes strictly
+#     after its own labeling, so this path closes the ordering gap where CI
+#     finished first AND the labeled event below cannot fire (#142): the
+#     review labels via GITHUB_TOKEN, and GitHub suppresses workflow
+#     triggers for events authored by a workflow token.
+#   - pull_request/labeled: harmless extra path for a human-applied label.
 # Either way this checks mcpose CI's actual current check status before
 # merging, rather than trusting a specific run's payload.
 
 on:
   workflow_run:
-    workflows: ['mcpose CI']
+    workflows: ['mcpose CI', 'Dependabot Review']
     types: [completed]
   pull_request:
     types: [labeled]
@@ -29,7 +30,8 @@ jobs:
     if: |
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'pull_request' &&
+       (github.event.workflow_run.event == 'pull_request' ||
+        github.event.workflow_run.event == 'pull_request_target') &&
        github.event.workflow_run.pull_requests[0]) ||
       (github.event_name == 'pull_request' &&
        github.event.label.name == 'auto-merge-approved' &&
