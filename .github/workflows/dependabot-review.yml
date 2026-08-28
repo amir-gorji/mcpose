@@ -22,12 +22,28 @@ permissions:
   issues: write
   id-token: write
 
+# One review run per PR, newest wins: a superseded run finishing late must
+# not label a head it never assessed (see the stale-approval strip below).
+concurrency:
+  group: dependabot-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   review:
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # New commits invalidate any prior approval: strip the label BEFORE
+      # anything else so dependabot-merge.yml cannot merge a head this
+      # review never assessed (TOCTOU window, #103). `--remove-label` is a
+      # no-op when the label is absent.
+      - name: Strip stale auto-merge approval
+        if: github.event.action != 'opened'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label auto-merge-approved
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.ref }}
