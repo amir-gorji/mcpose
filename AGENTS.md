@@ -94,10 +94,11 @@ Keep it that way: a floating tool version turns a deterministic gate into a flak
 Do not widen or remove an override without checking osv-scan first.
 The osv-scan CI job is the authority on whether a range is safe.
 
-**Turbo may serve a stale cache after config edits.**
-See [issue #65](https://github.com/amir-gorji/mcpose/issues/65).
-While iterating on `tsconfig.base.json`, an `eslint.config.mjs`, or a `vitest.config.ts`, bypass turbo and run the tool directly per package (`pnpm --filter mcpose exec tsc --noEmit`).
-Verify the final state through the normal `pnpm` scripts.
+**Turbo's cache invalidation is trustworthy, config edits included.**
+`turbo.json` lists `tsconfig.base.json` and `pnpm-lock.yaml` in `globalDependencies`, and each package's `tsconfig.json`, `tsconfig.build.json`, `vitest.config.ts`, and `stryker.config.mjs` are already default task inputs, so editing any of them changes every affected task hash.
+Turbo also never caches a failing task, so a `FULL TURBO` line can never hide a real error.
+Flipping a config value back to one you already ran replays that earlier passing log instantly, which is a correct cache hit and not a stale one.
+See [issue #65](https://github.com/amir-gorji/mcpose/issues/65) for the measurements behind this.
 
 ## Hard rules for packages/audit
 
