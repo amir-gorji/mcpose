@@ -133,12 +133,21 @@ export function assertPiiRedacted(event: AuditEvent, patterns: RegExp[]): void {
 }
 
 /**
- * Asserts that an audit event carries a delegation chain: `delegatedFrom`
- * is present, non-empty, and every entry has a `sub`.
+ * Asserts that an audit event carries a continuous delegation chain:
+ * `delegatedFrom` is present and non-empty, every entry has a non-empty
+ * `sub`, entry subs are pairwise distinct, and the event's own
+ * `identity.sub` does not appear in the chain.
  *
- * Does NOT verify delegation signatures or chain continuity (v3).
- * Note: mcpose core does not populate `delegatedFrom` yet — it is stamped
- * only when the host places it on the ProxyContext.
+ * That is the whole of structural continuity as ADR-0016 defines it.
+ * Keyless, like every assertion here, and unavoidably so: entries are not
+ * signed, because per-hop signatures need key distribution between proxies
+ * that do not share an operator. So this proves the chain is internally
+ * coherent — no blank principal, no principal twice, no call that cycled
+ * back through its own caller. It does NOT prove the chain is authentic:
+ * the hop that wrote it could have invented it, and ORDER cannot be
+ * verified at all without signatures. What the audit chain does give you is
+ * that the recorded chain is tamper-evident after the fact, because
+ * `delegatedFrom` is a covered field in the chain preimage.
  */
 export function assertDelegationHonored(event: AuditEvent): void {
   const chain = event.delegatedFrom;
@@ -147,9 +156,23 @@ export function assertDelegationHonored(event: AuditEvent): void {
       `Audit event for tool "${event.tool}" has no delegation chain — expected at least one delegating identity`,
     );
   }
+
+  const subs = new Set<string>();
   for (const [i, entry] of chain.entries()) {
     if (!entry.sub) {
       throw new Error(`Delegation chain entry at index ${i} has no sub`);
     }
+    if (subs.has(entry.sub)) {
+      throw new Error(
+        `Delegation chain broken at index ${i}: duplicate sub "${entry.sub}" — a continuous chain visits each principal once`,
+      );
+    }
+    subs.add(entry.sub);
+  }
+
+  if (subs.has(event.identity.sub)) {
+    throw new Error(
+      `Delegation chain broken: the event's own identity "${event.identity.sub}" appears in its own delegatedFrom — the call cycled back through its caller`,
+    );
   }
 }

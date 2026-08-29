@@ -232,4 +232,33 @@ describe('assertDelegationHonored', () => {
     });
     expect(() => assertDelegationHonored(events[0]!)).toThrow(/no sub/);
   });
+
+  // ── Structural continuity, per ADR-0016 ──────────────────────────────────
+
+  it('passes for a multi-hop chain of distinct principals', async () => {
+    const { events } = await collectEvents(1, {
+      delegatedFrom: [delegator, { ...delegator, sub: 'worker-agent' }],
+    });
+    expect(() => assertDelegationHonored(events[0]!)).not.toThrow();
+  });
+
+  it('throws when the same principal appears twice', async () => {
+    const { events } = await collectEvents(1, {
+      delegatedFrom: [delegator, { ...delegator }],
+    });
+    expect(() => assertDelegationHonored(events[0]!)).toThrow(
+      /duplicate sub "orchestrator-agent"/,
+    );
+  });
+
+  it("throws when the event's own identity is in its chain", async () => {
+    const { events } = await collectEvents(1, {
+      // `identity` is the caller this event records, so a chain carrying it
+      // means the call cycled back through its own caller.
+      delegatedFrom: [delegator, { ...identity }],
+    });
+    expect(() => assertDelegationHonored(events[0]!)).toThrow(
+      /own identity "test-user" appears in its own delegatedFrom/,
+    );
+  });
 });
