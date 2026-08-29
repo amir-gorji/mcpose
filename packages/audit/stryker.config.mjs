@@ -24,5 +24,8 @@ export default {
   // 16 no cov) after #123 made the proxy identity a required covered field,
   // which removed the omission branches around it. floor(84.04) - 2 is 82,
   // so the raise-only ratchet moves the threshold up from 81.
-  thresholds: { high: 90, low: 84, break: 82 },
+  // Re-measured on 2026-08-29 at 85.68 (404 killed, 9 timeout, 59 survived,
+  // 10 no cov) after #130 added erasable mode, whose store and derivation
+  // paths are fully covered. floor(85.68) - 2 is 83, another ratchet up.
+  thresholds: { high: 90, low: 84, break: 83 },
 };

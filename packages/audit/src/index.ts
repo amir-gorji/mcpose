@@ -3,6 +3,8 @@ export type {
   SensitivityResolverFn,
   SensitivityOverrideFn,
   SigningKeyProvider,
+  SubjectKeyStore,
+  SubjectKeyTombstone,
   AuditEventBase,
   LowAuditEvent,
   MediumAuditEvent,
@@ -16,6 +18,7 @@ export type {
 
 export { createSensitivityResolver } from './sensitivity.js';
 export { createDefaultSigningKeyProvider } from './signingKey.js';
+export { createInMemorySubjectKeyStore } from './subjectKeyStore.js';
 export { createAuditMiddleware } from './middleware.js';
 export {
   computeMerkleRoot,

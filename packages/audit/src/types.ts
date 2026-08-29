@@ -36,6 +36,48 @@ export interface SigningKeyProvider {
   algorithm: 'HMAC-SHA256';
 }
 
+// ── Cryptographic erasure ──────────────────────────────────────────────────────
+
+/** Evidence that a subject's key was destroyed, returned by `destroy`. */
+export interface SubjectKeyTombstone {
+  /** ISO timestamp of the destruction. */
+  destroyedAt: string;
+}
+
+/**
+ * Custody of the per-subject keys that make erasable mode erasable (ADR-0018).
+ *
+ * Supplying one to `AuditOptions.keyStore` switches the audit layer into
+ * erasable mode: per-event encryption keys and the keyed payload hashes then
+ * derive from the stored subject key rather than from the signing secret, so
+ * `destroy(subjectId)` makes that subject's recorded payloads permanently
+ * unreadable and unconfirmable. The chain and the manifest are untouched.
+ *
+ * These keys are private key material with the same handling rules as the
+ * signing secret: they must never be logged, exported, or written into an
+ * event, a manifest, or telemetry. An implementation that stores them in the
+ * clear voids the encryption guarantee for every subject in it.
+ */
+export interface SubjectKeyStore {
+  /**
+   * The subject's 256-bit key, created at random on first use. Called before
+   * every audited call in erasable mode, so it must not be memoized in a way
+   * that outlives `destroy`: a subject that calls again after erasure gets a
+   * fresh key, and the old events stay dead.
+   *
+   * A rejection fails the audited call (the pre-call failure stage) rather
+   * than letting it run unaudited.
+   */
+  getOrCreate(subjectId: string): Promise<Buffer>;
+  /**
+   * Permanently removes the subject's key and returns the tombstone that
+   * evidences the erasure. Idempotent: destroying an unknown subject still
+   * returns a tombstone, because "this subject holds no key" is the state the
+   * caller asked for either way.
+   */
+  destroy(subjectId: string): Promise<SubjectKeyTombstone>;
+}
+
 // ── Audit events ───────────────────────────────────────────────────────────────
 
 export interface AuditEventBase {
@@ -65,6 +107,18 @@ export interface AuditEventBase {
    * its chain preimage (additive within v2, ADR-0012 and ADR-0014).
    */
   kind?: 'prompt';
+  /**
+   * Present ONLY on events recorded in erasable mode, where the per-event
+   * encryption key and the keyed `inputHash`/`outputHash` derive from a
+   * destroyable subject key instead of the signing secret (ADR-0018).
+   *
+   * Optional and covered by the chain under the ADR-0012 omission rule,
+   * exactly as `kind` is: an absent marker means default mode with plain
+   * `sha256` hashes, so events recorded before erasable mode existed keep
+   * their preimage, and a stored event cannot be silently reinterpreted
+   * under the wrong hash scheme.
+   */
+  erasable?: true;
   tool: string;
   duration_ms: number;
   outcome: 'success' | 'rejected' | 'error';
@@ -138,6 +192,23 @@ export interface ReplayManifest {
 export interface AuditOptions {
   signingKey: SigningKeyProvider;
   sensitivityResolver: SensitivityResolverFn;
+  /**
+   * Supply a store to run in ERASABLE mode (ADR-0018). Omit it and the audit
+   * layer behaves exactly as it always has, byte for byte: same preimages,
+   * same ciphertexts, same plain `sha256` payload hashes, no `erasable`
+   * marker on any event.
+   *
+   * With a store, the erasure unit is the data subject — the resolved
+   * `identity.sub` of each event, with anonymous events sharing the
+   * `anonymousIdentity()` bucket — and `destroy(sub)` renders that subject's
+   * recorded payloads permanently undecryptable and unconfirmable. Chain and
+   * manifest verification are unaffected, because payloads are bound to the
+   * chain only through their hashes.
+   *
+   * Key custody becomes your responsibility: see the README's erasable-mode
+   * section before choosing a store.
+   */
+  keyStore?: SubjectKeyStore;
   onEvent: (event: AuditEvent) => void | Promise<void>;
   /**
    * Called with the finished ReplayManifest when the host calls closeSession().

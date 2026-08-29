@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 import {
   canonicalJson,
   stableStringify,
@@ -11,6 +12,7 @@ import { verifyAuditChain, verifyManifestSignature } from '../verify.js';
 import { createAuditMiddleware } from '../middleware.js';
 import { createDefaultSigningKeyProvider } from '../signingKey.js';
 import { createSensitivityResolver } from '../sensitivity.js';
+import { createInMemorySubjectKeyStore } from '../subjectKeyStore.js';
 import type { AuditEvent } from '../types.js';
 import { createProxyContext } from 'mcpose';
 import type { Identity } from 'mcpose';
@@ -318,5 +320,41 @@ describe('domain label pinning', () => {
     expect(seen).toContain('mcpose/v2/enc');
     expect(seen).not.toContain('mcpose/v1/chain');
     expect(seen).not.toContain('mcpose/v1/enc');
+  });
+
+  // The erasable-mode hash subkey is keyed by the STORED subject key, not by
+  // the signing oracle, so it never passes through the sign() spy above. Its
+  // label is pinned by recomputing a recorded hash under the literal string
+  // (ADR-0018).
+  it('derives the erasable-mode hash subkey with the pinned v2 label', async () => {
+    const events: AuditEvent[] = [];
+    const keyStore = createInMemorySubjectKeyStore();
+    const { middleware } = createAuditMiddleware({
+      signingKey: createDefaultSigningKeyProvider('test-secret'),
+      sensitivityResolver: createSensitivityResolver({}),
+      keyStore,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    const args = { acct: 'pinned' };
+    await middleware(
+      { method: 'tools/call' as const, params: { name: 't', arguments: args } },
+      async () => ({ content: [] }),
+      createProxyContext({
+        transport: 'http',
+        identity,
+        proxy: { name: 'test-proxy', version: '0.0.0' },
+      }),
+    );
+
+    const subjectKey = await keyStore.getOrCreate(identity.sub);
+    const underPinnedLabel = createHmac(
+      'sha256',
+      createHmac('sha256', subjectKey).update('mcpose/v2/hashkey').digest(),
+    )
+      .update(stableStringify(args))
+      .digest('hex');
+    expect(events[0]!.inputHash).toBe(underPinnedLabel);
   });
 });

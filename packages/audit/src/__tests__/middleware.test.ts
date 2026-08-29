@@ -3,6 +3,7 @@ import { createHash, createHmac, createDecipheriv } from 'node:crypto';
 import { createAuditMiddleware } from '../middleware.js';
 import { createDefaultSigningKeyProvider } from '../signingKey.js';
 import { createSensitivityResolver } from '../sensitivity.js';
+import { createInMemorySubjectKeyStore } from '../subjectKeyStore.js';
 import type { AuditEvent, AuditOptions, ReplayManifest } from '../types.js';
 import type { Identity } from 'mcpose';
 import { createProxyContext } from 'mcpose';
@@ -621,6 +622,68 @@ describe('createAuditMiddleware — subkey confidentiality (regression)', () => 
       { n: 1 },
     );
     expect(() => aesGcmDecrypt(second.inputEncrypted, key0, aad0)).toThrow();
+  });
+
+  // The same posture extends to erasable mode (ADR-0018): the stored subject
+  // key and the hash subkey derived from it are private key material, with the
+  // handling rules the signing secret has. If either leaks into a record, an
+  // erasure is theatre — whoever holds the leaked record can still read and
+  // confirm the payloads the key was destroyed to protect.
+  it('neither the subject key nor its hash subkey appears in any event, manifest, or error', async () => {
+    const events: AuditEvent[] = [];
+    const manifests: ReplayManifest[] = [];
+    const auditErrors: unknown[] = [];
+    const keyStore = createInMemorySubjectKeyStore();
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({
+        keyStore,
+        sensitivityResolver: () => 'high',
+        onEvent: (e) => {
+          events.push(e);
+          // A sink that throws routes through onAuditError; the error it
+          // reports must be as key-free as the event itself.
+          throw new Error('sink exploded');
+        },
+        onManifest: (m) => {
+          manifests.push(m);
+        },
+        onAuditError: (err) => {
+          auditErrors.push(err);
+        },
+      }),
+    );
+
+    await middleware(
+      makeReq('transfer', { acct: 'secret-acct' }),
+      async () => ({ content: [] }),
+      makeCtx('sess-subject-confidentiality'),
+    );
+    await closeSession('sess-subject-confidentiality');
+
+    expect(events).toHaveLength(1);
+    expect(manifests).toHaveLength(1);
+    expect(auditErrors).toHaveLength(1);
+
+    const subjectKey = await keyStore.getOrCreate('user-1');
+    const hashSubkey = createHmac('sha256', subjectKey)
+      .update('mcpose/v2/hashkey')
+      .digest();
+    const secrets = [subjectKey, hashSubkey].flatMap((key) => [
+      key.toString('hex'),
+      key.toString('base64'),
+      key.toString('base64url'),
+    ]);
+
+    const haystack = [
+      JSON.stringify(events),
+      JSON.stringify(manifests),
+      auditErrors.map((err) => String(err) + JSON.stringify(err)).join(''),
+    ].join(' ');
+
+    for (const secret of secrets) {
+      expect(secret).not.toBe('');
+      expect(haystack).not.toContain(secret);
+    }
   });
 });
 

@@ -42,6 +42,11 @@ const DOMAIN_ENC = Buffer.from('mcpose/v2/enc');
 const DOMAIN_MANIFEST = 'mcpose/v2/manifest';
 const DOMAIN_EVENT_KEY = 'mcpose/v2/eventkey\0';
 const DOMAIN_AAD = 'mcpose/v2/aad\0';
+// Erasable mode only (ADR-0018): keys the payload hashes so that destroying a
+// subject key destroys confirmability along with decryptability. A new label
+// for a new mechanism is additive within v2 — no existing label changes, and
+// no default-mode event is derived under it.
+const DOMAIN_HASH_KEY = 'mcpose/v2/hashkey';
 
 interface SessionState {
   events: AuditEvent[];
@@ -82,6 +87,22 @@ function deriveEventKey(
   return createHmac('sha256', encRoot)
     .update(`${DOMAIN_EVENT_KEY}${sessionId ?? ''}\0${position}\0${eventId}`)
     .digest();
+}
+
+/**
+ * Payload hash for one event.
+ *
+ * Default mode: plain `sha256`, unchanged and unkeyed, so a replay verifier
+ * needs no key custody. Erasable mode: `HMAC-SHA256` under a subkey of the
+ * subject key, so an adversary holding a candidate payload cannot confirm it
+ * against an erased event's hash (ADR-0018). Both hash the same
+ * `stableStringify` bytes, so only the key changes.
+ */
+function payloadHash(value: unknown, hashSubkey: Buffer | undefined): string {
+  const serialized = stableStringify(value);
+  return hashSubkey === undefined
+    ? sha256hex(serialized)
+    : createHmac('sha256', hashSubkey).update(serialized).digest('hex');
 }
 
 function anonymousIdentity(): Identity {
@@ -165,9 +186,26 @@ export function createAuditMiddleware(
         'mcpose/audit: ctx.proxy is required, because the proxy identity is a covered field of every audit event. mcpose core stamps it on every ProxyContext; a host invoking this middleware with its own context must supply it.',
       );
     }
+    const identity = ctx.identity ?? anonymousIdentity();
+    // Erasable mode (ADR-0018). Fetched at the pre-call stage alongside subkey
+    // derivation, for the same reason: without the subject key there is no way
+    // to record this event, so the call fails fast rather than running
+    // unaudited. Nothing is cached across calls — `destroy` must take effect
+    // immediately, and a subject that calls again after erasure gets a fresh
+    // key from the store rather than a stale one from here. A rejected fetch
+    // therefore leaves no poisoned state and the next call retries.
+    //
+    // The subject is the RESOLVED identity's `sub`, so anonymous events all
+    // land in the `anonymousIdentity()` bucket, which is the designated
+    // single bucket the ADR calls for.
+    // Written as a ternary rather than `await options.keyStore?.…` so default
+    // mode does not even take the extra microtask tick an `await undefined`
+    // would cost it.
+    const subjectKey = options.keyStore
+      ? await options.keyStore.getOrCreate(identity.sub)
+      : undefined;
     const startedAt = new Date().toISOString();
     const start = performance.now();
-    const identity = ctx.identity ?? anonymousIdentity();
     const sessionId = ctx.sessionId;
 
     if (sessionId && !sessions.has(sessionId)) {
@@ -251,6 +289,7 @@ export function createAuditMiddleware(
           tier,
           chainKey,
           encRoot,
+          subjectKey,
         });
         if (session) {
           session.events.push(event);
@@ -385,6 +424,12 @@ interface BuildParams {
   tier: SensitivityTier;
   chainKey: Buffer;
   encRoot: Buffer;
+  /**
+   * The subject's destroyable key in erasable mode, `undefined` in default
+   * mode. Its presence is the ONLY thing that changes derivation, which is
+   * what keeps default mode byte-identical (ADR-0018).
+   */
+  subjectKey: Buffer | undefined;
 }
 
 /** Fully synchronous — position allocation relies on that (no await between read and append). */
@@ -396,6 +441,14 @@ function buildEvent(p: BuildParams): AuditEvent {
   const sensitivityTier =
     p.tier === 'low' || p.tier === 'medium' ? p.tier : 'high';
 
+  // Erasable mode: one subkey off the subject key keys both payload hashes.
+  // Derived per event rather than held anywhere, so it dies with the subject
+  // key it came from (ADR-0018).
+  const hashSubkey =
+    p.subjectKey === undefined
+      ? undefined
+      : createHmac('sha256', p.subjectKey).update(DOMAIN_HASH_KEY).digest();
+
   const withoutChainHash = {
     id: p.ctx.requestId,
     startedAt: p.startedAt,
@@ -406,6 +459,10 @@ function buildEvent(p: BuildParams): AuditEvent {
       : {}),
     proxy: p.proxy,
     ...(p.kind !== undefined ? { kind: p.kind } : {}),
+    // Optional covered field under the ADR-0012 omission rule, exactly as
+    // `kind` is: default-mode events do not carry the key at all, so their
+    // preimage is unchanged (ADR-0018).
+    ...(p.subjectKey !== undefined ? { erasable: true as const } : {}),
     identity: p.identity,
     tool: p.tool,
     duration_ms: p.duration_ms,
@@ -415,8 +472,8 @@ function buildEvent(p: BuildParams): AuditEvent {
       ? { rejectionReason: p.rejectionReason }
       : {}),
     ...(p.error !== undefined ? { error: p.error } : {}),
-    inputHash: sha256hex(stableStringify(p.args)),
-    outputHash: sha256hex(stableStringify(p.result ?? null)),
+    inputHash: payloadHash(p.args, hashSubkey),
+    outputHash: payloadHash(p.result ?? null, hashSubkey),
     replayManifestPosition: p.position,
   };
 
@@ -436,8 +493,12 @@ function buildEvent(p: BuildParams): AuditEvent {
       outputRaw: p.result,
     };
   }
+  // Erasable mode swaps the ROOT and nothing else: same label, same session,
+  // position and event-id inputs, same AES-256-GCM layout and AAD. Only the
+  // key's provenance changes, from the pure-derived `encRoot` to the stored,
+  // destroyable subject key (ADR-0018).
   const eventKey = deriveEventKey(
-    p.encRoot,
+    p.subjectKey ?? p.encRoot,
     p.ctx.sessionId,
     p.position,
     base.id,
