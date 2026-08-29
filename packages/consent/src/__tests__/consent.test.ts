@@ -138,6 +138,33 @@ describe('createConsentMiddleware — fails closed', () => {
     });
   });
 
+  it('still refuses with the structured error when the error hook itself throws', async () => {
+    // The hook is observability. If its failure escaped, it would replace the
+    // CONSENT_MISSING that audit records with a raw error, and could carry the
+    // resolver detail the gate deliberately withholds out to the client.
+    const { middleware } = createConsentMiddleware({
+      resolveConsent: () => {
+        throw new Error('consent database unreachable');
+      },
+      onResolverError: () => {
+        throw new Error('logger exploded');
+      },
+    });
+    const next = vi.fn(async () => ({ content: [] }));
+
+    const err = await middleware(toolReq, next, makeCtx()).catch(
+      (e: unknown) => e,
+    );
+
+    expect(reasonOf(err)).toBe('CONSENT_MISSING');
+    expect(String(err)).toContain(
+      'Consent for read_records could not be established',
+    );
+    expect(String(err)).not.toContain('logger exploded');
+    expect(String(err)).not.toContain('consent database unreachable');
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it('rejects when the resolver rejects', async () => {
     const { middleware } = createConsentMiddleware({
       resolveConsent: () => Promise.reject(new Error('timeout')),

@@ -131,6 +131,7 @@ Two of those deserve their reasoning spelled out.
 A consent database that is down, a timeout, a bug in the lookup: none of them are evidence that anyone consented.
 Failing open on a broken consent source is the one failure mode a consent gate must not have, because it produces exactly the outcome the regulation exists to prevent, and it produces it silently and at scale.
 The thrown value goes to `onResolverError` and never to the client, since the health of your consent source is not something a caller asked about.
+A hook that throws is itself swallowed, so a broken logger cannot replace the structured `CONSENT_MISSING` the audit trail expects to record, nor carry the resolver's detail out to the client in its own message.
 
 **No identity means no consent.**
 Consent belongs to a data subject.
@@ -186,7 +187,7 @@ interface ConsentOptions {
 | Option | Required | Behaviour when omitted |
 |---|---|---|
 | `resolveConsent` | yes | n/a. Called with the resolved `Identity` and the tool or prompt name. |
-| `onResolverError` | no | Defaults to `console.error`. The refusal happens either way. |
+| `onResolverError` | no | Defaults to `console.error`. The refusal happens either way, and a hook that throws is swallowed: it is observability, so its failure changes nothing the caller sees. |
 
 `middleware` is a `ToolMiddleware` and `promptMiddleware` is a `PromptMiddleware`, both from `mcpose`.
 The resolver type is exported as `ResolveConsentFn`.

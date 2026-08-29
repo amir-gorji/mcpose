@@ -110,7 +110,18 @@ export function createConsentMiddleware(
       // Report, then refuse. The caller is told only that consent is missing:
       // the resolver's failure detail is an internal fact about the host's
       // consent source, not something a client asked about.
-      onResolverError(err, { subject: identity.sub, name });
+      //
+      // The hook is observability, so its own failure must change nothing.
+      // Left unguarded, a throwing hook replaced the structured rejection
+      // below with its own raw error: the client lost the CONSENT_MISSING
+      // that audit records, and the resolver detail this comment promises to
+      // withhold could travel out in the hook's message.
+      try {
+        onResolverError(err, { subject: identity.sub, name });
+      } catch {
+        // Swallowed on purpose. There is nowhere left to report a reporting
+        // failure, and the refusal below is what matters.
+      }
       throw rejectionMcpError(
         'CONSENT_MISSING',
         INVALID_REQUEST,
