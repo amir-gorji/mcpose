@@ -108,6 +108,8 @@ Each package publishes independently and carries its own README on npm.
 | [`@mcpose/audit`](./packages/audit/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/audit)](https://www.npmjs.com/package/@mcpose/audit) | Stable | Tamper-evident HMAC audit chain and signed Merkle `ReplayManifest`. |
 | [`@mcpose/testing`](./packages/testing/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/testing)](https://www.npmjs.com/package/@mcpose/testing) | Stable | Runner-agnostic compliance assertions over an audit trail. |
 | [`@mcpose/otel`](./packages/otel/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/otel)](https://www.npmjs.com/package/@mcpose/otel) | Preview | OpenTelemetry span adapter for the `onTelemetry` hook. |
+| [`@mcpose/store-redis`](./packages/store-redis/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/store-redis)](https://www.npmjs.com/package/@mcpose/store-redis) | Beta | Redis-backed `EventStore`: durable, uncapped SSE reconnect replay. |
+| [`@mcpose/store-postgres`](./packages/store-postgres/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/store-postgres)](https://www.npmjs.com/package/@mcpose/store-postgres) | Beta | Postgres-backed `EventStore`: durable, uncapped SSE reconnect replay. |
 
 `@mcpose/policy` appears in the [roadmap](#roadmap) and does not exist yet.
 A fintech identity package was considered and rejected; identity mapping is host `resolveIdentity` code ([ADR-0020](./docs/adr/0020-no-fintech-identity-package.md)).
@@ -461,11 +463,12 @@ Shipped:
 - [x] `@mcpose/testing`: compliance assertions
 - [x] Multi-backend composition: one governed endpoint over many upstreams, with namespaced tools
 - [x] `@mcpose/otel`: OpenTelemetry span adapter for `onTelemetry`
+- [x] Persistent `EventStore` adapters: [`@mcpose/store-redis`](./packages/store-redis/README.md) and [`@mcpose/store-postgres`](./packages/store-postgres/README.md)
 
 Planned for v3:
 
 - [ ] `@mcpose/policy`: RBAC policy engine
-- [ ] Persistent `EventStore` adapters for Redis and Postgres
+- [ ] A shared session registry, so a resume can survive a restart or reach a different instance (the persistent stores above are the storage half of this)
 - [ ] A delegation header spec, so core can populate `delegatedFrom` itself
 - [ ] GDPR/CCPA consent middleware with cryptographic erasure
 
