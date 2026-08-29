@@ -378,7 +378,7 @@ interface ProxyContext {
   signal?: AbortSignal;
   /** Resolved caller identity. Present when resolveIdentity is configured. */
   identity?: Identity;
-  /** Agent delegation chain. Stamped by the host; core does not populate it yet. */
+  /** Agent delegation chain, oldest-first. Extracted from the inbound request, or stamped by the host. */
   delegatedFrom?: Identity[];
   /** The proxy instance handling this request. Stamped by createProxyServer. */
   proxy?: ProxyIdentity;
@@ -424,16 +424,40 @@ type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
 `sessionId` is present on HTTP transport only.
 Over stdio there is no session concept, which is why `@mcpose/audit` produces no `ReplayManifest` there.
 
-`delegatedFrom` records agent-to-agent handoffs, but core does not extract it from requests yet: it is populated only when your host application places it on the context.
-For the outbound direction, `outboundDelegationChain(context)` returns the oldest-first chain (delegatedFrom plus the current identity) to attach to calls the proxy makes on the caller's behalf, per [ADR-0011](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0011-proxy-originated-call-attribution.md).
-A delegation header spec is v3 work.
-
 `proxy` records which proxy instance handled the request, resolved from `ProxyOptions.name` and `version` including their defaults.
 It is provenance, not a principal: it never appears in `delegatedFrom` and takes no part in the caller-attribution model, per [ADR-0012](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0012-proxy-identity-recorded-as-provenance.md).
 
 `policy` holds a decision already made, not a handle to query.
 Core never writes it: [`@mcpose/policy`](https://www.npmjs.com/package/@mcpose/policy) stamps it before calling `next` or throwing, so middleware running inside the policy layer can rely on `decision: 'allow'`, per [ADR-0017](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0017-policy-engine-contract.md).
 It was published as `policy?: never` through v2 and widened to `PolicyDecision` in v3, a breaking change for anyone who narrowed it.
+
+### The delegation chain
+
+`delegatedFrom` records agent-to-agent handoffs, oldest-first.
+Core populates it from the inbound request: a caller presents its chain at `params._meta["mcpose/delegation"]`, read at the proxy boundary before the request-`_meta` strip so it survives a chained proxy, per [ADR-0016](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0016-delegation-chain-wire-format.md).
+A chain your host application stamps on the context takes precedence: core fills the field only when the host left it unset.
+
+```json
+{ "v": 1, "chain": [{ "sub": "agent-a", "type": "agent" }] }
+```
+
+Each entry carries `sub` (required, non-empty string) and `type` (`human` | `agent` | `service`), plus optional `displayName`, `resolvedAt`, and `source`.
+
+**The chain is attribution, never authorization.**
+Extraction produces an `Identity` with `roles: []` and `claims: {}` for every entry, unconditionally, and ignores any it finds on the wire.
+A presented chain is written by the previous hop, so nothing in it may grant a privilege; authorization comes only from the identity this proxy resolves itself through `resolveIdentity`.
+Entries are not signed: a proxy trusts a presented chain exactly as much as it trusts the immediate caller it authenticated, who vouches for the history it forwards.
+
+A malformed payload rejects the call with `DELEGATION_INVALID` (`InvalidRequest`), thrown inside the pipeline so audit middleware records the attempt.
+Malformed means an unknown `v`, a `chain` that is not an array, more than 32 entries, an entry that is not an object, a missing or empty or non-string `sub`, or a `type` outside the union.
+An absent payload is not an error and leaves `delegatedFrom` unset.
+
+For the outbound direction, `outboundDelegationChain(context)` returns the oldest-first chain (`delegatedFrom` plus the current identity), per [ADR-0011](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0011-proxy-originated-call-attribution.md).
+Core attaches it to every call it forwards to a backend, so the backend sees the chain the proxy can vouch for and never the caller's own copy, which the strip removed.
+A local tool handler calls out through your code, so your host attaches it: for an outbound MCP call, `serializeDelegationChain(outboundDelegationChain(context))` placed at `_meta[DELEGATION_META_KEY]` is exactly what core sends.
+The serializer drops `roles` and `claims` too, so a chain never leaves this proxy carrying privileges.
+
+Loop detection and the `@mcpose/testing` continuity assertion follow in [#125](https://github.com/amir-gorji/mcpose/issues/125) and [#126](https://github.com/amir-gorji/mcpose/issues/126).
 
 ### Rejection reasons
 
@@ -453,7 +477,7 @@ type RejectionReason =
   | 'IDENTITY_UNRESOLVED'   // identity could not be established
   | 'CONSENT_MISSING'       // v3: GDPR/CCPA consent gate blocked the call
   | 'SENSITIVITY_BLOCKED'   // @mcpose/policy: a sensitivity-tier rule blocked the call
-  | 'DELEGATION_INVALID'    // v3: agent delegation chain is invalid or expired
+  | 'DELEGATION_INVALID'    // the presented delegation chain is malformed
   | 'BUDGET_EXCEEDED'       // @mcpose/policy: the per-session call budget is exhausted
   | 'SESSION_LIMIT'         // max concurrent sessions reached (HTTP 503)
   | 'BODY_LIMIT';           // request body exceeded maxBodyBytes (HTTP 413)

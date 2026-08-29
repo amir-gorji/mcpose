@@ -24,6 +24,12 @@ export type { Backends } from './mesh.js';
 export type { PersistentEventStore } from './eventStore.js';
 export { createInMemoryEventStore } from './eventStore.js';
 
+export type {
+  DelegationWireEntry,
+  DelegationWirePayload,
+} from './delegation.js';
+export { DELEGATION_META_KEY, serializeDelegationChain } from './delegation.js';
+
 export type { RejectionReason } from './rejection.js';
 export { rejectionMcpError } from './rejection.js';
 

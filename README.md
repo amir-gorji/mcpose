@@ -473,11 +473,11 @@ Shipped:
 - [x] Multi-backend composition: one governed endpoint over many upstreams, with namespaced tools
 - [x] `@mcpose/otel`: OpenTelemetry span adapter for `onTelemetry`
 - [x] Persistent `EventStore` adapters: [`@mcpose/store-redis`](./packages/store-redis/README.md) and [`@mcpose/store-postgres`](./packages/store-postgres/README.md)
+- [x] The delegation chain wire format, so core populates `delegatedFrom` from the request itself
 
 Planned for v3:
 
 - [ ] A shared session registry, so a resume can survive a restart or reach a different instance (the persistent stores above are the storage half of this)
-- [ ] A delegation header spec, so core can populate `delegatedFrom` itself
 - [ ] GDPR/CCPA consent middleware with cryptographic erasure
 
 Session re-execution from a `ReplayManifest` is v4.

@@ -55,6 +55,7 @@ import {
   type Backends,
   type MeshEntry,
 } from './mesh.js';
+import { attachDelegationMeta, readInboundDelegation } from './delegation.js';
 import { createInMemoryEventStore } from './eventStore.js';
 import type { EventStore } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { rejectionMcpError } from './rejection.js';
@@ -592,10 +593,15 @@ function normalizeHeaders(
 function getMiddlewareContext(
   proxy: ProxyIdentity,
   signal?: AbortSignal,
+  delegatedFrom?: Identity[],
 ): ProxyContext {
+  const store = httpProxyContext.getStore();
   return createProxyContext({
-    ...httpProxyContext.getStore(),
+    ...store,
     ...(signal === undefined ? {} : { signal }),
+    // A host-stamped chain wins; an extracted one fills the field only when
+    // the host left it unset, which keeps the extraction additive (ADR-0016).
+    delegatedFrom: store?.delegatedFrom ?? delegatedFrom,
     proxy,
   });
 }
@@ -919,9 +925,12 @@ export function createProxyServer(
 
   if (capabilities.tools) {
     server.setRequestHandler(ListToolsRequestSchema, async (rawReq, extra) => {
+      // Read the chain before the strip, or it never survives a chained
+      // proxy (ADR-0016, the ADR-0011 boundary-ordering constraint).
+      const { chain, error: delegationError } = readInboundDelegation(rawReq);
       const req = stripRequest(rawReq);
       const requestOptions = createRequestOptions(extra);
-      const context = getMiddlewareContext(proxyIdentity, extra.signal);
+      const context = getMiddlewareContext(proxyIdentity, extra.signal, chain);
       // Local tools are overlaid inside the innermost `next`, so
       // listToolsMiddleware sees them exactly as it sees upstream tools.
       // They are added to the first page only (no cursor), so a paginating
@@ -930,6 +939,9 @@ export function createProxyServer(
       const result = await listToolsPipeline(
         req,
         async (currentReq) => {
+          // Thrown inside the pipeline, so observing middleware records the
+          // attempt rather than seeing a call that never happened.
+          if (delegationError !== undefined) throw delegationError;
           const upstreamResult: ListToolsResult = mesh
             ? {
                 // A mesh has no cursor that means "page 3 of the union", so
@@ -939,7 +951,10 @@ export function createProxyServer(
                   async (client, cursor) => {
                     const page = stripResult(
                       await client.listTools(
-                        cursor === undefined ? {} : { cursor },
+                        attachDelegationMeta(
+                          cursor === undefined ? {} : { cursor },
+                          context,
+                        ),
                         requestOptions,
                       ),
                     );
@@ -951,7 +966,10 @@ export function createProxyServer(
               }
             : upstreamHasTools
               ? stripResult(
-                  await backend.listTools(currentReq.params, requestOptions),
+                  await backend.listTools(
+                    attachDelegationMeta(currentReq.params, context),
+                    requestOptions,
+                  ),
                 )
               : { tools: [] };
           if (!localToolMap.size) {
@@ -974,10 +992,11 @@ export function createProxyServer(
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (rawReq, extra) => {
+      const { chain, error: delegationError } = readInboundDelegation(rawReq);
       const req = stripRequest(rawReq);
       const name = req.params.name;
       const requestOptions = createRequestOptions(extra);
-      const context = getMiddlewareContext(proxyIdentity, extra.signal);
+      const context = getMiddlewareContext(proxyIdentity, extra.signal, chain);
       const start = performance.now();
 
       const emitTelemetry = (
@@ -1051,7 +1070,10 @@ export function createProxyServer(
                 }
                 return stripResult(
                   await routed.client.callTool(
-                    { ...r.params, name: routed.name },
+                    attachDelegationMeta(
+                      { ...r.params, name: routed.name },
+                      context,
+                    ),
                     undefined,
                     requestOptions,
                   ),
@@ -1060,7 +1082,11 @@ export function createProxyServer(
             : upstreamHasTools
               ? async (r) =>
                   stripResult(
-                    await backend.callTool(r.params, undefined, requestOptions),
+                    await backend.callTool(
+                      attachDelegationMeta(r.params, context),
+                      undefined,
+                      requestOptions,
+                    ),
                   )
               : async () => {
                   // Tools-less upstream: reject inside the pipeline rather
@@ -1072,7 +1098,16 @@ export function createProxyServer(
                 };
 
       try {
-        const result = await pipeline(req, callBackend, context);
+        // A malformed chain replaces the innermost `next` rather than
+        // rejecting at the boundary, so the pipeline observes it, and it is
+        // decided before the tool is: the answer says nothing about the tool.
+        const result = await pipeline(
+          req,
+          delegationError === undefined
+            ? callBackend
+            : () => Promise.reject(delegationError),
+          context,
+        );
         // MCP signals tool-level failures in-band via isError, not by throwing.
         emitTelemetry(
           hasToolContent(result) && result.isError === true
@@ -1095,9 +1130,18 @@ export function createProxyServer(
     server.setRequestHandler(
       ListResourcesRequestSchema,
       async (rawReq, extra) => {
+        const { chain, error: delegationError } = readInboundDelegation(rawReq);
+        // `resources/list` runs no pipeline, so there is no observer to
+        // record the attempt: the rejection is thrown here instead.
+        if (delegationError !== undefined) throw delegationError;
+        const context = getMiddlewareContext(
+          proxyIdentity,
+          extra.signal,
+          chain,
+        );
         const result = stripResult(
           await backend.listResources(
-            stripRequest(rawReq).params,
+            attachDelegationMeta(stripRequest(rawReq).params, context),
             createRequestOptions(extra),
           ),
         );
@@ -1112,10 +1156,11 @@ export function createProxyServer(
     );
 
     server.setRequestHandler(ReadResourceRequestSchema, (rawReq, extra) => {
+      const { chain, error: delegationError } = readInboundDelegation(rawReq);
       const req = stripRequest(rawReq);
       const uri = req.params.uri;
       const requestOptions = createRequestOptions(extra);
-      const context = getMiddlewareContext(proxyIdentity, extra.signal);
+      const context = getMiddlewareContext(proxyIdentity, extra.signal, chain);
 
       if (hiddenResourceSet.has(uri)) {
         throw rejectionMcpError(
@@ -1125,13 +1170,27 @@ export function createProxyServer(
         );
       }
       if (passThroughResourceSet.has(uri)) {
+        // A pass-through resource runs no pipeline at all, so as with
+        // `resources/list` the rejection is thrown here.
+        if (delegationError !== undefined) throw delegationError;
         return backend
-          .readResource(req.params, requestOptions)
+          .readResource(
+            attachDelegationMeta(req.params, context),
+            requestOptions,
+          )
           .then(stripResult);
       }
       return resourcePipeline(
         req,
-        (r) => backend.readResource(r.params, requestOptions).then(stripResult),
+        (r) => {
+          if (delegationError !== undefined) throw delegationError;
+          return backend
+            .readResource(
+              attachDelegationMeta(r.params, context),
+              requestOptions,
+            )
+            .then(stripResult);
+        },
         context,
       );
     });
@@ -1146,16 +1205,25 @@ export function createProxyServer(
     // like tool names (ADR-0013).
     server.setRequestHandler(
       ListPromptsRequestSchema,
-      async (_rawReq, extra) => {
+      async (rawReq, extra) => {
+        const { chain, error: delegationError } = readInboundDelegation(rawReq);
+        if (delegationError !== undefined) throw delegationError;
         const requestOptions = createRequestOptions(extra);
-        const context = getMiddlewareContext(proxyIdentity, extra.signal);
+        const context = getMiddlewareContext(
+          proxyIdentity,
+          extra.signal,
+          chain,
+        );
         return {
           prompts: await listAcrossMesh(
             promptBackends.entries,
             async (client, cursor) => {
               const page = stripResult(
                 await client.listPrompts(
-                  cursor === undefined ? {} : { cursor },
+                  attachDelegationMeta(
+                    cursor === undefined ? {} : { cursor },
+                    context,
+                  ),
                   requestOptions,
                 ),
               );
@@ -1168,14 +1236,16 @@ export function createProxyServer(
     );
 
     server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) => {
+      const { chain, error: delegationError } = readInboundDelegation(rawReq);
       const req = stripRequest(rawReq);
       const requestOptions = createRequestOptions(extra);
-      const context = getMiddlewareContext(proxyIdentity, extra.signal);
+      const context = getMiddlewareContext(proxyIdentity, extra.signal, chain);
       // Routed at the innermost `next` from the post-pipeline name, so the
       // rejection is thrown in-chain and middleware (audit) observes it.
       return promptPipeline(
         req,
         async (r) => {
+          if (delegationError !== undefined) throw delegationError;
           const routed = routeNamespaced(r.params.name, promptBackends.byKey);
           if (routed === undefined) {
             throw rejectionMcpError(
@@ -1186,7 +1256,7 @@ export function createProxyServer(
           }
           return stripResult(
             await routed.client.getPrompt(
-              { ...r.params, name: routed.name },
+              attachDelegationMeta({ ...r.params, name: routed.name }, context),
               requestOptions,
             ),
           );
@@ -1195,19 +1265,34 @@ export function createProxyServer(
       );
     });
   } else if (capabilities.prompts) {
-    server.setRequestHandler(ListPromptsRequestSchema, (rawReq, extra) =>
-      backend
-        .listPrompts(stripRequest(rawReq).params, createRequestOptions(extra))
-        .then(stripResult),
-    );
+    server.setRequestHandler(ListPromptsRequestSchema, (rawReq, extra) => {
+      const { chain, error: delegationError } = readInboundDelegation(rawReq);
+      if (delegationError !== undefined) throw delegationError;
+      const context = getMiddlewareContext(proxyIdentity, extra.signal, chain);
+      return backend
+        .listPrompts(
+          attachDelegationMeta(stripRequest(rawReq).params, context),
+          createRequestOptions(extra),
+        )
+        .then(stripResult);
+    });
 
     server.setRequestHandler(GetPromptRequestSchema, (rawReq, extra) => {
+      const { chain, error: delegationError } = readInboundDelegation(rawReq);
       const requestOptions = createRequestOptions(extra);
+      const context = getMiddlewareContext(proxyIdentity, extra.signal, chain);
       return promptPipeline(
         stripRequest(rawReq),
-        async (r) =>
-          stripResult(await backend.getPrompt(r.params, requestOptions)),
-        getMiddlewareContext(proxyIdentity, extra.signal),
+        async (r) => {
+          if (delegationError !== undefined) throw delegationError;
+          return stripResult(
+            await backend.getPrompt(
+              attachDelegationMeta(r.params, context),
+              requestOptions,
+            ),
+          );
+        },
+        context,
       );
     });
   }

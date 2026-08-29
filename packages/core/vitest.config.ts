@@ -11,10 +11,10 @@ export default defineConfig({
       // Ratchet policy: raise-only. Lowering a threshold requires an ADR-level
       // justification. Set to measured coverage rounded down minus 2 points.
       thresholds: {
-        statements: 91,
-        branches: 89,
-        functions: 82,
-        lines: 91,
+        statements: 93,
+        branches: 91,
+        functions: 84,
+        lines: 93,
       },
     },
   },

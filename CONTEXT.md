@@ -36,7 +36,9 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Delegation**: A single link in an agent-to-agent handoff — one `Identity` in the `delegatedFrom` array.
 
-**Delegation chain**: The full sequence of agents that handed off the request before reaching mcpose. `delegatedFrom?: Identity[]` on `ProxyContext`. Core does not populate it yet (no delegation header spec until v3); it is stamped on audit events only when the host places it on the context. _Avoid_: "agent chain", "call chain"
+**Delegation chain**: The full sequence of agents that handed off the request before reaching mcpose, oldest-first. `delegatedFrom?: Identity[]` on `ProxyContext`. Core populates it from the presented chain the caller sends at `params._meta["mcpose/delegation"]`, read before the request-`_meta` strip; a chain the host stamps takes precedence (ADR-0016). _Avoid_: "agent chain", "call chain"
+
+**Presented chain**: The delegation chain as it arrives on the wire, written by the previous hop. Attribution, never authorization: extraction gives every entry empty `roles` and `claims`, and a malformed payload is rejected with `DELEGATION_INVALID` (ADR-0016). _Avoid_: "delegation header", "trusted chain"
 
 **Proxy identity**: Which proxy instance handled a request — `proxy?: ProxyIdentity` (`{ name, version }`) on `ProxyContext`, stamped by `createProxyServer` from `ProxyOptions` with defaults applied. Provenance, not a principal: never an entry in `delegatedFrom`, and no part of the caller-attribution model (ADR-0012). _Avoid_: "server identity", "instance id"
 
@@ -103,7 +105,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 ## Example dialogue
 
 > **Dev:** "When an agent delegates a call through mcpose, does the audit event capture the whole delegation chain?"
-> **Domain expert:** "If the host stamps `delegatedFrom` on the `ProxyContext`, the audit middleware records it on the event and it is covered by the chain. Core itself does not extract delegation from requests yet — that lands with the v3 delegation spec."
+> **Domain expert:** "Yes. Core reads the presented chain out of the request before the `_meta` strip and puts it on the `ProxyContext`, the audit middleware records it on the event, and it is covered by the chain. A chain the host stamps itself still wins. What the entries never carry is roles or claims: the chain says who handed off, not what they may do."
 
 ## Flagged ambiguities
 
