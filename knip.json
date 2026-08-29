@@ -17,6 +17,10 @@
       "entry": ["src/index.ts"],
       "project": ["src/**/*.ts"]
     },
+    "packages/otel": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
     "examples": {
       "project": ["**/*.ts"]
     }

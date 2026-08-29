@@ -107,8 +107,9 @@ Each package publishes independently and carries its own README on npm.
 | [`mcpose`](./packages/core/README.md) | [![npm](https://img.shields.io/npm/v/mcpose)](https://www.npmjs.com/package/mcpose) | Stable | Proxy core: middleware pipeline, stdio and HTTP transports, identity, governance. |
 | [`@mcpose/audit`](./packages/audit/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/audit)](https://www.npmjs.com/package/@mcpose/audit) | Stable | Tamper-evident HMAC audit chain and signed Merkle `ReplayManifest`. |
 | [`@mcpose/testing`](./packages/testing/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/testing)](https://www.npmjs.com/package/@mcpose/testing) | Stable | Runner-agnostic compliance assertions over an audit trail. |
+| [`@mcpose/otel`](./packages/otel/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/otel)](https://www.npmjs.com/package/@mcpose/otel) | Preview | OpenTelemetry span adapter for the `onTelemetry` hook. |
 
-`@mcpose/policy` and `@mcpose/otel` appear in the [roadmap](#roadmap) and do not exist yet.
+`@mcpose/policy` appears in the [roadmap](#roadmap) and does not exist yet.
 A fintech identity package was considered and rejected; identity mapping is host `resolveIdentity` code ([ADR-0020](./docs/adr/0020-no-fintech-identity-package.md)).
 
 ## Install
@@ -127,6 +128,12 @@ For tamper-evident audit trails, add the audit package and its test-time asserti
 ```bash
 npm install @mcpose/audit
 npm install --save-dev @mcpose/testing
+```
+
+For OpenTelemetry spans from the `onTelemetry` hook, add the span adapter and your own OpenTelemetry SDK:
+
+```bash
+npm install @mcpose/otel @opentelemetry/api
 ```
 
 ## Quick start
@@ -403,6 +410,7 @@ Each package's README is the canonical reference for its own exports, and each i
 | [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `mapToolResult`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `Backends` / `ProxyOptions` / `HttpProxyOptions` / `LocalTool` / `HiddenToolPredicate` / `RejectionReason` types, plus the `ToolMiddleware` / `ResourceMiddleware` / `PromptMiddleware` / `ListToolsMiddleware` middleware types. |
 | [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware` (returning `middleware`, `promptMiddleware`, and `closeSession`), `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` schemas. |
 | [`@mcpose/testing`](./packages/testing/README.md#api) | `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`, each with what it does and does not prove. |
+| [`@mcpose/otel`](./packages/otel/README.md#api) | `createOtelTelemetry`, plus the span and attribute mapping for each `TelemetryEvent` variant. |
 
 Test helpers for the proxy itself (`createMockBackendClient`, `runToolMiddleware`, `runListToolsMiddleware`, `runResourceMiddleware`) ship in the core package under the `mcpose/testing` subpath.
 That is a different thing from the `@mcpose/testing` package, which asserts audit chains.
@@ -452,11 +460,11 @@ Shipped:
 - [x] `@mcpose/audit`: HMAC chain, Merkle proofs, signed `ReplayManifest`, sensitivity tiers
 - [x] `@mcpose/testing`: compliance assertions
 - [x] Multi-backend composition: one governed endpoint over many upstreams, with namespaced tools
+- [x] `@mcpose/otel`: OpenTelemetry span adapter for `onTelemetry`
 
 Planned for v3:
 
 - [ ] `@mcpose/policy`: RBAC policy engine
-- [ ] `@mcpose/otel`: OpenTelemetry span adapter for `onTelemetry`
 - [ ] Persistent `EventStore` adapters for Redis and Postgres
 - [ ] A delegation header spec, so core can populate `delegatedFrom` itself
 - [ ] GDPR/CCPA consent middleware with cryptographic erasure
