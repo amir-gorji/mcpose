@@ -35,7 +35,15 @@ export interface ProxyContext {
   signal?: AbortSignal;
   /** Resolved caller identity. Present when {@link HttpProxyOptions.resolveIdentity} is configured. */
   identity?: Identity;
-  /** Agent delegation chain — populated when an upstream A2A agent delegates through mcpose. */
+  /**
+   * Agent delegation chain, oldest-first. Populated from the inbound
+   * request's `_meta["mcpose/delegation"]` when a caller presents one
+   * (ADR-0016), or by a host that stamps its own, which wins.
+   *
+   * Attribution, never authorization: every entry extracted from the wire
+   * carries empty `roles` and `claims`, because a presented chain is written
+   * by the previous hop.
+   */
   delegatedFrom?: Identity[];
   /** The proxy instance handling this request. Stamped by {@link createProxyServer}. */
   proxy?: ProxyIdentity;
@@ -53,6 +61,12 @@ export interface ProxyContext {
  * made on behalf of the inbound caller (ADR-0011). Returns a fresh array and
  * never mutates or aliases `ctx.delegatedFrom`, because the audit middleware
  * reads the same context object when recording the inbound call.
+ *
+ * Core attaches this chain itself to every call it forwards to a backend, at
+ * `params._meta["mcpose/delegation"]` (ADR-0016). A local tool handler makes
+ * its own outbound calls, so its host attaches the chain: for an outbound MCP
+ * call, `serializeDelegationChain(outboundDelegationChain(context))` under
+ * `DELEGATION_META_KEY` produces exactly what core sends.
  */
 export function outboundDelegationChain(ctx: ProxyContext): Identity[] {
   return [

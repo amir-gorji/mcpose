@@ -18,7 +18,7 @@ export type RejectionReason =
   | 'IDENTITY_UNRESOLVED' // identity could not be established; @mcpose/policy is its first emitter (ADR-0017)
   | 'CONSENT_MISSING' // v3: GDPR/CCPA consent gate blocked the call
   | 'SENSITIVITY_BLOCKED' // @mcpose/policy: a sensitivity-tier rule blocked the call (ADR-0017)
-  | 'DELEGATION_INVALID' // v3: agent delegation chain is invalid or expired
+  | 'DELEGATION_INVALID' // the presented delegation chain is malformed (ADR-0016)
   | 'BUDGET_EXCEEDED' // @mcpose/policy: the per-session call budget is exhausted (ADR-0017)
   | 'SESSION_LIMIT' // max concurrent sessions reached (HTTP 503)
   | 'BODY_LIMIT'; // request body exceeded maxBodyBytes (HTTP 413)
