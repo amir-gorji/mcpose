@@ -22,10 +22,12 @@ When a **session** closes it emits a signed **replay manifest** with a Merkle ro
   - [What the chain covers](#what-the-chain-covers)
   - [What it does not cover](#what-it-does-not-cover)
   - [Key hierarchy](#key-hierarchy)
+- [Erasable mode: cryptographic erasure](#erasable-mode-cryptographic-erasure)
 - [API surface](#api-surface)
   - [`createAuditMiddleware(options)`](#createauditmiddlewareoptions)
   - [`createSensitivityResolver(map, override?)`](#createsensitivityresolvermap-override)
   - [`createDefaultSigningKeyProvider(secret)`](#createdefaultsigningkeyprovidersecret)
+  - [`SubjectKeyStore`](#subjectkeystore)
   - [`AuditEvent`](#auditevent)
   - [`ReplayManifest`](#replaymanifest)
   - [Verification](#verification)
@@ -47,8 +49,9 @@ This package exists for the harder problem: a record that stays credible when so
 - **Full coverage.** Rejected calls (hidden tools) and `passThroughTools` are audited too, because the middleware is registered as a pass-through observer.
 - **Sensitivity-tiered storage.** Classify tools as low, medium, or high; high-tier payloads are AES-256-GCM encrypted at rest with per-event keys. Unknown or invalid tiers fail closed to `high`.
 - **Subkeys derived through the signing oracle.** Chain and encryption keys derive from the signing secret with domain separation, never from the public key id ([ADR-0003](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0003-audit-subkeys-derived-from-signing-oracle.md)).
+- **Optional erasable mode.** Supply a `SubjectKeyStore` and a subject's payloads become destroyable: `destroy(sub)` kills both decryptability and hash-confirmability for that subject, and the chain and manifest keep verifying ([ADR-0018](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0018-cryptographic-erasure-and-the-chain.md)). Omit it and nothing changes.
 - **Never blocks the call path.** Audit failures (a throwing sink, unserializable payloads) are routed to `onAuditError`; the tool call always completes with its real result or error.
-  Two configuration errors are the deliberate exception, and both fail before the upstream is reached rather than after: an unavailable signing provider, and a `ProxyContext` with no `proxy` identity.
+  Three configuration errors are the deliberate exception, and all fail before the upstream is reached rather than after: an unavailable signing provider, a `ProxyContext` with no `proxy` identity, and an unavailable `SubjectKeyStore` in erasable mode.
   Each would otherwise produce a record that cannot be verified or cannot be attributed, so the call fails instead of running unaudited.
   A proxy built by `createProxyServer` always stamps `ctx.proxy`, so only a host that invokes the middleware with its own hand-built context needs to supply it.
 - **No storage lock-in.** Events and manifests are pushed to your own sinks through `onEvent` and `onManifest`.
@@ -149,7 +152,7 @@ The signed manifest anchors the whole session, and high-tier payloads are encryp
 
 Each link is `HMAC(chainKey, canonicalJson({ domain, prevChainHash, event }))` over this field set:
 
-`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `proxy`, `kind?`, `identity`, `tool`, `duration_ms`, `outcome`, `sensitivityTier`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
+`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `proxy`, `kind?`, `erasable?`, `identity`, `tool`, `duration_ms`, `outcome`, `sensitivityTier`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
 
 Optional fields are omitted from the preimage when absent, so events recorded before an optional field existed keep verifying unchanged (ADR-0012).
 `sensitivityTier` and `proxy` are required on every event and are therefore always present, which is why covering each of them amended format v2 in place rather than extending it (ADR-0015 and ADR-0019).
@@ -182,6 +185,97 @@ The secret must be high-entropy (32+ random bytes).
 For production, implement `SigningKeyProvider` against your KMS rather than holding the secret in process.
 `createDefaultSigningKeyProvider` is in-process HMAC-SHA256 signing, suitable for development and single-trust deployments.
 
+## Erasable mode: cryptographic erasure
+
+A GDPR or CCPA erasure request and a tamper-evident trail pull in opposite directions: one demands a subject's data become unrecoverable, the other exists to make recorded history immutable.
+Erasable mode reconciles them, on the observation that payloads are bound to the chain only through their hashes.
+Destroying the ability to *read* a payload touches no preimage, so the trail stays exactly as verifiable as it was.
+
+[ADR-0018](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0018-cryptographic-erasure-and-the-chain.md) is the binding design.
+
+### Activation
+
+Pass a `SubjectKeyStore` as `keyStore`.
+That is the whole switch:
+
+```ts
+import { createAuditMiddleware, createInMemorySubjectKeyStore } from '@mcpose/audit';
+
+const keyStore = createInMemorySubjectKeyStore(); // dev only, see the warning below
+
+const audit = createAuditMiddleware({
+  signingKey,
+  sensitivityResolver,
+  keyStore,
+  onEvent: (event) => sink.write(event),
+});
+
+// An erasure request, in full:
+const tombstone = await keyStore.destroy('user-42');
+// → { destroyedAt: '2026-08-29T09:12:04.118Z' }
+```
+
+**Omit `keyStore` and nothing changes.**
+Default mode is byte-identical to what it has always been: the same preimages, the same ciphertexts, the same plain `sha256` payload hashes, and no `erasable` marker on any event.
+Erasable mode is opt-in per middleware instance, and the two modes never interfere.
+
+### The unit of erasure is the data subject
+
+One random 256-bit key per subject, created on first use, where the subject is the event's resolved `identity.sub`.
+Events with no resolved identity share the `anonymous` bucket, so one `destroy('anonymous')` erases all of them together.
+Erasure requests arrive per data subject, so that is the unit; anything finer multiplies stored keys without matching a regulatory unit.
+
+The key is fetched before every audited call, at the same pre-call stage as subkey derivation, and for the same reason: with no key there is no way to record the event, so the call fails fast rather than running unaudited.
+A store outage therefore refuses calls and recovers on its own once the store returns; nothing is cached, so `destroy` takes effect on the very next call.
+
+### What erasure destroys, and what survives
+
+`destroy(subjectId)` removes the key. That destroys two things at once:
+
+- **Decryptability.** High-tier `inputEncrypted` / `outputEncrypted` were sealed under a key derived from the subject key, so they become permanently unreadable. Nobody can recover them, the operator included.
+- **Hash-confirmability.** This is the part a naive design misses. Default `inputHash` / `outputHash` are deterministic and unkeyed, so an adversary holding a *candidate* payload can confirm after erasure that a subject's event contained it. Salting does not help, because a stored salt reproduces the same confirmation. In erasable mode the hashes are `HMAC-SHA256` under a hash subkey of the subject key, so destroying the key destroys the ability to confirm a guess.
+
+What survives is everything the trail is for:
+
+- The **chain** verifies, at every index, before and after erasure. `verifyAuditChain` is unaffected.
+- The **`ReplayManifest`** verifies, and its format is unchanged. Erasure is deliberately not recorded in the chain or the manifest: doing so would make the trail assert facts about key custody it cannot verify.
+- Every covered field stays readable. Who called what, when, with what outcome, at which tier, under which proxy, is all still there. Only the payload bodies go dark.
+
+Two consequences to be explicit about:
+
+- **Erasure trades replay completeness for compliance.** An erased event's payload cannot be replayed or re-verified against a copy. That is the point of the feature, not a limitation of it.
+- **Low- and medium-tier payloads are stored as plaintext** and are not protected by any key, so erasing a subject key does not remove them. Classify anything an erasure request must reach as `high`.
+
+An erased event is indistinguishable, at the format level, from an event whose key custodian simply lost the key.
+Accountability for the erasure itself lives in the tombstone the store returns, outside the chain.
+
+### Custody is yours
+
+> **In erasable mode the `SubjectKeyStore` *is* the confidentiality of every high-tier payload it holds a key for.**
+> A store that keeps keys in the clear, or that anyone with read access to the event sink can also read, voids the encryption guarantee for every subject in it.
+> A store that silently loses keys performs an erasure nobody asked for, and the loss is invisible until someone tries to read a payload back.
+
+`createInMemorySubjectKeyStore()` is the reference implementation and is **not durable**: keys live in one process's heap, so a restart erases every subject and a second proxy instance cannot read what the first recorded.
+Use it in development and tests.
+A real deployment implements the two-method interface against a KMS, an HSM, or an encrypted, access-controlled table whose read path is itself audited, with the same handling rules as the signing secret.
+
+### What a decryptor has to know
+
+Erasable mode is visible on the record: an event produced under it carries `erasable: true`.
+That marker is covered by the chain as an optional field (ADR-0012), so a stored event cannot be silently reinterpreted under the wrong hash scheme, and adding or stripping it fails verification at that index.
+
+A tool that reads payloads back therefore branches on it:
+
+| | `erasable` absent | `erasable: true` |
+|---|---|---|
+| Event key root | `encRoot = sign('mcpose/v2/enc')` | the subject's stored key |
+| `inputHash` / `outputHash` | `sha256(stableStringify(payload))` | `HMAC(hashSubkey, stableStringify(payload))`, where `hashSubkey = HMAC(subjectKey, 'mcpose/v2/hashkey')` |
+| Needs the signing secret | yes | yes, for the chain |
+| Needs the subject key | no | yes, for the payloads |
+
+The event-key derivation, the AES-256-GCM layout, and the AAD are identical in both modes.
+Only the root the key comes from changes.
+
 ## API surface
 
 | Export | Purpose |
@@ -189,12 +283,13 @@ For production, implement `SigningKeyProvider` against your KMS rather than hold
 | `createAuditMiddleware(options)` | Returns `{ middleware, promptMiddleware, closeSession }`. Add `middleware` to `toolMiddleware` and `promptMiddleware` to `promptMiddleware`; call `closeSession(sessionId)` to emit the manifest. |
 | `createSensitivityResolver(map, override?)` | Build a `SensitivityResolverFn`. Unknown or invalid tiers resolve to `high`. |
 | `createDefaultSigningKeyProvider(secret)` | In-process HMAC-SHA256 `SigningKeyProvider`. |
+| `createInMemorySubjectKeyStore()` | Reference `SubjectKeyStore` for [erasable mode](#erasable-mode-cryptographic-erasure). **Not durable**: development and tests only. |
 | `verifyAuditChain(events, signingKey)` | **Keyed** chain verification: recomputes every `chainHash` and reports the first tampered index. An empty event list is invalid. |
 | `verifyManifestSignature(manifest, signingKey)` | **Keyed** check of the full-manifest signature, in constant time. |
 | `computeMerkleRoot` · `computeMerkleProof` · `verifyMerkleProof` | Low-level Merkle helpers for independent verification. |
 | `canonicalJson` · `stableStringify` | The canonical serializations the format is defined over, exported so third parties can write their own verifier. |
 
-**Key types:** `AuditEvent` (`LowAuditEvent` \| `MediumAuditEvent` \| `HighAuditEvent`), `AuditEventBase`, `SensitivityTier`, `SensitivityResolverFn`, `SensitivityOverrideFn`, `SigningKeyProvider`, `AuditOptions`, `AuditMiddlewareHandle`, `ReplayManifest`, `MerkleProof`, `ChainVerification`.
+**Key types:** `AuditEvent` (`LowAuditEvent` \| `MediumAuditEvent` \| `HighAuditEvent`), `AuditEventBase`, `SensitivityTier`, `SensitivityResolverFn`, `SensitivityOverrideFn`, `SigningKeyProvider`, `SubjectKeyStore`, `SubjectKeyTombstone`, `AuditOptions`, `AuditMiddlewareHandle`, `ReplayManifest`, `MerkleProof`, `ChainVerification`.
 
 ### `createAuditMiddleware(options)`
 
@@ -206,6 +301,11 @@ interface AuditOptions {
   signingKey: SigningKeyProvider;
   sensitivityResolver: SensitivityResolverFn;
   onEvent: (event: AuditEvent) => void | Promise<void>;
+  /**
+   * Supply a store to run in ERASABLE mode; omit it and behaviour is
+   * byte-identical to default mode. See "Erasable mode" above.
+   */
+  keyStore?: SubjectKeyStore;
   /**
    * Called with the finished ReplayManifest when closeSession() is invoked.
    *
@@ -287,6 +387,27 @@ const signingKey = createDefaultSigningKeyProvider(process.env.AUDIT_SECRET!);
 That distinction matters: `keyId` is published in every manifest, and a bare digest would let anyone holding a manifest brute-force a low-entropy secret offline.
 It remains **public** either way, so it is never key material.
 
+### `SubjectKeyStore`
+
+Custody of the destroyable per-subject keys that make [erasable mode](#erasable-mode-cryptographic-erasure) erasable.
+Two methods, both async so a real store can do I/O:
+
+```ts
+interface SubjectKeyStore {
+  /** The subject's 256-bit key, created at random on first use. */
+  getOrCreate(subjectId: string): Promise<Buffer>;
+  /** Permanently removes it, and returns the evidence that it happened. */
+  destroy(subjectId: string): Promise<{ destroyedAt: string }>;
+}
+```
+
+- `getOrCreate` is called before every audited call, so it must not memoize past a `destroy`: a subject that calls again after erasure gets a **fresh** key, and the old events stay dead. A rejection fails the audited call rather than letting it run unaudited.
+- `destroy` is **idempotent**. Destroying a subject that holds no key still returns a tombstone, because "this subject holds no key" is the state the caller asked for either way, and a repeated erasure request should produce evidence rather than an error.
+- The key must be **random**, never derived from the signing secret or from the subject id. A recomputable key cannot be destroyed, so destroying it would be theatre.
+
+`createInMemorySubjectKeyStore()` implements this over a `Map` for development and tests.
+It is not durable, and it is not access-controlled; see [Custody is yours](#custody-is-yours).
+
 ### `AuditEvent`
 
 A discriminated union on `sensitivityTier`, sharing one base record.
@@ -312,6 +433,7 @@ interface AuditEventBase {
   delegatedFrom?: Identity[];
   proxy: ProxyIdentity;          // { name, version } of the recording proxy instance
   kind?: 'prompt';               // present only on prompt events; absent means a tool call
+  erasable?: true;               // present only on events recorded in erasable mode
   tool: string;                  // the tool name, or the prompt name when kind is 'prompt'
   duration_ms: number;
   outcome: 'success' | 'rejected' | 'error';
@@ -319,7 +441,7 @@ interface AuditEventBase {
   rejectionReason?: RejectionReason;
   /** Present when outcome is 'error': what the upstream call threw. */
   error?: { name: string; message: string };
-  inputHash: string;             // SHA-256 over a stable serialization
+  inputHash: string;             // SHA-256 over a stable serialization, or a keyed HMAC when erasable
   outputHash: string;
   chainHash: string;             // HMAC over the canonical preimage
   replayManifestPosition: number;

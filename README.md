@@ -108,6 +108,7 @@ Each package publishes independently and carries its own README on npm.
 | [`mcpose`](./packages/core/README.md) | [![npm](https://img.shields.io/npm/v/mcpose)](https://www.npmjs.com/package/mcpose) | Stable | Proxy core: middleware pipeline, stdio and HTTP transports, identity, governance. |
 | [`@mcpose/audit`](./packages/audit/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/audit)](https://www.npmjs.com/package/@mcpose/audit) | Stable | Tamper-evident HMAC audit chain and signed Merkle `ReplayManifest`. |
 | [`@mcpose/policy`](./packages/policy/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/policy)](https://www.npmjs.com/package/@mcpose/policy) | Stable | Deny-by-default RBAC middleware: role rules, sensitivity tiers, per-session call budgets. |
+| [`@mcpose/consent`](./packages/consent/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/consent)](https://www.npmjs.com/package/@mcpose/consent) | Stable | Fail-closed GDPR/CCPA consent gate: host-resolved consent, audited refusals. |
 | [`@mcpose/testing`](./packages/testing/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/testing)](https://www.npmjs.com/package/@mcpose/testing) | Stable | Runner-agnostic compliance assertions over an audit trail. |
 | [`@mcpose/otel`](./packages/otel/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/otel)](https://www.npmjs.com/package/@mcpose/otel) | Preview | OpenTelemetry span adapter for the `onTelemetry` hook. |
 | [`@mcpose/store-redis`](./packages/store-redis/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/store-redis)](https://www.npmjs.com/package/@mcpose/store-redis) | Beta | Redis-backed `EventStore`: durable, uncapped SSE reconnect replay. |
@@ -137,6 +138,12 @@ For deny-by-default authorization, add the policy engine:
 
 ```bash
 npm install @mcpose/policy
+```
+
+For a GDPR/CCPA consent gate in front of your tools, add the consent middleware:
+
+```bash
+npm install @mcpose/consent
 ```
 
 For OpenTelemetry spans from the `onTelemetry` hook, add the span adapter and your own OpenTelemetry SDK:
@@ -418,8 +425,9 @@ Each package's README is the canonical reference for its own exports, and each i
 | Package | Reference covers |
 |---|---|
 | [`mcpose`](./packages/core/README.md#api-surface) | `createBackendClient`, `startProxy`, `startHttpProxy`, `createProxyServer`, `compose`, `markPassThroughObserver`, `rejectionMcpError`, `createProxyContext`, `createInMemoryEventStore`, `hasToolContent`, `mapToolResult`, `dispatcherAwareBlock`, and the `ProxyContext` / `Identity` / `Backends` / `ProxyOptions` / `HttpProxyOptions` / `LocalTool` / `HiddenToolPredicate` / `RejectionReason` types, plus the `ToolMiddleware` / `ResourceMiddleware` / `PromptMiddleware` / `ListToolsMiddleware` middleware types. |
-| [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware` (returning `middleware`, `promptMiddleware`, and `closeSession`), `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` schemas. |
+| [`@mcpose/audit`](./packages/audit/README.md#api-surface) | `createAuditMiddleware` (returning `middleware`, `promptMiddleware`, and `closeSession`), `createSensitivityResolver`, `createDefaultSigningKeyProvider`, `createInMemorySubjectKeyStore`, `verifyAuditChain`, `verifyManifestSignature`, the Merkle helpers, the canonical serializers, and the `AuditEvent` / `ReplayManifest` / `AuditOptions` / `SubjectKeyStore` schemas, plus erasable mode. |
 | [`@mcpose/policy`](./packages/policy/README.md#api-surface) | `createPolicyMiddleware` (returning `middleware`, `promptMiddleware`, and `evictSession`), and the `PolicyOptions` / `PolicyRule` / `SensitivityRule` types, plus the recommended composition order relative to `@mcpose/audit`. |
+| [`@mcpose/consent`](./packages/consent/README.md#api-surface) | `createConsentMiddleware` (returning `middleware` and `promptMiddleware`), the `ConsentOptions` / `ResolveConsentFn` types, every way the gate fails closed, and how it pairs with erasable audit mode. |
 | [`@mcpose/testing`](./packages/testing/README.md#api) | `assertAuditChainIntegrity`, `assertReplayManifestValid`, `assertPiiRedacted`, `assertDelegationHonored`, each with what it does and does not prove. |
 | [`@mcpose/otel`](./packages/otel/README.md#api) | `createOtelTelemetry`, plus the span and attribute mapping for each `TelemetryEvent` variant. |
 
@@ -475,11 +483,11 @@ Shipped:
 - [x] `@mcpose/otel`: OpenTelemetry span adapter for `onTelemetry`
 - [x] Persistent `EventStore` adapters: [`@mcpose/store-redis`](./packages/store-redis/README.md) and [`@mcpose/store-postgres`](./packages/store-postgres/README.md)
 - [x] The delegation chain wire format, so core populates `delegatedFrom` from the request itself
+- [x] `@mcpose/consent` and cryptographic erasure: a fail-closed consent gate, plus an opt-in erasable audit mode whose per-subject keys can be destroyed without touching the chain ([ADR-0018](./docs/adr/0018-cryptographic-erasure-and-the-chain.md))
 
 Planned for v3:
 
 - [ ] A shared session registry, so a resume can survive a restart or reach a different instance (the persistent stores above are the storage half of this)
-- [ ] GDPR/CCPA consent middleware with cryptographic erasure
 
 Session re-execution from a `ReplayManifest` is v4.
 

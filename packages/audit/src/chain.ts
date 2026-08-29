@@ -123,6 +123,12 @@ export function chainPreimageFields(
     // identically, so removing recorded provenance was undetectable.
     proxy: event.proxy,
     ...(event.kind === undefined ? {} : { kind: event.kind }),
+    // Optional, omitted when absent (ADR-0012), so a default-mode event keeps
+    // the preimage it had before erasable mode existed. Covering it is what
+    // stops a stored event being reinterpreted under the other hash scheme:
+    // adding or stripping the marker breaks verification at that index
+    // (ADR-0018).
+    ...(event.erasable === undefined ? {} : { erasable: event.erasable }),
     identity: event.identity,
     tool: event.tool,
     duration_ms: event.duration_ms,

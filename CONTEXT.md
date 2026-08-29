@@ -52,6 +52,8 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Call budget**: A per-session cap on how many calls reach the policy layer, counted in memory on one middleware instance and emitting `BUDGET_EXCEEDED` when exhausted. Counts calls, never money. _Avoid_: "quota", "rate limit", "cost budget"
 
+**Consent gate**: The `@mcpose/consent` middleware, which asks the host's `resolveConsent` whether this caller has consented to this name and refuses with `CONSENT_MISSING` on anything but `true` — including a missing identity and a resolver that throws. Enforcement only: what counts as consent is the host's (ADR-0018). Consent is external state looked up with I/O, which is why it is middleware rather than a policy rule or a `ProxyContext` field. _Avoid_: "consent policy", "consent rule", implying it stores grants
+
 ### Sessions
 
 **Session**: The audit boundary that produces one replay manifest on close. On HTTP, maps 1:1 to the `mcp-session-id` lifetime. On stdio, an audit-only concept — core has no session concept on stdio.
@@ -80,6 +82,12 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Event key**: A per-event AES-256 key protecting a high-tier payload, derived from a private encryption root plus the session id, chain position, and event id — never from any public value. Distinct per event even when a request id is reused.
 
+**Erasable mode**: The audit mode a `SubjectKeyStore` on `AuditOptions` switches on, where per-event keys and payload hashes derive from a destroyable subject key instead of the signing secret, so a subject's payloads can be made permanently unreadable and unconfirmable (ADR-0018). Events record it as `erasable: true`, covered by the chain. Omit the store and nothing changes: default mode is byte-identical to what it always was. _Avoid_: "deletable audit", implying anything in the chain is erased
+
+**Subject key**: The stored, random 256-bit key of one data subject in erasable mode, held by a `SubjectKeyStore` and destroyed by `destroy(sub)`. The erasure unit is the subject — the resolved `identity.sub`, with anonymous events sharing one bucket. Deliberately NOT derived from the signing secret: a recomputable key could not be destroyed. Private key material with the signing secret's handling rules. _Avoid_: "per-user key", "session key", conflating with the **event key** derived from it
+
+**Tombstone**: The `{ destroyedAt }` record a `SubjectKeyStore.destroy` returns as evidence that an erasure happened. It lives outside the chain and the manifest on purpose, because the trail cannot verify facts about key custody (ADR-0018). Returned even for a subject that held no key. _Avoid_: "deletion record" inside the audit trail
+
 **Audit format version**: The `mcpose/v2/...` domain labels versioning the chain preimage, key derivations, Merkle tags, and manifest signature. Changing any of them is a format break and follows the ritual in `.claude/skills/mcpose-audit-invariants` (ADR-0004).
 
 ### Events and replay
@@ -102,6 +110,8 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 - An **audit event**'s **sensitivity tier** determines whether it stores plaintext or encrypted payload
 - A **delegation chain** on `ProxyContext` records which agents delegated to which before reaching mcpose
 - A **policy rule** matches an **identity**'s roles against a tool or prompt name and produces a **policy decision**; composing the policy middleware inside the audit middleware is what puts a denial in the **audit trail**
+- A **consent gate** asks the host about an **identity** and a name and produces a `CONSENT_MISSING` **rejection**; like a **policy rule** it belongs inside the audit middleware, so the refusal reaches the **audit trail**
+- A **subject key** is destroyed to erase one subject's payloads; the **chain** and the **replay manifest** stay valid, because payloads are bound to them only through their hashes
 - **Tamper-evidence** is anchored by the **signed replay manifest** (the signature covers every manifest field, not just the Merkle root); the per-entry HMAC **chain** links events under a private **chain key**, while the **key id** is public and identifies the signer only
 
 ## Example dialogue
