@@ -382,8 +382,14 @@ interface ProxyContext {
   delegatedFrom?: Identity[];
   /** The proxy instance handling this request. Stamped by createProxyServer. */
   proxy?: ProxyIdentity;
-  /** Reserved for the v3 policy engine. */
-  policy?: never;
+  /** The policy decision for this call, stamped by @mcpose/policy. */
+  policy?: PolicyDecision;
+}
+
+interface PolicyDecision {
+  decision: 'allow' | 'deny';
+  ruleId?: string;   // the rule that produced the decision, when one did
+  reason?: string;   // the RejectionReason accompanying a denial
 }
 
 interface ProxyIdentity {
@@ -425,6 +431,10 @@ A delegation header spec is v3 work.
 `proxy` records which proxy instance handled the request, resolved from `ProxyOptions.name` and `version` including their defaults.
 It is provenance, not a principal: it never appears in `delegatedFrom` and takes no part in the caller-attribution model, per [ADR-0012](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0012-proxy-identity-recorded-as-provenance.md).
 
+`policy` holds a decision already made, not a handle to query.
+Core never writes it: [`@mcpose/policy`](https://www.npmjs.com/package/@mcpose/policy) stamps it before calling `next` or throwing, so middleware running inside the policy layer can rely on `decision: 'allow'`, per [ADR-0017](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0017-policy-engine-contract.md).
+It was published as `policy?: never` through v2 and widened to `PolicyDecision` in v3, a breaking change for anyone who narrowed it.
+
 ### Rejection reasons
 
 Every blocked call embeds a `RejectionReason` in the MCP error `data` field.
@@ -439,19 +449,20 @@ Use `rejectionMcpError(reason, code, message)` to reject from your own middlewar
 type RejectionReason =
   | 'TOOL_HIDDEN'           // tool exists but is hidden from this caller
   | 'RESOURCE_HIDDEN'       // resource exists but is hidden from this caller
-  | 'POLICY_DENIED'         // v3: RBAC policy blocked the call
-  | 'IDENTITY_UNRESOLVED'   // v3: identity could not be established
+  | 'POLICY_DENIED'         // @mcpose/policy: a rule denied, or no rule allowed
+  | 'IDENTITY_UNRESOLVED'   // identity could not be established
   | 'CONSENT_MISSING'       // v3: GDPR/CCPA consent gate blocked the call
-  | 'SENSITIVITY_BLOCKED'   // v3: data sensitivity policy blocked the call
+  | 'SENSITIVITY_BLOCKED'   // @mcpose/policy: a sensitivity-tier rule blocked the call
   | 'DELEGATION_INVALID'    // v3: agent delegation chain is invalid or expired
-  | 'BUDGET_EXCEEDED'       // v3: cost budget for this session/user exceeded
+  | 'BUDGET_EXCEEDED'       // @mcpose/policy: the per-session call budget is exhausted
   | 'SESSION_LIMIT'         // max concurrent sessions reached (HTTP 503)
   | 'BODY_LIMIT';           // request body exceeded maxBodyBytes (HTTP 413)
 ```
 
 </details>
 
-The values marked v3 are reserved: the union is declared now so that `error.data` consumers written today keep compiling when the policy engine lands.
+`POLICY_DENIED`, `SENSITIVITY_BLOCKED`, and `BUDGET_EXCEEDED` are emitted by [`@mcpose/policy`](https://www.npmjs.com/package/@mcpose/policy), which is also the first emitter of `IDENTITY_UNRESOLVED` without owning it ([ADR-0017](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0017-policy-engine-contract.md)).
+The values still marked v3 are reserved: the union is declared ahead of the middleware that will emit them so that `error.data` consumers written today keep compiling.
 
 ### Test helpers: `mcpose/testing`
 

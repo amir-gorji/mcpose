@@ -14,12 +14,12 @@ export type RejectionReason =
   | 'TOOL_HIDDEN' // tool exists but is hidden from this caller
   | 'RESOURCE_HIDDEN' // resource exists but is hidden from this caller
   | 'BACKEND_UNROUTABLE' // mesh mode: name carries no `<backendKey>__` prefix naming a configured backend
-  | 'POLICY_DENIED' // v3: RBAC policy blocked the call
-  | 'IDENTITY_UNRESOLVED' // v3: identity could not be established
+  | 'POLICY_DENIED' // @mcpose/policy: a rule denied, or no rule allowed (ADR-0017)
+  | 'IDENTITY_UNRESOLVED' // identity could not be established; @mcpose/policy is its first emitter (ADR-0017)
   | 'CONSENT_MISSING' // v3: GDPR/CCPA consent gate blocked the call
-  | 'SENSITIVITY_BLOCKED' // v3: data sensitivity policy blocked the call
+  | 'SENSITIVITY_BLOCKED' // @mcpose/policy: a sensitivity-tier rule blocked the call (ADR-0017)
   | 'DELEGATION_INVALID' // v3: agent delegation chain is invalid or expired
-  | 'BUDGET_EXCEEDED' // v3: cost budget for this session/user exceeded
+  | 'BUDGET_EXCEEDED' // @mcpose/policy: the per-session call budget is exhausted (ADR-0017)
   | 'SESSION_LIMIT' // max concurrent sessions reached (HTTP 503)
   | 'BODY_LIMIT'; // request body exceeded maxBodyBytes (HTTP 413)
 

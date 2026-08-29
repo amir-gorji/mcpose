@@ -13,6 +13,10 @@
       "entry": ["src/index.ts"],
       "project": ["src/**/*.ts"]
     },
+    "packages/policy": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
     "packages/testing": {
       "entry": ["src/index.ts"],
       "project": ["src/**/*.ts"]

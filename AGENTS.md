@@ -4,7 +4,7 @@ Canonical rules for any agent or human working in this repository.
 
 ## Orientation
 
-mcpose is a pnpm 11 + Turborepo monorepo publishing six ESM-only packages: `packages/core` (`mcpose`, the proxy pipeline), `packages/audit` (`@mcpose/audit`, the tamper-evident audit chain), `packages/testing` (`@mcpose/testing`, compliance assertions), `packages/otel` (`@mcpose/otel`, the OpenTelemetry span adapter for `onTelemetry`), and `packages/store-redis` plus `packages/store-postgres` (`@mcpose/store-redis` and `@mcpose/store-postgres`, persistent `EventStore` adapters for SSE reconnect replay).
+mcpose is a pnpm 11 + Turborepo monorepo publishing seven ESM-only packages: `packages/core` (`mcpose`, the proxy pipeline), `packages/audit` (`@mcpose/audit`, the tamper-evident audit chain), `packages/policy` (`@mcpose/policy`, the deny-by-default RBAC engine), `packages/testing` (`@mcpose/testing`, compliance assertions), `packages/otel` (`@mcpose/otel`, the OpenTelemetry span adapter for `onTelemetry`), and `packages/store-redis` plus `packages/store-postgres` (`@mcpose/store-redis` and `@mcpose/store-postgres`, persistent `EventStore` adapters for SSE reconnect replay).
 `examples/` is a private workspace that is type-checked but never published.
 Read [`CONTEXT.md`](./CONTEXT.md) for the domain vocabulary before naming anything, [`README.md`](./README.md) for what the product does, and [`docs/adr/`](./docs/adr) for the decisions that must not drift silently.
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) covers documentation style and PR expectations.

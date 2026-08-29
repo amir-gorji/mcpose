@@ -20,7 +20,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **mcpose**: The core proxy library — pipeline, transport adapters, ProxyContext. Published as `mcpose` on npm (`packages/core`). _Avoid_: using to mean the full ecosystem
 
-**mcpose ecosystem**: The full suite — `mcpose` core plus `@mcpose/audit`, `@mcpose/testing`, `@mcpose/otel`, and future packages (`@mcpose/policy` is planned for v3; it does not exist yet).
+**mcpose ecosystem**: The full suite — `mcpose` core plus `@mcpose/audit`, `@mcpose/policy`, `@mcpose/testing`, and `@mcpose/otel`.
 
 ### Middleware
 
@@ -39,6 +39,14 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 **Delegation chain**: The full sequence of agents that handed off the request before reaching mcpose. `delegatedFrom?: Identity[]` on `ProxyContext`. Core does not populate it yet (no delegation header spec until v3); it is stamped on audit events only when the host places it on the context. _Avoid_: "agent chain", "call chain"
 
 **Proxy identity**: Which proxy instance handled a request — `proxy?: ProxyIdentity` (`{ name, version }`) on `ProxyContext`, stamped by `createProxyServer` from `ProxyOptions` with defaults applied. Provenance, not a principal: never an entry in `delegatedFrom`, and no part of the caller-attribution model (ADR-0012). _Avoid_: "server identity", "instance id"
+
+### Policy
+
+**Policy rule**: One entry in the `@mcpose/policy` rule set, pairing an effect (`allow` | `deny`) with the roles and names it matches. An explicit deny beats every allow, and a call no rule allows is denied (ADR-0017). _Avoid_: "permission", "grant", "ACL entry"
+
+**Policy decision**: The frozen `{ decision, ruleId?, reason? }` record the policy middleware stamps on `ctx.policy` before it calls `next` or throws. A record of a decision already made, never a handle to query. _Avoid_: "policy result", "verdict"
+
+**Call budget**: A per-session cap on how many calls reach the policy layer, counted in memory on one middleware instance and emitting `BUDGET_EXCEEDED` when exhausted. Counts calls, never money. _Avoid_: "quota", "rate limit", "cost budget"
 
 ### Sessions
 
@@ -89,6 +97,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 - A **session** groups **audit events** and closes with a **replay manifest**
 - An **audit event**'s **sensitivity tier** determines whether it stores plaintext or encrypted payload
 - A **delegation chain** on `ProxyContext` records which agents delegated to which before reaching mcpose
+- A **policy rule** matches an **identity**'s roles against a tool or prompt name and produces a **policy decision**; composing the policy middleware inside the audit middleware is what puts a denial in the **audit trail**
 - **Tamper-evidence** is anchored by the **signed replay manifest** (the signature covers every manifest field, not just the Merkle root); the per-entry HMAC **chain** links events under a private **chain key**, while the **key id** is public and identifies the signer only
 
 ## Example dialogue
