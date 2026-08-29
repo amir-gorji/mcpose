@@ -12,6 +12,20 @@ export interface ProxyIdentity {
   readonly version: string;
 }
 
+/**
+ * A policy decision already made, stamped on the context by the policy
+ * middleware (ADR-0017). It is a record, not a handle to query: core never
+ * evaluates policy itself, and a second evaluation path would let inner
+ * middleware ask a different question than the gate answered.
+ *
+ * `reason` carries the `RejectionReason` that accompanied a denial.
+ */
+export interface PolicyDecision {
+  readonly decision: 'allow' | 'deny';
+  readonly ruleId?: string;
+  readonly reason?: string;
+}
+
 /** Normalized request metadata that mcpose passes through middleware layers. */
 export interface ProxyContext {
   requestId: string;
@@ -25,8 +39,13 @@ export interface ProxyContext {
   delegatedFrom?: Identity[];
   /** The proxy instance handling this request. Stamped by {@link createProxyServer}. */
   proxy?: ProxyIdentity;
-  /** @experimental Reserved for the v3 policy engine — do not depend on it. */
-  policy?: never;
+  /**
+   * The policy decision for this call. Stamped by the `@mcpose/policy`
+   * middleware before it calls `next` (allow) or throws (deny), so
+   * middleware running inside the policy layer can rely on
+   * `decision: 'allow'` (ADR-0017). Core never writes it.
+   */
+  policy?: PolicyDecision;
 }
 
 /**
@@ -70,5 +89,6 @@ export function createProxyContext(
       ? {}
       : { delegatedFrom: overrides.delegatedFrom }),
     ...(overrides.proxy === undefined ? {} : { proxy: overrides.proxy }),
+    ...(overrides.policy === undefined ? {} : { policy: overrides.policy }),
   };
 }

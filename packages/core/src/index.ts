@@ -6,7 +6,11 @@ export { createBackendClient } from './backendClient.js';
 
 export type { Identity } from './identity.js';
 
-export type { ProxyContext, ProxyIdentity } from './proxyContext.js';
+export type {
+  ProxyContext,
+  ProxyIdentity,
+  PolicyDecision,
+} from './proxyContext.js';
 export { createProxyContext, outboundDelegationChain } from './proxyContext.js';
 
 export type {
