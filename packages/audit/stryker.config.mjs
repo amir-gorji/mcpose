@@ -20,5 +20,9 @@ export default {
   // Re-measured on 2026-08-29 at 83.82 (390 killed, 9 timeout, 61 survived,
   // 16 no cov) after #110 removed signingKey.ts's four equivalent mutants.
   // floor(83.82) - 2 is 81, so the threshold is unchanged rather than raised.
-  thresholds: { high: 90, low: 84, break: 81 },
+  // Re-measured on 2026-08-29 at 84.04 (370 killed, 9 timeout, 56 survived,
+  // 16 no cov) after #123 made the proxy identity a required covered field,
+  // which removed the omission branches around it. floor(84.04) - 2 is 82,
+  // so the raise-only ratchet moves the threshold up from 81.
+  thresholds: { high: 90, low: 84, break: 82 },
 };

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import fc from 'fast-check';
 import { createProxyContext } from 'mcpose';
-import type { Identity, RejectionReason } from 'mcpose';
+import type { Identity, ProxyIdentity, RejectionReason } from 'mcpose';
 import {
   canonicalJson,
   chainPreimageFields,
@@ -78,10 +78,17 @@ const identityArb: fc.Arbitrary<Identity> = fc.record(
   },
 );
 
+const proxyArb: fc.Arbitrary<ProxyIdentity> = fc.record({
+  name: fc.string({ minLength: 1, maxLength: 10 }),
+  version: fc.string({ minLength: 1, maxLength: 8 }),
+});
+
 /**
  * Every field the chain preimage covers (ADR-0004), minus
  * `replayManifestPosition`, which the verifier checks separately, and the
- * optional `proxy` / `kind`, covered by the middleware tests.
+ * optional `kind`, covered by the middleware tests. `proxy` is required and
+ * always covered (ADR-0019), so it is generated and tampered like any other
+ * always-present field.
  */
 interface PreimageFields {
   id: string;
@@ -89,6 +96,7 @@ interface PreimageFields {
   endedAt: string;
   sessionId?: string | undefined;
   delegatedFrom?: Identity[] | undefined;
+  proxy: ProxyIdentity;
   identity: Identity;
   tool: string;
   duration_ms: number;
@@ -106,6 +114,7 @@ const PREIMAGE_FIELDS = [
   'endedAt',
   'sessionId',
   'delegatedFrom',
+  'proxy',
   'identity',
   'tool',
   'duration_ms',
@@ -124,6 +133,7 @@ const eventFieldsArb: fc.Arbitrary<PreimageFields> = fc.record(
     endedAt: isoArb,
     sessionId: fc.string({ minLength: 1, maxLength: 8 }),
     delegatedFrom: fc.array(identityArb, { minLength: 1, maxLength: 2 }),
+    proxy: proxyArb,
     identity: identityArb,
     tool: fc.string({ minLength: 1, maxLength: 10 }),
     duration_ms: fc.nat({ max: 100_000 }),
@@ -146,6 +156,7 @@ const eventFieldsArb: fc.Arbitrary<PreimageFields> = fc.record(
       'id',
       'startedAt',
       'endedAt',
+      'proxy',
       'identity',
       'tool',
       'duration_ms',
@@ -263,6 +274,7 @@ async function runSession(opts: {
         identity: baseIdentity,
         sessionId: opts.sessionId,
         delegatedFrom: opts.delegatedFrom,
+        proxy: { name: 'test-proxy', version: '0.0.0' },
       }),
     );
   }

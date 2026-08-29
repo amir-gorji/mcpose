@@ -134,8 +134,15 @@ async function produceSession(sessionId: string, count: number) {
       events.push(e);
     },
   });
+  // `proxy` is a required covered field, and the middleware rejects a context
+  // without one before the call runs (ADR-0019).
   const ctx = () =>
-    createProxyContext({ transport: 'http', identity, sessionId });
+    createProxyContext({
+      transport: 'http',
+      identity,
+      sessionId,
+      proxy: { name: 'test-proxy', version: '0.0.0' },
+    });
   for (let i = 0; i < count; i++) {
     await middleware(
       {
@@ -211,7 +218,12 @@ describe('sensitivityTier is covered by the chain (ADR-0015)', () => {
       await middleware(
         { method: 'tools/call' as const, params: { name, arguments: {} } },
         async () => ({ content: [] }),
-        createProxyContext({ transport: 'http', identity, sessionId }),
+        createProxyContext({
+          transport: 'http',
+          identity,
+          sessionId,
+          proxy: { name: 'test-proxy', version: '0.0.0' },
+        }),
       );
     }
     return { events, signingKey };
@@ -296,7 +308,11 @@ describe('domain label pinning', () => {
     await middleware(
       { method: 'tools/call' as const, params: { name: 't', arguments: {} } },
       async () => ({ content: [] }),
-      createProxyContext({ transport: 'http', identity }),
+      createProxyContext({
+        transport: 'http',
+        identity,
+        proxy: { name: 'test-proxy', version: '0.0.0' },
+      }),
     );
     expect(seen).toContain('mcpose/v2/chain');
     expect(seen).toContain('mcpose/v2/enc');

@@ -117,9 +117,11 @@ export function chainPreimageFields(
     ...(event.delegatedFrom === undefined
       ? {}
       : { delegatedFrom: event.delegatedFrom }),
-    // Optional covered field: omitted when absent, so events recorded
-    // before it existed keep their original preimage (ADR-0012).
-    ...(event.proxy === undefined ? {} : { proxy: event.proxy }),
+    // Required on every event, so it is a plain always-present field rather
+    // than an omission-guarded optional one (ADR-0019). Under the omission
+    // pattern an event with no proxy and one whose proxy was stripped hashed
+    // identically, so removing recorded provenance was undetectable.
+    proxy: event.proxy,
     ...(event.kind === undefined ? {} : { kind: event.kind }),
     identity: event.identity,
     tool: event.tool,

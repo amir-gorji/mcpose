@@ -42,7 +42,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Delegation loop**: A presented chain the resolved caller is already a link in, so the call has cycled back through this proxy. Rejected with `DELEGATION_INVALID` after identity resolution and inside the pipeline; unresolvable on stdio, where there is no identity to look for (ADR-0016). _Avoid_: "cycle detection", "hop limit"
 
-**Proxy identity**: Which proxy instance handled a request — `proxy?: ProxyIdentity` (`{ name, version }`) on `ProxyContext`, stamped by `createProxyServer` from `ProxyOptions`. `name` is required and must be non-blank (#122), because a defaulted one records a whole fleet under one name; `version` still defaults to the mcpose library version. Provenance, not a principal: never an entry in `delegatedFrom`, and no part of the caller-attribution model (ADR-0012). _Avoid_: "server identity", "instance id"
+**Proxy identity**: Which proxy instance handled a request — `proxy?: ProxyIdentity` (`{ name, version }`) on `ProxyContext`, stamped by `createProxyServer` from `ProxyOptions`. `name` is required and must be non-blank (#122), because a defaulted one records a whole fleet under one name; `version` still defaults to the mcpose library version. Provenance, not a principal: never an entry in `delegatedFrom`, and no part of the caller-attribution model (ADR-0012). It stays optional on `ProxyContext`, which a host can build by hand, but is **required** on every `AuditEvent` and `ReplayManifest` and covered by the chain unconditionally (ADR-0019), so the audit middleware rejects a context without one before the call runs. _Avoid_: "server identity", "instance id"
 
 ### Policy
 

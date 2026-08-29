@@ -48,6 +48,9 @@ This package exists for the harder problem: a record that stays credible when so
 - **Sensitivity-tiered storage.** Classify tools as low, medium, or high; high-tier payloads are AES-256-GCM encrypted at rest with per-event keys. Unknown or invalid tiers fail closed to `high`.
 - **Subkeys derived through the signing oracle.** Chain and encryption keys derive from the signing secret with domain separation, never from the public key id ([ADR-0003](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0003-audit-subkeys-derived-from-signing-oracle.md)).
 - **Never blocks the call path.** Audit failures (a throwing sink, unserializable payloads) are routed to `onAuditError`; the tool call always completes with its real result or error.
+  Two configuration errors are the deliberate exception, and both fail before the upstream is reached rather than after: an unavailable signing provider, and a `ProxyContext` with no `proxy` identity.
+  Each would otherwise produce a record that cannot be verified or cannot be attributed, so the call fails instead of running unaudited.
+  A proxy built by `createProxyServer` always stamps `ctx.proxy`, so only a host that invokes the middleware with its own hand-built context needs to supply it.
 - **No storage lock-in.** Events and manifests are pushed to your own sinks through `onEvent` and `onManifest`.
 
 ## Install
@@ -146,10 +149,12 @@ The signed manifest anchors the whole session, and high-tier payloads are encryp
 
 Each link is `HMAC(chainKey, canonicalJson({ domain, prevChainHash, event }))` over this field set:
 
-`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `proxy?`, `kind?`, `identity`, `tool`, `duration_ms`, `outcome`, `sensitivityTier`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
+`id`, `startedAt`, `endedAt`, `sessionId?`, `delegatedFrom?`, `proxy`, `kind?`, `identity`, `tool`, `duration_ms`, `outcome`, `sensitivityTier`, `rejectionReason?`, `error?`, `inputHash`, `outputHash`, `replayManifestPosition`.
 
 Optional fields are omitted from the preimage when absent, so events recorded before an optional field existed keep verifying unchanged (ADR-0012).
-`sensitivityTier` is required on every event and is therefore always present, which is why covering it amended format v2 in place rather than extending it (ADR-0015).
+`sensitivityTier` and `proxy` are required on every event and are therefore always present, which is why covering each of them amended format v2 in place rather than extending it (ADR-0015 and ADR-0019).
+`proxy` was optional at first, and that made removing recorded provenance undetectable: an event that never carried one and an event whose one was stripped produced the same preimage.
+Covering it unconditionally closes that gap, at the cost of requiring `ctx.proxy` on every audited request.
 
 Serialization is canonical (keys sorted at every depth), so key insertion order is not load-bearing and an independently written verifier reproduces the same hash.
 The **field set** is what matters, and it is defined once in the source and shared by producer and verifier.
@@ -305,7 +310,7 @@ interface AuditEventBase {
   sessionId?: string;
   identity: Identity;
   delegatedFrom?: Identity[];
-  proxy?: ProxyIdentity;         // { name, version } of the recording proxy instance
+  proxy: ProxyIdentity;          // { name, version } of the recording proxy instance
   kind?: 'prompt';               // present only on prompt events; absent means a tool call
   tool: string;                  // the tool name, or the prompt name when kind is 'prompt'
   duration_ms: number;
@@ -337,7 +342,7 @@ Any third party can verify a single event without access to the full log.
 interface ReplayManifest {
   sessionId: string;
   identity: Identity;
-  proxy?: ProxyIdentity;  // { name, version } of the producing proxy instance
+  proxy: ProxyIdentity;   // { name, version } of the producing proxy instance
   startedAt: string;
   closedAt: string;
   eventCount: number;
