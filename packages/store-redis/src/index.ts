@@ -63,17 +63,24 @@ const DEFAULT_TTL_MS = 30 * 60 * 1000;
  *
  * `encodeURIComponent` escapes `:`, so the last `:` is always the separator
  * (a Redis stream id is `<ms>-<seq>` and never contains one).
+ *
+ * `Last-Event-ID` is client-controlled, so the entry id is validated rather
+ * than passed through: `XRANGE` raises on anything that is not a stream id,
+ * and the transport reports that as a 500 instead of the 400 an unknown
+ * cursor deserves. An unparseable cursor is reported as unknown, exactly as
+ * the in-memory store's failed Map lookup is.
  */
+const ENTRY_ID = /^\d{1,20}-\d{1,20}$/;
+
 function parseEventId(
   eventId: EventId,
 ): { streamId: StreamId; entryId: string } | undefined {
   const sep = eventId.lastIndexOf(':');
-  if (sep <= 0 || sep === eventId.length - 1) return undefined;
+  if (sep <= 0) return undefined;
+  const entryId = eventId.slice(sep + 1);
+  if (!ENTRY_ID.test(entryId)) return undefined;
   try {
-    return {
-      streamId: decodeURIComponent(eventId.slice(0, sep)),
-      entryId: eventId.slice(sep + 1),
-    };
+    return { streamId: decodeURIComponent(eventId.slice(0, sep)), entryId };
   } catch {
     // Malformed percent-escape: treat as an unknown cursor.
     return undefined;

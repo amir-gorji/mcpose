@@ -80,6 +80,9 @@ const DEFAULT_TTL_MS = 30 * 60 * 1000;
 /** Bare or schema-qualified identifier, unquoted, no funny business. */
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
 
+/** Largest value `bigserial` can hold; anything above it fails the cast. */
+const MAX_BIGINT = 9223372036854775807n;
+
 /**
  * Builds an {@link EventStore} backed by a single Postgres table, giving SSE
  * reconnect replay durable, uncapped, per-stream history instead of the
@@ -146,9 +149,15 @@ export function createPostgresEventStore(
   const streamIdFor = async (
     eventId: EventId,
   ): Promise<StreamId | undefined> => {
-    // A non-numeric cursor would make Postgres raise on the bigint cast, so
-    // reject it here and report it as unknown, like the in-memory store does.
-    if (!/^\d+$/.test(eventId)) return undefined;
+    // `Last-Event-ID` is client-controlled. A cursor Postgres cannot cast to
+    // bigint (non-numeric, or numeric but out of range) makes the query raise,
+    // which the transport reports as a 500 instead of the 400 an unknown
+    // cursor deserves. Reject it here and call it unknown, exactly as the
+    // in-memory store's failed Map lookup does. The length bound also keeps a
+    // megabyte of digits out of `BigInt`.
+    if (!/^\d{1,19}$/.test(eventId) || BigInt(eventId) > MAX_BIGINT) {
+      return undefined;
+    }
     const { rows } = await client.query(
       `SELECT stream_id FROM ${table} WHERE event_id = $1 AND created_at > $2`,
       [eventId, cutoff()],

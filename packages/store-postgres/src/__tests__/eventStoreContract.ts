@@ -14,6 +14,33 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
 const GET_STREAM = '_GET_stream';
 
+/**
+ * `Last-Event-ID` is set by the client, so a store must treat every one of
+ * these as simply unknown. The in-memory reference store does that for free:
+ * a failed `Map` lookup cannot throw. A store that hands a cursor to a backend
+ * unvalidated can, and the transport turns the rejection into a 500 rather
+ * than the 400 an unknown cursor deserves.
+ *
+ * Shapes here span both backends on purpose: each adapter must reject the
+ * other's plausible-looking ids too.
+ */
+const HOSTILE_CURSORS = [
+  '',
+  'nope',
+  '../etc/passwd',
+  '999999999999999',
+  '99999999999999999999', // overflows a Postgres bigserial
+  '0',
+  '-1',
+  '1e3',
+  `${GET_STREAM}:notanid`, // Redis-shaped, not a stream id
+  `${GET_STREAM}:99-abc`,
+  `${GET_STREAM}:-`,
+  `${GET_STREAM}:`,
+  ':',
+  ':1-1',
+];
+
 const notification = (n: number): JSONRPCMessage => ({
   jsonrpc: '2.0',
   method: 'notifications/message',
@@ -65,7 +92,7 @@ export function describeEventStoreContract(
     it('reports an unknown or malformed event id as unknown', async () => {
       const store = await makeStore();
       await store.storeEvent(GET_STREAM, notification(1));
-      for (const bogus of ['', 'nope', '../etc/passwd', '999999999999999']) {
+      for (const bogus of HOSTILE_CURSORS) {
         expect(await store.getStreamIdForEventId?.(bogus)).toBeUndefined();
       }
     });
@@ -110,7 +137,7 @@ export function describeEventStoreContract(
       const store = await makeStore();
       await store.storeEvent(GET_STREAM, notification(1));
       await store.storeEvent(GET_STREAM, notification(2));
-      for (const bogus of ['', 'nope', '999999999999999']) {
+      for (const bogus of HOSTILE_CURSORS) {
         const { streamId, sent } = await replay(store, bogus);
         expect(streamId).toBe('');
         expect(sent).toEqual([]);
