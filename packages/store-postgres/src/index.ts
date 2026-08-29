@@ -19,7 +19,7 @@ export interface PostgresEventStoreClient {
   query(
     text: string,
     values?: unknown[],
-  ): Promise<{ rows: Record<string, unknown>[] }>;
+  ): Promise<{ rows: Record<string, unknown>[]; rowCount?: number | null }>;
 }
 
 export interface PostgresEventStoreOptions {
@@ -133,11 +133,13 @@ export function createPostgresEventStore(
   let writes = 0;
 
   const pruneExpired = async (): Promise<number> => {
-    const { rows } = await client.query(
-      `DELETE FROM ${table} WHERE created_at <= $1 RETURNING event_id`,
+    // No RETURNING: a first prune over a neglected table would otherwise ship
+    // every deleted id back over the wire just to be counted.
+    const result = await client.query(
+      `DELETE FROM ${table} WHERE created_at <= $1`,
       [cutoff()],
     );
-    return rows.length;
+    return result.rowCount ?? result.rows.length;
   };
 
   /** Returns the stream id only if the row exists and has not expired. */

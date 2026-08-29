@@ -136,6 +136,12 @@ describe('createPostgresEventStore()', () => {
     }
   });
 
+  it('counts a prune from rows when the driver reports no rowCount', async () => {
+    const query = vi.fn(async () => ({ rows: [{ event_id: 1 }] }));
+    const store = createPostgresEventStore({ query });
+    expect(await store.pruneExpired()).toBe(1);
+  });
+
   it('reports a failed background prune instead of rejecting the write', async () => {
     const onError = vi.fn();
     const query = vi.fn(async (text: string) => {
