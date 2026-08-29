@@ -93,12 +93,16 @@ If a manifest is expected, assert that it exists rather than asserting through i
 | `assertAuditChainIntegrity(events)` | The log is non-empty; positions are sequential; `chainHash`es are distinct and non-empty. | Authenticity. No HMAC is recomputed, so any self-consistent rewrite passes, and it need not be key-consistent because the forger supplies the hashes. Tail truncation also passes; the manifest's `eventCount` is what catches it. |
 | `assertReplayManifestValid(events, manifest)` | `eventCount` matches; the root recomputes from the events under test; one proof per event; every proof verifies at its own index. | The manifest **signature**. Use `verifyManifestSignature`. |
 | `assertPiiRedacted(event, patterns)` | low/medium: no pattern matches the plaintext fields. high: no plaintext fields present, and encrypted payloads are. | Anything about the content of high-tier ciphertext, which is never pattern-scanned. |
-| `assertDelegationHonored(event)` | `delegatedFrom` is present and non-empty, and every entry has a `sub`. | Delegation signatures or chain continuity, which are v3. |
+| `assertDelegationHonored(event)` | `delegatedFrom` is present and non-empty; every entry has a non-empty `sub`; entry subs are pairwise distinct; the event's own `identity.sub` is absent from the chain. That is structural continuity as [ADR-0016](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0016-delegation-chain-wire-format.md) defines it. | Authenticity, and ORDER. Entries are not signed, so the hop that wrote the chain could have invented it, and nothing here can tell a reordered chain from the real one. |
 
 Two notes that trip people up:
 
 - `assertAuditChainIntegrity` **throws on an empty chain**, deliberately: a log truncated to zero events must not pass a compliance assertion. If an empty session is the expected outcome, assert that explicitly instead.
-- `assertDelegationHonored` only passes when your host application stamps `delegatedFrom` onto the `ProxyContext`. mcpose core does not populate it yet; a delegation header spec is v3 work.
+- `assertDelegationHonored` checks structure, never signatures, and that is a decision rather than a gap.
+  [ADR-0016](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0016-delegation-chain-wire-format.md) resolved delegation as unsigned attribution: per-hop signatures need key distribution between proxies that do not share an operator, and an unverifiable signature field is worse than an honest trust statement.
+  So a chain is trusted exactly as far as the immediate caller that presented it, and this assertion proves only that what was recorded is internally coherent.
+  Once recorded it is tamper-evident, because `delegatedFrom` is a covered field in the chain preimage: `assertAuditChainIntegrity` and a keyed `verifyAuditChain` cover it from there.
+- `delegatedFrom` is populated by mcpose core from the caller's presented chain, and by your host application when it stamps its own onto the `ProxyContext`, which takes precedence.
 
 The package also re-exports the `AuditEvent` and `ReplayManifest` types from `@mcpose/audit` for convenience.
 
