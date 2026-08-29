@@ -53,11 +53,14 @@ async function collectEvents(
         params: { name: 'search', arguments: args },
       },
       async () => ({ content: [] }),
+      // `proxy` is a required covered field, and the audit middleware rejects
+      // a context without one before the call runs (ADR-0019).
       createProxyContext({
         transport: 'http',
         identity,
         sessionId,
         delegatedFrom,
+        proxy: { name: 'test-proxy', version: '0.0.0' },
       }),
     );
   }

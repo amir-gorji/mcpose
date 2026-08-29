@@ -51,8 +51,13 @@ export interface AuditEventBase {
   /**
    * The proxy instance that recorded this event, from `ProxyContext.proxy`.
    * Provenance, not a principal — never part of `delegatedFrom` (ADR-0012).
+   *
+   * Required, and covered by the chain unconditionally (ADR-0019). While it
+   * was omitted when absent, an event with no `proxy` and an event whose
+   * `proxy` was stripped produced the same preimage, so deleting recorded
+   * provenance was not chain-detectable.
    */
-  proxy?: ProxyIdentity;
+  proxy: ProxyIdentity;
   /**
    * Present ONLY on events recorded for a prompt call (`prompts/get`), where
    * `tool` holds the prompt name. An absent `kind` means a tool call, so
@@ -108,8 +113,12 @@ export interface ReplayManifest {
    * The proxy instance that produced this session's trail, captured when
    * the session was first seen. Covered by the signature like every other
    * field (ADR-0004, ADR-0012).
+   *
+   * Required, and included in the signing payload unconditionally
+   * (ADR-0019), so stripping it from a stored manifest fails the signature
+   * rather than rebuilding a payload that verifies.
    */
-  proxy?: ProxyIdentity;
+  proxy: ProxyIdentity;
   startedAt: string;
   closedAt: string;
   eventCount: number;

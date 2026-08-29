@@ -38,8 +38,17 @@ function makeOptions(overrides: Partial<AuditOptions> = {}): AuditOptions {
   };
 }
 
+// Every context carries a proxy identity: it is a required covered field, and
+// the middleware rejects a context without one at the pre-call stage (ADR-0019).
+const defaultProxy = { name: 'test-proxy', version: '0.0.0' };
+
 function makeCtx(sessionId?: string) {
-  return createProxyContext({ transport: 'http', identity, sessionId });
+  return createProxyContext({
+    transport: 'http',
+    identity,
+    sessionId,
+    proxy: defaultProxy,
+  });
 }
 
 function makeReq(tool: string, args: Record<string, unknown> = {}) {

@@ -3,7 +3,7 @@ import { createHash, createHmac, createDecipheriv } from 'node:crypto';
 import { createAuditMiddleware } from '../middleware.js';
 import { createDefaultSigningKeyProvider } from '../signingKey.js';
 import { createSensitivityResolver } from '../sensitivity.js';
-import type { AuditEvent, AuditOptions } from '../types.js';
+import type { AuditEvent, AuditOptions, ReplayManifest } from '../types.js';
 import type { Identity } from 'mcpose';
 import { createProxyContext } from 'mcpose';
 
@@ -28,8 +28,17 @@ function makeOptions(overrides: Partial<AuditOptions> = {}): AuditOptions {
   };
 }
 
+// Every context carries a proxy identity: it is a required covered field, and
+// the middleware rejects a context without one at the pre-call stage (ADR-0019).
+const defaultProxy = { name: 'test-proxy', version: '0.0.0' };
+
 function makeCtx(sessionId?: string) {
-  return createProxyContext({ transport: 'http', identity, sessionId });
+  return createProxyContext({
+    transport: 'http',
+    identity,
+    sessionId,
+    proxy: defaultProxy,
+  });
 }
 
 function makeReq(tool: string, args: Record<string, unknown> = {}) {
@@ -299,33 +308,6 @@ describe('createAuditMiddleware — proxy identity (ADR-0012)', () => {
     expect(manifest!.proxy).toEqual(proxy);
   });
 
-  it('backfills the manifest proxy when the first request predates stamping', async () => {
-    const events: AuditEvent[] = [];
-    const { middleware, closeSession } = createAuditMiddleware(
-      makeOptions({
-        onEvent: (e) => {
-          events.push(e);
-        },
-      }),
-    );
-    await middleware(
-      makeReq('search'),
-      async () => ({ content: [] }),
-      makeCtx('sess-backfill'),
-    );
-    await middleware(
-      makeReq('search'),
-      async () => ({ content: [] }),
-      makeProxyCtx('sess-backfill'),
-    );
-
-    const manifest = await closeSession('sess-backfill');
-
-    expect('proxy' in events[0]!).toBe(false);
-    expect(events[1]!.proxy).toEqual(proxy);
-    expect(manifest!.proxy).toEqual(proxy);
-  });
-
   it('keeps the first proxy identity seen when later contexts differ', async () => {
     const { middleware, closeSession } = createAuditMiddleware(makeOptions());
     const other = { name: 'other-proxy', version: '0.0.1' };
@@ -350,25 +332,43 @@ describe('createAuditMiddleware — proxy identity (ADR-0012)', () => {
     expect(manifest!.proxy).toEqual(proxy);
   });
 
-  it('omits the proxy key entirely when the context has none', async () => {
-    const events: AuditEvent[] = [];
+  it('fails the call at the pre-call stage when ctx.proxy is missing', async () => {
+    // A missing proxy identity is a configuration error, not a runtime
+    // condition: it is handled beside subkey derivation, the one pre-call
+    // failure allowed to fail the call. Degrading to a sentinel would write a
+    // silently unattributable trail, and throwing post-call would mask the
+    // tool result (ADR-0019).
+    const onEvent = vi.fn<AuditOptions['onEvent']>();
+    const next = vi.fn(async () => ({ content: [] }));
     const { middleware, closeSession } = createAuditMiddleware(
-      makeOptions({
-        onEvent: (e) => {
-          events.push(e);
-        },
-      }),
+      makeOptions({ onEvent }),
     );
-    await middleware(
-      makeReq('search'),
-      async () => ({ content: [] }),
-      makeCtx('sess-no-proxy'),
-    );
+    const ctxWithoutProxy = createProxyContext({
+      transport: 'http',
+      identity,
+      sessionId: 'sess-no-proxy',
+    });
 
-    const manifest = await closeSession('sess-no-proxy');
+    await expect(
+      middleware(makeReq('search'), next, ctxWithoutProxy),
+    ).rejects.toThrow(/ctx\.proxy is required/);
 
-    expect('proxy' in events[0]!).toBe(false);
-    expect('proxy' in manifest!).toBe(false);
+    // Pre-call means exactly that: the upstream was never reached, no event
+    // was recorded, and no session was opened.
+    expect(next).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalled();
+    await expect(closeSession('sess-no-proxy')).resolves.toBeUndefined();
+  });
+
+  it('fails a prompt call the same way when ctx.proxy is missing', async () => {
+    const { promptMiddleware } = createAuditMiddleware(makeOptions());
+    await expect(
+      promptMiddleware(
+        { method: 'prompts/get' as const, params: { name: 'greet' } },
+        async () => ({ messages: [] }),
+        createProxyContext({ transport: 'http', identity }),
+      ),
+    ).rejects.toThrow(/ctx\.proxy is required/);
   });
 
   it('a tampered proxy field breaks keyed chain verification', async () => {
@@ -399,6 +399,54 @@ describe('createAuditMiddleware — proxy identity (ADR-0012)', () => {
       index: 1,
       reason: 'chainHash mismatch',
     });
+
+    // The version alone is enough: provenance is the whole {name, version}.
+    const versionTampered = events.map((e, i) =>
+      i === 1 ? { ...e, proxy: { ...proxy, version: '9.9.9' } } : e,
+    );
+    await expect(
+      verifyAuditChain(versionTampered, signingKey),
+    ).resolves.toEqual({
+      valid: false,
+      index: 1,
+      reason: 'chainHash mismatch',
+    });
+  });
+
+  it('a proxy field stripped from a recorded event breaks verification at that index', async () => {
+    // The gap #123 closes. While `proxy` was omitted when absent, an event
+    // that never had one and an event whose one was deleted produced the same
+    // preimage, so removing recorded provenance verified clean.
+    const { verifyAuditChain } = await import('../verify.js');
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const { middleware } = createAuditMiddleware(
+      makeOptions({
+        signingKey,
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+    const ctx = makeProxyCtx('sess-strip');
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+
+    await expect(verifyAuditChain(events, signingKey)).resolves.toEqual({
+      valid: true,
+    });
+
+    const stripped = events.map((e, i) => {
+      if (i !== 1) return e;
+      const { proxy: _dropped, ...rest } = e;
+      return rest as AuditEvent;
+    });
+    expect('proxy' in stripped[1]!).toBe(false);
+    await expect(verifyAuditChain(stripped, signingKey)).resolves.toEqual({
+      valid: false,
+      index: 1,
+      reason: 'chainHash mismatch',
+    });
   });
 
   it('a tampered manifest proxy field breaks the signature', async () => {
@@ -423,6 +471,19 @@ describe('createAuditMiddleware — proxy identity (ADR-0012)', () => {
         { ...manifest!, proxy: { ...proxy, name: 'rogue-proxy' } },
         signingKey,
       ),
+    ).resolves.toBe(false);
+    await expect(
+      verifyManifestSignature(
+        { ...manifest!, proxy: { ...proxy, version: '9.9.9' } },
+        signingKey,
+      ),
+    ).resolves.toBe(false);
+
+    // Stripping it is detected too, which the omission pattern could not do:
+    // the rebuilt payload used to match the one signed without a proxy.
+    const { proxy: _dropped, ...withoutProxy } = manifest!;
+    await expect(
+      verifyManifestSignature(withoutProxy as ReplayManifest, signingKey),
     ).resolves.toBe(false);
   });
 });

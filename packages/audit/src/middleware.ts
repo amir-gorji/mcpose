@@ -48,7 +48,7 @@ interface SessionState {
   prevChainHash: string;
   startedAt: string;
   identity: Identity;
-  proxy?: ProxyIdentity;
+  proxy: ProxyIdentity;
 }
 
 function aesEncrypt(plaintext: string, key: Buffer, aad: string): string {
@@ -148,27 +148,39 @@ export function createAuditMiddleware(
     // provider is unavailable the call fails fast rather than running
     // unaudited.
     const { chainKey, encRoot } = await deriveSubkeys();
+    // The proxy identity is a required covered field (ADR-0019), so a context
+    // without one cannot produce a verifiable event. That is a configuration
+    // error rather than a runtime condition: core has stamped `ctx.proxy` on
+    // every ProxyContext since 3.0.0, so reaching here without it means a host
+    // invoked this middleware with a hand-built context.
+    //
+    // Handled here, at the pre-call stage alongside subkey derivation, which is
+    // the one failure point allowed to fail the call. Throwing after the call
+    // would mask the tool result, and substituting a sentinel identity would
+    // write a trail that looks attributed and is not, which is the failure
+    // #85 and #122 exist to prevent.
+    const proxy = ctx.proxy;
+    if (proxy === undefined) {
+      throw new Error(
+        'mcpose/audit: ctx.proxy is required, because the proxy identity is a covered field of every audit event. mcpose core stamps it on every ProxyContext; a host invoking this middleware with its own context must supply it.',
+      );
+    }
     const startedAt = new Date().toISOString();
     const start = performance.now();
     const identity = ctx.identity ?? anonymousIdentity();
     const sessionId = ctx.sessionId;
 
-    if (sessionId) {
-      const session = sessions.get(sessionId);
-      if (!session) {
-        sessions.set(sessionId, {
-          events: [],
-          prevChainHash: '',
-          startedAt,
-          identity,
-          ...(ctx.proxy === undefined ? {} : { proxy: ctx.proxy }),
-        });
-      } else if (session.proxy === undefined && ctx.proxy !== undefined) {
-        // Backfill: a session's first request may predate proxy stamping
-        // (host-built context). The manifest records the first proxy
-        // identity seen; each event still records its own.
-        session.proxy = ctx.proxy;
-      }
+    if (sessionId && !sessions.has(sessionId)) {
+      // First-seen wins: the manifest records the proxy identity of the
+      // request that opened the session, and each event still records its own.
+      // No backfill branch is needed now that `proxy` is always present.
+      sessions.set(sessionId, {
+        events: [],
+        prevChainHash: '',
+        startedAt,
+        identity,
+        proxy,
+      });
     }
 
     const tool = req.params.name;
@@ -216,6 +228,7 @@ export function createAuditMiddleware(
         const event = buildEvent({
           ctx,
           identity,
+          proxy,
           kind,
           tool,
           args,
@@ -286,7 +299,7 @@ export function createAuditMiddleware(
     const unsigned: Omit<ReplayManifest, 'signature'> = {
       sessionId,
       identity: session.identity,
-      ...(session.proxy === undefined ? {} : { proxy: session.proxy }),
+      proxy: session.proxy,
       startedAt: session.startedAt,
       closedAt: new Date().toISOString(),
       eventCount: session.events.length,
@@ -331,9 +344,11 @@ export function manifestSigningPayload(
     manifest: {
       sessionId,
       identity,
-      // Optional covered field: omitted when absent, so manifests signed
-      // before it existed rebuild their original payload (ADR-0012).
-      ...(proxy === undefined ? {} : { proxy }),
+      // Required covered field, included unconditionally (ADR-0019). Under
+      // the omission pattern a manifest with `proxy` stripped rebuilt the
+      // same payload as one that never had it, so the signature could not
+      // detect the removal.
+      proxy,
       startedAt,
       closedAt,
       eventCount,
@@ -349,6 +364,11 @@ export function manifestSigningPayload(
 interface BuildParams {
   ctx: ProxyContext;
   identity: Identity;
+  /**
+   * Narrowed from `ctx.proxy` by the pre-call guard, so this stays total and
+   * the required covered field cannot be re-widened here (ADR-0019).
+   */
+  proxy: ProxyIdentity;
   /** `'prompt'` for a prompts/get event; undefined for a tool call. */
   kind: 'prompt' | undefined;
   tool: string;
@@ -384,7 +404,7 @@ function buildEvent(p: BuildParams): AuditEvent {
     ...(p.ctx.delegatedFrom !== undefined
       ? { delegatedFrom: p.ctx.delegatedFrom }
       : {}),
-    ...(p.ctx.proxy !== undefined ? { proxy: p.ctx.proxy } : {}),
+    proxy: p.proxy,
     ...(p.kind !== undefined ? { kind: p.kind } : {}),
     identity: p.identity,
     tool: p.tool,
