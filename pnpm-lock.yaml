@@ -135,6 +135,24 @@ importers:
         specifier: 3.2.7
         version: 3.2.7(@types/node@26.3.0)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
 
+  packages/policy:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.2.0
+        version: 26.3.0
+      '@vitest/coverage-v8':
+        specifier: 3.2.7
+        version: 3.2.7(vitest@3.2.7(@types/node@26.3.0)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+      mcpose:
+        specifier: workspace:*
+        version: link:../core
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 3.2.7
+        version: 3.2.7(@types/node@26.3.0)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
+
   packages/store-postgres:
     devDependencies:
       '@modelcontextprotocol/sdk':

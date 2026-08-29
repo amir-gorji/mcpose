@@ -1,0 +1,62 @@
+{
+  "name": "@mcpose/policy",
+  "version": "1.0.0",
+  "description": "Deny-by-default RBAC policy middleware for mcpose — role rules, sensitivity tiers, per-session budgets",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "policy",
+    "rbac",
+    "authorization",
+    "compliance",
+    "fintech"
+  ],
+  "author": "Amir Gorji",
+  "license": "MIT",
+  "homepage": "https://github.com/amir-gorji/mcpose#readme",
+  "bugs": {
+    "url": "https://github.com/amir-gorji/mcpose/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amir-gorji/mcpose.git",
+    "directory": "packages/policy"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "ts:ci": "tsc --noEmit",
+    "test": "vitest run --coverage",
+    "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "mcpose": ">=3.0.0 <4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@vitest/coverage-v8": "3.2.7",
+    "mcpose": "workspace:*",
+    "typescript": "6.0.3",
+    "vitest": "3.2.7"
+  }
+}
