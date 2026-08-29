@@ -435,7 +435,8 @@ export interface ProxyOptions {
 
   /**
    * Called after every tool call with timing and outcome data. Wire to any
-   * custom telemetry sink (an OpenTelemetry adapter is planned for v3).
+   * custom telemetry sink, or to `createOtelTelemetry` from `@mcpose/otel`
+   * for OpenTelemetry spans.
    * A throwing sink is logged and never fails the tool call.
    */
   onTelemetry?: (event: TelemetryEvent) => void;

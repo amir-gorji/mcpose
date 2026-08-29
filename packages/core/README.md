@@ -298,7 +298,7 @@ interface LocalTool {
   A `'backend_degraded'` event fires when one backend of a mesh drops out of a list call, naming the backend key, the method, and the error.
   Both variants carry an optional `proxy: ProxyIdentity`, the same frozen `{ name, version }` stamped on `ProxyContext` (ADR-0012), so a fleet of proxies feeding one telemetry sink can attribute events to an instance.
   A throwing sink is logged but never fails the call.
-  An OpenTelemetry adapter (`@mcpose/otel`) is planned for v3.
+  [`@mcpose/otel`](https://github.com/amir-gorji/mcpose/blob/main/packages/otel/README.md) maps both variants onto OpenTelemetry spans if you do not want to write the sink yourself.
 
 ### HTTP options (`HttpProxyOptions`)
 

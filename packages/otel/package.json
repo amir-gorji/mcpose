@@ -1,0 +1,64 @@
+{
+  "name": "@mcpose/otel",
+  "version": "0.1.0",
+  "description": "OpenTelemetry span adapter for the mcpose onTelemetry hook",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "opentelemetry",
+    "otel",
+    "telemetry",
+    "tracing",
+    "observability"
+  ],
+  "author": "Amir Gorji",
+  "license": "MIT",
+  "homepage": "https://github.com/amir-gorji/mcpose#readme",
+  "bugs": {
+    "url": "https://github.com/amir-gorji/mcpose/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amir-gorji/mcpose.git",
+    "directory": "packages/otel"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "ts:ci": "tsc --noEmit",
+    "test": "vitest run --coverage",
+    "prepublishOnly": "pnpm run ts:ci && pnpm run test && pnpm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "mcpose": ">=3.0.0 <4"
+  },
+  "devDependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@types/node": "^26.2.0",
+    "@vitest/coverage-v8": "3.2.7",
+    "mcpose": "workspace:*",
+    "typescript": "6.0.3",
+    "vitest": "3.2.7"
+  }
+}

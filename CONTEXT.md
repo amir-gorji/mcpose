@@ -20,7 +20,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **mcpose**: The core proxy library — pipeline, transport adapters, ProxyContext. Published as `mcpose` on npm (`packages/core`). _Avoid_: using to mean the full ecosystem
 
-**mcpose ecosystem**: The full suite — `mcpose` core plus `@mcpose/audit`, `@mcpose/testing`, and future packages (`@mcpose/otel` is planned for v3; it does not exist yet).
+**mcpose ecosystem**: The full suite — `mcpose` core plus `@mcpose/audit`, `@mcpose/testing`, `@mcpose/otel`, and future packages (`@mcpose/policy` is planned for v3; it does not exist yet).
 
 ### Middleware
 
