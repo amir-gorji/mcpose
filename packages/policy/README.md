@@ -24,6 +24,7 @@ The engine implements [ADR-0017](https://github.com/amir-gorji/mcpose/blob/main/
 - [Quick start](#quick-start)
 - [Composition order: policy inside, audit outside](#composition-order-policy-inside-audit-outside)
 - [How a call is decided](#how-a-call-is-decided)
+- [Releasing budget counters](#releasing-budget-counters)
 - [API surface](#api-surface)
 - [What it does not do](#what-it-does-not-do)
 - [Documentation](#documentation)
@@ -76,8 +77,15 @@ await startHttpProxy({
   resolveIdentity: async (req) => verifyJwt(req.headers.authorization),
   toolMiddleware: [policy.middleware],
   promptMiddleware: [policy.promptMiddleware],
+  // Release the session's budget counter when the session ends.
+  onSessionClosed: (sessionId) => policy.evictSession(sessionId),
 });
 ```
+
+Two wiring details decide whether this behaves:
+
+- **`onSessionClosed`.** Only needed when you configure a `budget`, and required whenever you do. See [Releasing budget counters](#releasing-budget-counters).
+- **The wildcard is the string `'*'`, never an element of an array.** `roles: '*'` means every caller; `roles: ['*']` is a literal role name nobody holds. `createPolicyMiddleware` throws on the second form rather than let it match silently.
 
 A denied call throws an MCP error carrying `error.data.rejectionReason`, exactly like every other mcpose rejection:
 
@@ -141,17 +149,46 @@ Only calls that reach the policy layer are counted, so a tool listed in `passThr
 
 Rejection reason: `BUDGET_EXCEEDED`.
 
+### Releasing budget counters
+
+**The host owns the eviction call, and the proxy closes sessions on its own.**
+Nothing removes a counter but `evictSession`, so wire it to `onSessionClosed`:
+
+```ts
+onSessionClosed: (sessionId) => policy.evictSession(sessionId),
+```
+
+`startHttpProxy` fires `onSessionClosed` on every way a session can end: a client DELETE, `sessionTtlMs` expiry, and server shutdown.
+Wiring it as above is therefore the whole pattern, and an abandoned session still expires on the TTL and still releases its counter.
+
+Skip the wiring and the counter map grows for the life of the process.
+`maxSessions` bounds the sessions that are *live*; it does not bound the ids this middleware has already seen, so a long-running proxy accumulates one entry per session forever.
+
+Evicting an unknown session is a no-op, and a session that starts again under the same id gets a fresh budget.
+This matters only when you configure a `budget`: with no budget there is nothing to count and nothing to release.
+
 **Stamping.**
 Either way, `ctx.policy` is set to a frozen `PolicyDecision` before the middleware calls `next` or throws.
-On an allow it is `{ decision: 'allow', ruleId }`; on a denial it is `{ decision: 'deny', reason, ruleId? }`, where `reason` is the rejection reason and `ruleId` is present when a specific rule produced the denial.
+On an allow it is `{ decision: 'allow', ruleId }`; on a denial it is `{ decision: 'deny', reason, ruleId? }`, where `reason` is the rejection reason.
+`ruleId` appears only when an identifiable rule produced that outcome: on a `POLICY_DENIED` from an explicit deny rule, and on an allow.
+A `SENSITIVITY_BLOCKED` denial carries no `ruleId`, because the rule that matched *allowed* the call and the tier rule that vetoed it has no id.
+Naming the allow rule there would tell an auditor that rule X denied a call it in fact permitted.
+Denials with no rule behind them at all (`IDENTITY_UNRESOLVED`, `BUDGET_EXCEEDED`, and a deny-by-default `POLICY_DENIED`) likewise carry none.
 Middleware running inside the policy layer can therefore read `ctx.policy` and rely on `decision: 'allow'`.
 
 ## API surface
 
 ### `createPolicyMiddleware(options)`
 
-Returns `{ middleware, promptMiddleware }`.
-Both surfaces share one implementation, one rule set, and one budget counter, so a prompt fetch is gated exactly as a tool call is and both spend the same session budget.
+Returns `{ middleware, promptMiddleware, evictSession }`.
+The two middleware surfaces share one implementation, one rule set, and one budget counter, so a prompt fetch is gated exactly as a tool call is and both spend the same session budget.
+
+It **throws at construction** on a rule set that would silently match less than its author meant, rather than failing open on the first call:
+
+- `'*'` appearing as an *element* of a `roles` or `tools` array, in a policy rule or a sensitivity rule. Written that way it is a literal name that matches nothing. The wildcard is the bare string `roles: '*'`.
+- An empty or whitespace-only rule `id`, which is what a stamped decision and an audit record name.
+
+The first is the one place deny-by-default does not save you: `{ effect: 'deny', roles: ['*'], tools: ['wire_funds'] }` reads as "deny everyone", matches nobody, and lets the call through on an allow rule its author believed overridden.
 
 ```ts
 interface PolicyOptions {
@@ -182,6 +219,7 @@ interface SensitivityRule {
 | `budget` | no | Calls are uncounted and unlimited. |
 
 `middleware` is a `ToolMiddleware` and `promptMiddleware` is a `PromptMiddleware`, both from `mcpose`.
+`evictSession(sessionId)` drops that session's budget counter; wire it to `onSessionClosed`, as [above](#releasing-budget-counters).
 
 Names are matched **exactly**, with no glob or pattern engine.
 In a mesh the name a rule must list is the namespaced one the client sees, `<backendKey>__<tool>`, because that is the name every `ProxyOptions` predicate and middleware sees.

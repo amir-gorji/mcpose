@@ -148,6 +148,74 @@ describe('RBAC rules', () => {
   });
 });
 
+describe('construction-time validation', () => {
+  it("rejects '*' as an element of a deny rule's roles array", () => {
+    // The fail-open case: an operator writing "deny everyone" this way ships
+    // a rule matching nobody, and the call falls through to an allow rule
+    // they believed overridden.
+    expect(() =>
+      createPolicyMiddleware({
+        rules: [
+          { id: 'all', effect: 'allow', roles: '*', tools: '*' },
+          {
+            id: 'freeze',
+            effect: 'deny',
+            roles: ['*'],
+            tools: ['wire_funds'],
+          },
+        ],
+      }),
+    ).toThrow(/roles array is a literal name.*Write roles: '\*'/s);
+  });
+
+  it("rejects '*' as an element of a tools array", () => {
+    expect(() =>
+      createPolicyMiddleware({
+        rules: [{ id: 'all', effect: 'allow', roles: '*', tools: ['*'] }],
+      }),
+    ).toThrow(/tools array is a literal name/);
+  });
+
+  it("rejects '*' as an element of a sensitivity rule's roles array", () => {
+    expect(() =>
+      createPolicyMiddleware({
+        rules: [{ id: 'all', effect: 'allow', roles: '*', tools: '*' }],
+        sensitivityRules: [{ roles: ['*'], deniedTiers: ['high'] }],
+      }),
+    ).toThrow(/sensitivityRules\[0\]/);
+  });
+
+  it('rejects an empty or whitespace rule id', () => {
+    for (const id of ['', '   ']) {
+      expect(() =>
+        createPolicyMiddleware({
+          rules: [{ id, effect: 'allow', roles: '*', tools: '*' }],
+        }),
+      ).toThrow(/non-empty id/);
+    }
+  });
+
+  it('names the offending rule by index and id', () => {
+    expect(() =>
+      createPolicyMiddleware({
+        rules: [
+          { id: 'ok', effect: 'allow', roles: '*', tools: '*' },
+          { id: 'bad', effect: 'deny', roles: ['*'], tools: '*' },
+        ],
+      }),
+    ).toThrow(/rules\[1\] \(id bad\)/);
+  });
+
+  it('accepts the string wildcard form', () => {
+    expect(() =>
+      createPolicyMiddleware({
+        rules: [{ id: 'all', effect: 'allow', roles: '*', tools: '*' }],
+        sensitivityRules: [{ roles: '*', deniedTiers: [] }],
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe('identity requirement', () => {
   it('rejects IDENTITY_UNRESOLVED when every allow rule for the tool needs a role', async () => {
     const { ctx, next, error } = await run(allowReader, 'get_balance');
@@ -216,11 +284,14 @@ describe('sensitivity tier rules', () => {
 
     expect(reasonOf(error)).toBe('SENSITIVITY_BLOCKED');
     expect(next).not.toHaveBeenCalled();
+    // No ruleId: the `all` rule ALLOWED this call, and an id-less tier rule
+    // vetoed it. Naming `all` here would tell an auditor a rule denied a call
+    // it in fact permitted.
     expect(ctx.policy).toEqual({
       decision: 'deny',
-      ruleId: 'all',
       reason: 'SENSITIVITY_BLOCKED',
     });
+    expect(ctx.policy).not.toHaveProperty('ruleId');
   });
 
   it('fails closed on an unmapped name, treating it as high', async () => {
@@ -368,6 +439,43 @@ describe('per-session budget', () => {
     ).rejects.toThrow();
 
     expect(await call(handle, 's1')).toBeUndefined();
+  });
+
+  it('frees the counter on evictSession, giving a restarted session a fresh budget', async () => {
+    const handle = createPolicyMiddleware(budgeted);
+
+    await call(handle, 's1');
+    await call(handle, 's1');
+    expect(await call(handle, 's1')).toBe('BUDGET_EXCEEDED');
+
+    handle.evictSession('s1');
+
+    expect(await call(handle, 's1')).toBeUndefined();
+    expect(await call(handle, 's1')).toBeUndefined();
+    expect(await call(handle, 's1')).toBe('BUDGET_EXCEEDED');
+  });
+
+  it('treats evicting an unknown session as a no-op', async () => {
+    const handle = createPolicyMiddleware(budgeted);
+
+    expect(() => {
+      handle.evictSession('never-seen');
+    }).not.toThrow();
+    expect(await call(handle, 's1')).toBeUndefined();
+  });
+
+  it('leaves other sessions untouched when one is evicted', async () => {
+    const handle = createPolicyMiddleware(budgeted);
+
+    await call(handle, 's1');
+    await call(handle, 's1');
+    await call(handle, 's2');
+    await call(handle, 's2');
+
+    handle.evictSession('s1');
+
+    expect(await call(handle, 's1')).toBeUndefined();
+    expect(await call(handle, 's2')).toBe('BUDGET_EXCEEDED');
   });
 
   it('stamps the deny decision when the budget is exhausted', async () => {

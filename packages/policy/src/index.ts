@@ -74,6 +74,17 @@ export interface PolicyMiddlewareHandle {
    * a prompt name is matched exactly as a tool name is.
    */
   promptMiddleware: PromptMiddleware;
+  /**
+   * Drops a session's budget counter. Wire it to
+   * `HttpProxyOptions.onSessionClosed`, which fires on every way a session
+   * can end: client DELETE, `sessionTtlMs` expiry, and shutdown.
+   *
+   * Without that wiring the counter map grows for the life of the process,
+   * because `maxSessions` bounds live sessions and not the ids this
+   * middleware has seen. Calling it for an unknown session is a no-op, and a
+   * session that starts again under the same id gets a fresh budget.
+   */
+  evictSession(sessionId: string): void;
 }
 
 /** What the policy layer needs from a gated request: tool calls and prompt fetches both carry a name. */
@@ -117,6 +128,48 @@ function namesMatch(
   name: string,
 ): boolean {
   return ruleTools === '*' || ruleTools.includes(name);
+}
+
+/**
+ * Rejects a rule set that would silently match less than its author meant,
+ * at construction time rather than on the first call it wrongly admits.
+ *
+ * The wildcard is the string `'*'`, never an element of an array. Written as
+ * `roles: ['*']` it is a literal role name that no caller holds, so
+ * `{ effect: 'deny', roles: ['*'], tools: ['wire_funds'] }` reads as "deny
+ * everyone" and matches nobody. Deny-by-default does not save you there: the
+ * call falls through to whatever allow rule the author believed they had
+ * overridden. A misconfigured deny rule is the one way this engine fails
+ * open, so it fails to construct instead.
+ */
+function assertRules(rules: ReadonlyArray<PolicyRule>): void {
+  for (const [i, rule] of rules.entries()) {
+    const where = `rules[${i}]`;
+    if (typeof rule.id !== 'string' || rule.id.trim() === '') {
+      throw new TypeError(
+        `${where}: a policy rule needs a non-empty id. It is what a stamped decision and an audit record name.`,
+      );
+    }
+    for (const field of ['roles', 'tools'] as const) {
+      const value = rule[field];
+      if (value !== '*' && value.includes('*')) {
+        throw new TypeError(
+          `${where} (id ${rule.id}): '*' inside the ${field} array is a literal name, not a wildcard, and matches nothing. Write ${field}: '*' instead.`,
+        );
+      }
+    }
+  }
+}
+
+/** The same wildcard mistake, in a sensitivity rule's roles. */
+function assertSensitivityRules(rules: ReadonlyArray<SensitivityRule>): void {
+  for (const [i, rule] of rules.entries()) {
+    if (rule.roles !== '*' && rule.roles.includes('*')) {
+      throw new TypeError(
+        `sensitivityRules[${i}]: '*' inside the roles array is a literal role name, not a wildcard, and matches nothing. Write roles: '*' instead.`,
+      );
+    }
+  }
 }
 
 /** A denial: the reason the caller sees and the rule that produced it, if any. */
@@ -164,9 +217,14 @@ function reject(ctx: ProxyContext, denial: Denial): never {
 export function createPolicyMiddleware(
   options: PolicyOptions,
 ): PolicyMiddlewareHandle {
-  // Per-instance, per-session call counts. Keyed by ctx.sessionId, so the
-  // bounded session lifecycle of the host (#107) bounds this map; two
-  // middleware instances never share a budget.
+  assertRules(options.rules);
+  if (options.sensitivityRules)
+    assertSensitivityRules(options.sensitivityRules);
+
+  // Per-instance, per-session call counts, keyed by ctx.sessionId. Two
+  // middleware instances never share a budget, and nothing evicts an entry
+  // but `evictSession`: wire it to `onSessionClosed` or this map grows for
+  // the life of the process.
   const callCounts = new Map<string, number>();
   const max = options.budget?.maxCallsPerSession;
 
@@ -220,9 +278,12 @@ export function createPolicyMiddleware(
         (r) => rolesMatch(r.roles, roles) && r.deniedTiers.includes(tier),
       );
       if (blocked) {
+        // Deliberately no ruleId. The matching allow rule did not deny this
+        // call, and stamping its id would tell an auditor that rule X refused
+        // a call it in fact permitted. Tier rules carry no id, so absence is
+        // the honest answer.
         return {
           reason: 'SENSITIVITY_BLOCKED',
-          ruleId: allowed.id,
           message: `Sensitivity tier ${tier} is blocked for this caller on ${name}`,
         };
       }
@@ -276,5 +337,8 @@ export function createPolicyMiddleware(
   return {
     middleware: (req, next, ctx) => gate(req, next, ctx),
     promptMiddleware: (req, next, ctx) => gate(req, next, ctx),
+    evictSession: (sessionId) => {
+      callCounts.delete(sessionId);
+    },
   };
 }
