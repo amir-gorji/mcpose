@@ -40,7 +40,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Presented chain**: The delegation chain as it arrives on the wire, written by the previous hop. Attribution, never authorization: extraction gives every entry empty `roles` and `claims`, and a malformed payload is rejected with `DELEGATION_INVALID` (ADR-0016). _Avoid_: "delegation header", "trusted chain"
 
-**Proxy identity**: Which proxy instance handled a request — `proxy?: ProxyIdentity` (`{ name, version }`) on `ProxyContext`, stamped by `createProxyServer` from `ProxyOptions` with defaults applied. Provenance, not a principal: never an entry in `delegatedFrom`, and no part of the caller-attribution model (ADR-0012). _Avoid_: "server identity", "instance id"
+**Proxy identity**: Which proxy instance handled a request — `proxy?: ProxyIdentity` (`{ name, version }`) on `ProxyContext`, stamped by `createProxyServer` from `ProxyOptions`. `name` is required and must be non-blank (#122), because a defaulted one records a whole fleet under one name; `version` still defaults to the mcpose library version. Provenance, not a principal: never an entry in `delegatedFrom`, and no part of the caller-attribution model (ADR-0012). _Avoid_: "server identity", "instance id"
 
 ### Policy
 

@@ -38,7 +38,7 @@ await redis.connect();
 
 await startHttpProxy(
   { docs: { command: 'npx', args: ['-y', 'mcp-server-docs'] } },
-  {},
+  { name: 'my-proxy' },
   { eventStore: createRedisEventStore(redis) },
 );
 ```

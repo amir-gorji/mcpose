@@ -39,7 +39,7 @@ setInterval(() => void eventStore.pruneExpired(), 60_000).unref();
 
 await startHttpProxy(
   { docs: { command: 'npx', args: ['-y', 'mcp-server-docs'] } },
-  {},
+  { name: 'my-proxy' },
   { eventStore },
 );
 ```

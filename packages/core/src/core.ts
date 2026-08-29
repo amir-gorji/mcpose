@@ -62,9 +62,6 @@ import { rejectionMcpError } from './rejection.js';
 import type { RejectionReason } from './rejection.js';
 import { VERSION } from './version.js';
 
-/** Name the proxy advertises when `ProxyOptions.name` is omitted. */
-const DEFAULT_PROXY_NAME = 'mcpose';
-
 /**
  * Middleware for tool calls.
  * Uses `CompatibilityCallToolResult` to cover legacy `{ toolResult }` shape
@@ -312,11 +309,14 @@ export interface LocalTool {
 /** Proxy server options. */
 export interface ProxyOptions {
   /**
-   * Human-readable name for this proxy instance.
-   * Defaults to `'mcpose'` when omitted, so leaving out `options` entirely stays
-   * backward compatible.
+   * Human-readable name for this proxy instance. Required, and rejected at
+   * construction when empty or whitespace-only.
+   *
+   * It is stamped onto every `ProxyContext`, every audit event, and the
+   * `ReplayManifest` as provenance (ADR-0012), so a default would record a
+   * whole fleet under one name: attribution in appearance only (#122).
    */
-  name?: string;
+  name: string;
 
   /**
    * Version of this proxy server (yours, not the mcpose library). MCP clients see
@@ -646,6 +646,23 @@ function stripTopLevelMeta<Res extends { _meta?: unknown }>(res: Res): Res {
  * no correct way to pick one, and silently keeping the last would route
  * calls to a handler the configuration does not obviously name.
  */
+/**
+ * Rejects a blank proxy name at construction, like a duplicate local tool name.
+ *
+ * The name is recorded as provenance on every `ProxyContext`, audit event, and
+ * `ReplayManifest` (ADR-0012), so a blank one produces a trail that looks
+ * attributed and is not (#122). The negated check covers all three bad values
+ * at once: whitespace-only trims to `''`, and `''` and an omitted name (from a
+ * JS caller the type does not bind) are falsy already.
+ */
+function assertProxyName(name: string): void {
+  if (!name?.trim()) {
+    throw new Error(
+      `mcpose: name must be a non-empty string, got ${JSON.stringify(name)}`,
+    );
+  }
+}
+
 function buildLocalToolMap(
   localTools: ReadonlyArray<LocalTool> | undefined,
 ): Map<string, LocalTool> {
@@ -825,8 +842,9 @@ function registerListChangedForwarders(
  */
 export function createProxyServer(
   backends: Backends,
-  options: ProxyOptions = {},
+  options: ProxyOptions,
 ): Server {
+  assertProxyName(options.name);
   const { mesh, entries } = normalizeBackends(backends);
   for (const { key, client } of entries) {
     if (client.getServerCapabilities() === undefined) {
@@ -882,7 +900,7 @@ export function createProxyServer(
   // audit event: a middleware mutating it would rewrite provenance already
   // recorded elsewhere.
   const proxyIdentity: ProxyIdentity = Object.freeze({
-    name: options.name ?? DEFAULT_PROXY_NAME,
+    name: options.name,
     version: options.version ?? VERSION,
   });
 
@@ -1307,7 +1325,7 @@ export function createProxyServer(
  */
 export async function startProxy(
   backends: Backends,
-  options: ProxyOptions = {},
+  options: ProxyOptions,
 ): Promise<void> {
   const server = createProxyServer(backends, options);
   await server.connect(new StdioServerTransport());
@@ -1407,12 +1425,13 @@ function isLoopbackHost(host: string): boolean {
  */
 export function startHttpProxy(
   backends: Backends,
-  options: ProxyOptions = {},
+  options: ProxyOptions,
   httpOptions: HttpProxyOptions = {},
 ): Promise<http.Server> {
   // Sessions build their proxy server lazily, so surface configuration
-  // errors (duplicate local tool names, invalid backend keys) at startup,
-  // not on first initialize.
+  // errors (a blank name, duplicate local tool names, invalid backend keys)
+  // at startup, not on first initialize.
+  assertProxyName(options.name);
   buildLocalToolMap(options.localTools);
   normalizeBackends(backends);
 

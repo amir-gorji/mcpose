@@ -60,6 +60,7 @@ describe('createProxyServer() — hiddenTools accepts a predicate', () => {
   it('filters tools the predicate hides out of tools/list, with undefined args', async () => {
     const seen: Array<[string, unknown]> = [];
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       hiddenTools: (name, args) => {
         seen.push([name, args]);
         return name === 'update_issue';
@@ -79,6 +80,7 @@ describe('createProxyServer() — hiddenTools accepts a predicate', () => {
 
   it('stays authoritative after listToolsMiddleware: a re-added hidden tool is filtered again', async () => {
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       hiddenTools: blockUpdateIssue(),
       listToolsMiddleware: [
         async (req, next) => {
@@ -107,6 +109,7 @@ describe('createProxyServer() — hiddenTools accepts a predicate', () => {
   it('rejects a call the predicate hides with TOOL_HIDDEN, upstream never called', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       hiddenTools: blockUpdateIssue(),
     });
 
@@ -125,6 +128,7 @@ describe('createProxyServer() — hiddenTools accepts a predicate', () => {
   it('passes an empty object, not undefined, when the client sent no arguments', async () => {
     const seen: unknown[] = [];
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       hiddenTools: (_name, args) => {
         seen.push(args);
         return false;
@@ -142,6 +146,7 @@ describe('createProxyServer() — dispatcherAwareBlock closes the dispatcher byp
   it('blocks a dispatcher call targeting a hidden tool, upstream never called', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       hiddenTools: blockUpdateIssue(),
     });
 
@@ -157,6 +162,7 @@ describe('createProxyServer() — dispatcherAwareBlock closes the dispatcher byp
   it('keeps the dispatcher listed and callable with a permitted target', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       hiddenTools: blockUpdateIssue(),
     });
 

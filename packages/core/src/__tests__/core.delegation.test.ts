@@ -94,7 +94,10 @@ describe('delegation extraction', () => {
   it('populates delegatedFrom from params._meta before the strip runs', async () => {
     const backend = makeMockBackend();
     const { middleware, seen } = observer();
-    const server = createProxyServer(backend, { toolMiddleware: [middleware] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [middleware],
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 't',
@@ -111,7 +114,10 @@ describe('delegation extraction', () => {
   it('leaves delegatedFrom unset when no payload is present', async () => {
     const backend = makeMockBackend();
     const { middleware, seen } = observer();
-    const server = createProxyServer(backend, { toolMiddleware: [middleware] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [middleware],
+    });
 
     await invokeHandler(server, 'tools/call', { name: 't', arguments: {} });
 
@@ -121,7 +127,10 @@ describe('delegation extraction', () => {
   it('leaves delegatedFrom unset when the presented chain is empty', async () => {
     const backend = makeMockBackend();
     const { middleware, seen } = observer();
-    const server = createProxyServer(backend, { toolMiddleware: [middleware] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [middleware],
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 't',
@@ -135,7 +144,10 @@ describe('delegation extraction', () => {
   it('drops roles and claims asserted on the wire', async () => {
     const backend = makeMockBackend();
     const { middleware, seen } = observer();
-    const server = createProxyServer(backend, { toolMiddleware: [middleware] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [middleware],
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 't',
@@ -161,7 +173,10 @@ describe('delegation extraction', () => {
   it('keeps a valid source, displayName, and resolvedAt', async () => {
     const backend = makeMockBackend();
     const { middleware, seen } = observer();
-    const server = createProxyServer(backend, { toolMiddleware: [middleware] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [middleware],
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 't',
@@ -189,7 +204,10 @@ describe('delegation extraction', () => {
   it('replaces an unknown source and an unparseable resolvedAt', async () => {
     const backend = makeMockBackend();
     const { middleware, seen } = observer();
-    const server = createProxyServer(backend, { toolMiddleware: [middleware] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [middleware],
+    });
     const before = new Date().toISOString();
 
     await invokeHandler(server, 'tools/call', {
@@ -228,7 +246,10 @@ describe('delegation extraction', () => {
   ] as const)('keeps resolvedAt %s: %s', async (resolvedAt, kept) => {
     const backend = makeMockBackend();
     const { middleware, seen } = observer();
-    const server = createProxyServer(backend, { toolMiddleware: [middleware] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [middleware],
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 't',
@@ -253,6 +274,7 @@ describe('delegation extraction', () => {
       return next(req);
     };
     const server = createProxyServer(backend, {
+      name: 'test-server',
       resourceMiddleware: [resourceObserver],
       promptMiddleware: [promptObserver],
     });
@@ -270,7 +292,7 @@ describe('delegation extraction', () => {
     const { middleware, seen } = observer();
     const server = createProxyServer(
       { a: backend },
-      { toolMiddleware: [middleware] },
+      { name: 'test-server', toolMiddleware: [middleware] },
     );
 
     await invokeHandler(server, 'tools/call', {
@@ -300,6 +322,7 @@ describe('delegation extraction', () => {
     };
     const { middleware, seen } = observer();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       toolMiddleware: [stamp, middleware],
     });
 
@@ -374,6 +397,7 @@ describe('delegation rejection', () => {
       const backend = makeMockBackend();
       const { middleware, seen } = observer();
       const server = createProxyServer(backend, {
+        name: 'test-server',
         toolMiddleware: [middleware],
       });
 
@@ -398,7 +422,7 @@ describe('delegation rejection', () => {
 
   it('accepts exactly 32 entries', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(server, 'tools/call', {
       name: 't',
@@ -418,7 +442,10 @@ describe('delegation rejection', () => {
 
   it('rejects a hidden tool call on the malformed chain, not on the tool', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { hiddenTools: ['t'] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      hiddenTools: ['t'],
+    });
 
     await expect(
       invokeHandler(server, 'tools/call', {
@@ -439,7 +466,7 @@ describe('delegation rejection', () => {
     ['prompts/list', {}],
   ] as const)('rejects a malformed chain on %s', async (method, params) => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await expect(
       invokeHandler(server, method, {
@@ -454,6 +481,7 @@ describe('delegation rejection', () => {
   it('rejects a malformed chain on a pass-through resource', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       passThroughResources: ['res://a'],
     });
 
@@ -472,6 +500,7 @@ describe('delegation rejection', () => {
     const backend = makeMockBackend();
     const { middleware, seen } = observer();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       passThroughTools: ['t'],
       toolMiddleware: [markPassThroughObserver(middleware)],
     });
@@ -494,7 +523,7 @@ describe('delegation rejection', () => {
 describe('outbound delegation', () => {
   it('re-attaches the chain core can vouch for, not the caller copy', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(server, 'tools/call', {
       name: 't',
@@ -523,7 +552,7 @@ describe('outbound delegation', () => {
 
   it('attaches nothing when there is no chain and no identity', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(server, 'tools/call', { name: 't', arguments: {} });
 
@@ -538,7 +567,7 @@ describe('outbound delegation', () => {
     ['prompts/list', {}, 'listPrompts'],
   ] as const)('attaches on %s', async (method, params, backendMethod) => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(server, method, {
       ...params,
@@ -553,7 +582,7 @@ describe('outbound delegation', () => {
 
   it('attaches on both mesh routes', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer({ a: backend }, {});
+    const server = createProxyServer({ a: backend }, { name: 'test-server' });
     const _meta = metaWith(wire([AGENT_A]));
 
     await invokeHandler(server, 'tools/call', {
@@ -579,6 +608,7 @@ describe('outbound delegation', () => {
     const backend = makeMockBackend();
     const handler = vi.fn().mockResolvedValue({ content: [] });
     const server = createProxyServer(backend, {
+      name: 'test-server',
       localTools: [
         {
           tool: { name: 'local', inputSchema: { type: 'object' as const } },
@@ -610,7 +640,10 @@ describe('outbound delegation', () => {
         ...req,
         params: { ...req.params, _meta: { tenant: 'bank-pilot' } },
       });
-    const server = createProxyServer(backend, { toolMiddleware: [addMeta] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [addMeta],
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 't',
@@ -632,7 +665,7 @@ describe('a proxy chained behind another proxy', () => {
     const backend = makeMockBackend();
     const server = await startHttpProxy(
       backend,
-      {},
+      { name: 'test-server' },
       {
         port: 0,
         path: '/mcp',

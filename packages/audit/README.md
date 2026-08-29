@@ -101,7 +101,7 @@ const auditHandle = createAuditMiddleware({
 await startHttpProxy(
   backend,
   // Redaction first, so audit only ever records clean data.
-  { toolMiddleware: [piiMW, auditHandle.middleware] },
+  { name: 'payments-proxy', toolMiddleware: [piiMW, auditHandle.middleware] },
   {
     resolveIdentity: extractJwt,
     // Flush the replay manifest when the session ends.

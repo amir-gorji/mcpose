@@ -54,7 +54,7 @@ This package has no runtime dependencies and no peer beyond `mcpose`.
 ## Quick start
 
 ```ts
-import { startHttpProxy } from 'mcpose';
+import { createBackendClient, startHttpProxy } from 'mcpose';
 import { createPolicyMiddleware } from '@mcpose/policy';
 
 const policy = createPolicyMiddleware({
@@ -72,14 +72,19 @@ const policy = createPolicyMiddleware({
   budget: { maxCallsPerSession: 500 },
 });
 
-await startHttpProxy({
-  backend: { command: 'node', args: ['./bank-server.js'] },
-  resolveIdentity: async (req) => verifyJwt(req.headers.authorization),
-  toolMiddleware: [policy.middleware],
-  promptMiddleware: [policy.promptMiddleware],
-  // Release the session's budget counter when the session ends.
-  onSessionClosed: (sessionId) => policy.evictSession(sessionId),
-});
+await startHttpProxy(
+  await createBackendClient({ command: 'node', args: ['./bank-server.js'] }),
+  {
+    name: 'bank-proxy',
+    toolMiddleware: [policy.middleware],
+    promptMiddleware: [policy.promptMiddleware],
+  },
+  {
+    resolveIdentity: async (req) => verifyJwt(req.headers.authorization),
+    // Release the session's budget counter when the session ends.
+    onSessionClosed: (sessionId) => policy.evictSession(sessionId),
+  },
+);
 ```
 
 Two wiring details decide whether this behaves:

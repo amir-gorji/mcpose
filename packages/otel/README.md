@@ -66,6 +66,7 @@ import { createOtelTelemetry } from '@mcpose/otel';
 import { startProxy } from 'mcpose';
 
 await startProxy(backends, {
+  name: 'my-proxy',
   onTelemetry: createOtelTelemetry(trace.getTracer('mcpose')),
 });
 ```

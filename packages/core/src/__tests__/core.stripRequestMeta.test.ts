@@ -61,7 +61,7 @@ function upstreamParams(mock: unknown): Record<string, unknown> {
 describe('createProxyServer() — stripRequestMeta defaults to on', () => {
   it('strips _meta from a tool call before the upstream sees it', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(server, 'tools/call', {
       name: 'search_issues',
@@ -83,7 +83,7 @@ describe('createProxyServer() — stripRequestMeta defaults to on', () => {
     ['prompts/list', 'listPrompts'],
   ] as const)('strips _meta from %s', async (method, backendMethod) => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(server, method, { _meta: CLIENT_META });
     expect(
@@ -93,7 +93,7 @@ describe('createProxyServer() — stripRequestMeta defaults to on', () => {
 
   it('strips _meta from a resource read and a prompt get', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(server, 'resources/read', {
       uri: 'res://a',
@@ -111,6 +111,7 @@ describe('createProxyServer() — stripRequestMeta defaults to on', () => {
   it('applies to pass-through tools too', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       passThroughTools: ['search_issues'],
     });
 
@@ -133,7 +134,10 @@ describe('createProxyServer() — the strip happens before the pipeline', () => 
       seenMeta = req.params._meta;
       return next(req);
     };
-    const server = createProxyServer(backend, { toolMiddleware: [observe] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [observe],
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 'search_issues',
@@ -150,7 +154,10 @@ describe('createProxyServer() — the strip happens before the pipeline', () => 
         ...req,
         params: { ...req.params, _meta: { tenant: 'bank-pilot' } },
       });
-    const server = createProxyServer(backend, { toolMiddleware: [addMeta] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [addMeta],
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 'search_issues',
@@ -177,7 +184,7 @@ describe('createProxyServer() — the strip happens before the pipeline', () => 
     (backend as unknown as { callTool: unknown }).callTool =
       callToolWithProgress;
     const sendNotification = vi.fn().mockResolvedValue(undefined);
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     await invokeHandler(
       server,
@@ -204,7 +211,10 @@ describe('createProxyServer() — the strip happens before the pipeline', () => 
 describe('createProxyServer() — stripRequestMeta: false restores forwarding', () => {
   it('forwards _meta verbatim when disabled', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { stripRequestMeta: false });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      stripRequestMeta: false,
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 'search_issues',

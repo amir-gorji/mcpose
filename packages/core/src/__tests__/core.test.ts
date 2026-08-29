@@ -366,27 +366,6 @@ describe('createProxyServer() — passThroughTools', () => {
     });
   });
 
-  it('stamps the default proxy identity when name and version are omitted', async () => {
-    const backend = makeMockBackend();
-    let seenContext: ProxyContext | undefined;
-
-    const captureContext: ToolMiddleware = async (req, next, context) => {
-      seenContext = context;
-      return next(req);
-    };
-
-    const server = createProxyServer(backend, {
-      toolMiddleware: [captureContext],
-    });
-
-    await invokeHandler(server, 'tools/call', {
-      name: 'normal_tool',
-      arguments: {},
-    });
-
-    expect(seenContext?.proxy).toEqual({ name: 'mcpose', version: pkgVersion });
-  });
-
   it('stamps a custom proxy identity onto the context', async () => {
     const backend = makeMockBackend();
     let seenContext: ProxyContext | undefined;
@@ -752,14 +731,6 @@ describe('createProxyServer() — server identity', () => {
     )._serverInfo;
   };
 
-  it('omitting options is allowed and defaults name to "mcpose"', () => {
-    const backend = makeMockBackend();
-    // No options at all: this is the backward-compatible path.
-    const server = createProxyServer(backend);
-
-    expect(serverInfo(server).name).toBe('mcpose');
-  });
-
   it('honors an explicit name when provided', () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, { name: 'my-proxy' });
@@ -769,7 +740,7 @@ describe('createProxyServer() — server identity', () => {
 
   it('defaults version to the mcpose library version when omitted', () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend);
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     expect(serverInfo(server).version).toBe(pkgVersion);
     // Regression guard against the stale hardcoded '1.1.1'.
@@ -779,7 +750,10 @@ describe('createProxyServer() — server identity', () => {
   it('honors an explicit version, independent of the library version', () => {
     const backend = makeMockBackend();
     // A developer ships their own proxy version on top of a pinned library.
-    const server = createProxyServer(backend, { version: '9.9.9' });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      version: '9.9.9',
+    });
 
     expect(serverInfo(server).version).toBe('9.9.9');
   });
