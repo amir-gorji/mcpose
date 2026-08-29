@@ -7,11 +7,12 @@ import type {
 } from '../core.js';
 import {
   DELEGATION_META_KEY,
+  detectDelegationLoop,
   serializeDelegationChain,
 } from '../delegation.js';
 import type { Identity } from '../identity.js';
 import { markPassThroughObserver } from '../middleware.js';
-import type { ProxyContext } from '../proxyContext.js';
+import { createProxyContext, type ProxyContext } from '../proxyContext.js';
 import type { BackendClient } from '../backendClient.js';
 import { getPort, closeServer } from './_helpers.js';
 
@@ -76,6 +77,99 @@ function forwardedChain(mock: unknown): unknown {
   const meta = forwardedParams(mock)._meta as
     Record<string, unknown> | undefined;
   return meta?.[DELEGATION_META_KEY];
+}
+
+const PROXY_B_CALLER: Identity = {
+  sub: 'proxy-b-caller',
+  type: 'agent',
+  roles: ['reader'],
+  claims: { tenant: 'bank' },
+  resolvedAt: '2026-08-29T10:00:00.000Z',
+  source: 'jwt',
+};
+
+interface JsonRpcResponse {
+  result?: unknown;
+  error?: {
+    code: number;
+    message: string;
+    data?: { rejectionReason?: string };
+  };
+}
+
+/**
+ * Starts an HTTP proxy resolving `identity` for every session, initializes one
+ * session, and returns a `call` for JSON-RPC requests on it. The HTTP path is
+ * the only one that resolves an identity, which the loop check needs.
+ */
+async function startProxyWithIdentity(
+  backend: BackendClient,
+  identity: Identity | undefined,
+  options: Partial<Parameters<typeof createProxyServer>[1]> = {},
+): Promise<{
+  call: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<JsonRpcResponse>;
+  close: () => Promise<void>;
+}> {
+  const server = await startHttpProxy(
+    backend,
+    { name: 'test-server', ...options },
+    {
+      port: 0,
+      path: '/mcp',
+      ...(identity === undefined ? {} : { resolveIdentity: () => identity }),
+    },
+  );
+  const url = `http://localhost:${getPort(server)}/mcp`;
+  const headers = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json, text/event-stream',
+  };
+  const post = (body: unknown, extra: Record<string, string> = {}) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { ...headers, ...extra },
+      body: JSON.stringify(body),
+    });
+
+  const init = await post({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'proxy-a', version: '0.0.1' },
+    },
+  });
+  const sessionHeaders = {
+    'mcp-session-id': init.headers.get('mcp-session-id')!,
+  };
+  await init.text();
+  await post(
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    sessionHeaders,
+  ).then((r) => r.text());
+
+  let id = 1;
+  return {
+    call: async (method, params) => {
+      id += 1;
+      const res = await post(
+        { jsonrpc: '2.0', id, method, params },
+        sessionHeaders,
+      );
+      const body = await res.text();
+      // The transport answers on an SSE stream: one `data:` line per message.
+      const payload = body.startsWith('{')
+        ? body
+        : (/^data: (.*)$/m.exec(body)?.[1] ?? '{}');
+      return JSON.parse(payload) as JsonRpcResponse;
+    },
+    close: () => closeServer(server),
+  };
 }
 
 /** Captures the context the innermost middleware saw. */
@@ -663,71 +757,14 @@ describe('outbound delegation', () => {
 describe('a proxy chained behind another proxy', () => {
   it('forwards the presented chain extended with the identity it resolved', async () => {
     const backend = makeMockBackend();
-    const server = await startHttpProxy(
-      backend,
-      { name: 'test-server' },
-      {
-        port: 0,
-        path: '/mcp',
-        resolveIdentity: () => ({
-          sub: 'proxy-b-caller',
-          type: 'agent' as const,
-          roles: ['reader'],
-          claims: { tenant: 'bank' },
-          resolvedAt: '2026-08-29T10:00:00.000Z',
-          source: 'jwt' as const,
-        }),
-      },
-    );
-    const baseUrl = `http://localhost:${getPort(server)}/mcp`;
-    const headers = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
-    };
+    const proxy = await startProxyWithIdentity(backend, PROXY_B_CALLER);
 
     try {
-      const init = await fetch(baseUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'initialize',
-          params: {
-            protocolVersion: '2024-11-05',
-            capabilities: {},
-            clientInfo: { name: 'proxy-a', version: '0.0.1' },
-          },
-        }),
+      await proxy.call('tools/call', {
+        name: 't',
+        arguments: {},
+        _meta: metaWith(wire([AGENT_A])),
       });
-      const sessionId = init.headers.get('mcp-session-id')!;
-      await init.text();
-      const sessionHeaders = { ...headers, 'mcp-session-id': sessionId };
-
-      await fetch(baseUrl, {
-        method: 'POST',
-        headers: sessionHeaders,
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'notifications/initialized',
-        }),
-      }).then((r) => r.text());
-
-      const call = await fetch(baseUrl, {
-        method: 'POST',
-        headers: sessionHeaders,
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 2,
-          method: 'tools/call',
-          params: {
-            name: 't',
-            arguments: {},
-            _meta: metaWith(wire([AGENT_A])),
-          },
-        }),
-      });
-      await call.text();
 
       // Oldest-first: the chain proxy A presented, extended with the
       // identity this proxy resolved for A itself.
@@ -750,8 +787,138 @@ describe('a proxy chained behind another proxy', () => {
       expect(forwarded.chain[1]).not.toHaveProperty('roles');
       expect(forwarded.chain[1]).not.toHaveProperty('claims');
     } finally {
-      await closeServer(server);
+      await proxy.close();
     }
+  });
+});
+
+// ── Loops ───────────────────────────────────────────────────────────────────
+
+describe('delegation loop rejection', () => {
+  it('rejects a chain the resolved caller already appears in, in-pipeline', async () => {
+    const backend = makeMockBackend();
+    const { middleware, seen } = observer();
+    const proxy = await startProxyWithIdentity(backend, PROXY_B_CALLER, {
+      toolMiddleware: [middleware],
+    });
+
+    try {
+      const res = await proxy.call('tools/call', {
+        name: 't',
+        arguments: {},
+        _meta: metaWith(
+          wire([{ sub: 'proxy-b-caller', type: 'agent' }, AGENT_A]),
+        ),
+      });
+
+      expect(res.error?.code).toBe(-32600);
+      expect(res.error?.message).toContain(
+        'Invalid delegation chain: the caller "proxy-b-caller" is already in the chain',
+      );
+      expect(res.error?.data?.rejectionReason).toBe('DELEGATION_INVALID');
+      // Observed in-chain with the identity that tripped it, so the audit
+      // trail records the attempt.
+      expect(seen).toHaveLength(1);
+      expect(seen[0]?.identity?.sub).toBe('proxy-b-caller');
+      expect(backend.callTool).not.toHaveBeenCalled();
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it('lets a chain the resolved caller is absent from through', async () => {
+    const backend = makeMockBackend();
+    const proxy = await startProxyWithIdentity(backend, PROXY_B_CALLER);
+
+    try {
+      const res = await proxy.call('tools/call', {
+        name: 't',
+        arguments: {},
+        _meta: metaWith(wire([AGENT_A, { sub: 'agent-c', type: 'agent' }])),
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(backend.callTool).toHaveBeenCalledTimes(1);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it('rejects a looping chain on a resource read too', async () => {
+    const backend = makeMockBackend();
+    const proxy = await startProxyWithIdentity(backend, PROXY_B_CALLER);
+
+    try {
+      const res = await proxy.call('resources/read', {
+        uri: 'res://a',
+        _meta: metaWith(wire([{ sub: 'proxy-b-caller', type: 'agent' }])),
+      });
+
+      expect(res.error).toMatchObject({
+        data: { rejectionReason: 'DELEGATION_INVALID' },
+      });
+      expect(backend.readResource).not.toHaveBeenCalled();
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it('skips the loop check when no identity was resolved', async () => {
+    const backend = makeMockBackend();
+    const proxy = await startProxyWithIdentity(backend, undefined);
+
+    try {
+      // The same chain that loops above: with nothing resolved there is no
+      // sub to look for, so only structural validation applies (ADR-0016).
+      const res = await proxy.call('tools/call', {
+        name: 't',
+        arguments: {},
+        _meta: metaWith(wire([{ sub: 'proxy-b-caller', type: 'agent' }])),
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(backend.callTool).toHaveBeenCalledTimes(1);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it('skips the loop check on stdio', async () => {
+    const backend = makeMockBackend();
+    const server = createProxyServer(backend, { name: 'test-server' });
+
+    await invokeHandler(server, 'tools/call', {
+      name: 't',
+      arguments: {},
+      _meta: metaWith(wire([{ sub: 'proxy-b-caller', type: 'agent' }])),
+    });
+
+    expect(backend.callTool).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('detectDelegationLoop()', () => {
+  const identity: Identity = { ...PROXY_B_CALLER };
+  const link = (sub: string): Identity => ({ ...PROXY_B_CALLER, sub });
+
+  it.each([
+    ['the caller is in the chain', [link('a'), link('proxy-b-caller')], true],
+    ['the caller is absent', [link('a'), link('b')], false],
+    ['the chain is empty', [], false],
+  ] as const)('%s: %s', (_case, delegatedFrom, looped) => {
+    const error = detectDelegationLoop(
+      createProxyContext({ identity, delegatedFrom: [...delegatedFrom] }),
+    );
+    expect(error === undefined).toBe(!looped);
+  });
+
+  it('returns nothing without a resolved identity, chain or not', () => {
+    expect(
+      detectDelegationLoop(
+        createProxyContext({ delegatedFrom: [link('proxy-b-caller')] }),
+      ),
+    ).toBeUndefined();
+    expect(detectDelegationLoop(createProxyContext())).toBeUndefined();
   });
 });
 
