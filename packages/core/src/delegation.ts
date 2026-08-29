@@ -76,14 +76,16 @@ function isIsoTimestamp(value: unknown): value is string {
   );
 }
 
+function rejection(detail: string): McpError {
+  return rejectionMcpError(
+    'DELEGATION_INVALID',
+    ErrorCode.InvalidRequest,
+    `Invalid delegation chain: ${detail}`,
+  );
+}
+
 function invalid(detail: string): InboundDelegation {
-  return {
-    error: rejectionMcpError(
-      'DELEGATION_INVALID',
-      ErrorCode.InvalidRequest,
-      `Invalid delegation chain: ${detail}`,
-    ),
-  };
+  return { error: rejection(detail) };
 }
 
 /**
@@ -166,6 +168,34 @@ export function readInboundDelegation(req: {
   // An empty presented chain says the same thing as no chain at all, and
   // leaving `delegatedFrom` unset keeps it either absent or non-empty.
   return chain.length === 0 ? {} : { chain };
+}
+
+/**
+ * Detects a chain that loops back through this proxy: the sub of the identity
+ * it resolved for the caller already appears in the chain that caller
+ * presents, so the call has cycled (ADR-0016).
+ *
+ * Runs after identity resolution and returns the rejection rather than
+ * throwing it, so the caller throws it inside the pipeline and the audit
+ * trail records the attempt against the identity that tripped it.
+ *
+ * With no resolved identity there is nothing to look for, which is the stdio
+ * case: only the structural validation in {@link readInboundDelegation}
+ * applies there. Core sees only the calls it forwards itself, so a cycle that
+ * closes through a local tool handler's own outbound call is outside this
+ * check, exactly as ADR-0011 said a partial control must admit.
+ */
+export function detectDelegationLoop(
+  context: ProxyContext,
+): McpError | undefined {
+  const sub = context.identity?.sub;
+  if (sub === undefined) return undefined;
+  const looped = (context.delegatedFrom ?? []).some(
+    (entry) => entry.sub === sub,
+  );
+  return looped
+    ? rejection(`the caller ${JSON.stringify(sub)} is already in the chain`)
+    : undefined;
 }
 
 /**

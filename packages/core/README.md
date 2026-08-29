@@ -454,6 +454,16 @@ A malformed payload rejects the call with `DELEGATION_INVALID` (`InvalidRequest`
 Malformed means an unknown `v`, a `chain` that is not an array, more than 32 entries, an entry that is not an object, a missing or empty or non-string `sub`, or a `type` outside the union.
 An absent payload is not an error and leaves `delegatedFrom` unset.
 
+A chain that loops back through this proxy rejects with `DELEGATION_INVALID` too.
+A chain loops when the `sub` of the identity the proxy resolved for the caller already appears in the chain that same caller presents: the authenticated caller is a link in the history it hands over, so the call has cycled.
+The check runs after identity resolution and inside the pipeline, so the rejection is audited against the identity that tripped it.
+With no resolved identity there is nothing to look for, which is the stdio case: only the structural validation above applies there.
+
+What loop detection does not cover: core sees only the calls it forwards itself.
+A cycle that closes through a local tool handler's own outbound call is invisible to it, because that call is host code that may not be MCP at all, which is why [ADR-0011](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0011-proxy-originated-call-attribution.md) rejected a hop counter and why the 32-entry cap is a parse bound rather than a depth policy.
+A deployment that legitimately re-enters the same proxy has no opt-out: re-entry under the same resolved identity is the cycle, and a switch to allow it would make the control decorative.
+Resolve a distinct identity for the re-entering hop, or do not route the call back through the proxy it already passed.
+
 For the outbound direction, `outboundDelegationChain(context)` returns the oldest-first chain (`delegatedFrom` plus the current identity), per [ADR-0011](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0011-proxy-originated-call-attribution.md).
 Core attaches it to every call it forwards to a backend, so the backend sees the chain the proxy can vouch for and never the caller's own copy, which the strip removed.
 A local tool handler calls out through your code, so your host attaches it: for an outbound MCP call, `serializeDelegationChain(outboundDelegationChain(context))` placed at `_meta[DELEGATION_META_KEY]` is exactly what core sends.
