@@ -198,7 +198,12 @@ export function createAuditMiddleware(
     // The subject is the RESOLVED identity's `sub`, so anonymous events all
     // land in the `anonymousIdentity()` bucket, which is the designated
     // single bucket the ADR calls for.
-    const subjectKey = await options.keyStore?.getOrCreate(identity.sub);
+    // Written as a ternary rather than `await options.keyStore?.…` so default
+    // mode does not even take the extra microtask tick an `await undefined`
+    // would cost it.
+    const subjectKey = options.keyStore
+      ? await options.keyStore.getOrCreate(identity.sub)
+      : undefined;
     const startedAt = new Date().toISOString();
     const start = performance.now();
     const sessionId = ctx.sessionId;
