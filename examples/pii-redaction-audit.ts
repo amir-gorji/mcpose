@@ -166,6 +166,7 @@ async function main() {
   const server = await startHttpProxy(
     backend,
     {
+      name: 'pii-redaction-audit',
       toolMiddleware: [piiMW, auditHandle.middleware],
     },
     {

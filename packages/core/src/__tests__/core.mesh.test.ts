@@ -112,33 +112,53 @@ const advertisedCapabilities = (
 
 describe('createProxyServer() — backend key validation', () => {
   it('throws on an empty backends record', () => {
-    expect(() => createProxyServer({})).toThrow(/backends record is empty/);
+    expect(() => createProxyServer({}, { name: 'test-server' })).toThrow(
+      /backends record is empty/,
+    );
   });
 
   it('throws on an empty backend key', () => {
-    expect(() => createProxyServer({ '': makeMeshBackend([]) })).toThrow(
-      /backend key must not be empty/,
-    );
+    expect(() =>
+      createProxyServer({ '': makeMeshBackend([]) }, { name: 'test-server' }),
+    ).toThrow(/backend key must not be empty/);
   });
 
   it('throws on a backend key containing the namespace separator', () => {
-    expect(() => createProxyServer({ my__crm: makeMeshBackend([]) })).toThrow(
-      /must not contain "__"/,
-    );
+    expect(() =>
+      createProxyServer(
+        { my__crm: makeMeshBackend([]) },
+        { name: 'test-server' },
+      ),
+    ).toThrow(/must not contain "__"/);
   });
 
   it('names the offending backend when one is not connected', () => {
     const disconnected = makeMeshBackend([]);
     vi.mocked(disconnected.getServerCapabilities).mockReturnValue(undefined);
     expect(() =>
-      createProxyServer({ crm: makeMeshBackend([]), docs: disconnected }),
+      createProxyServer(
+        { crm: makeMeshBackend([]), docs: disconnected },
+        { name: 'test-server' },
+      ),
     ).toThrow(/backend "docs" is not connected/);
   });
 
   it('validates backend keys at startHttpProxy, before the first session', () => {
     expect(() =>
-      startHttpProxy({ a__b: makeMeshBackend([]) }, {}, { port: 0 }),
+      startHttpProxy(
+        { a__b: makeMeshBackend([]) },
+        { name: 'test-server' },
+        { port: 0 },
+      ),
     ).toThrow(/must not contain "__"/);
+  });
+
+  it('validates the proxy name at startHttpProxy, before the first session', () => {
+    // Sessions build their proxy server lazily, so without the startup check
+    // a blank name would only surface on the first initialize (#122).
+    expect(() =>
+      startHttpProxy({ crm: makeMeshBackend([]) }, { name: '  ' }, { port: 0 }),
+    ).toThrow(/name must be a non-empty string/);
   });
 });
 
@@ -146,10 +166,13 @@ describe('createProxyServer() — backend key validation', () => {
 
 describe('createProxyServer() — mesh namespacing', () => {
   it('exposes every backend tool under its backend key', async () => {
-    const server = createProxyServer({
-      crm: makeMeshBackend(['lookup', 'delete_account']),
-      docs: makeMeshBackend(['search']),
-    });
+    const server = createProxyServer(
+      {
+        crm: makeMeshBackend(['lookup', 'delete_account']),
+        docs: makeMeshBackend(['search']),
+      },
+      { name: 'test-server' },
+    );
 
     expect(await listToolNames(server)).toEqual([
       'crm__lookup',
@@ -161,7 +184,7 @@ describe('createProxyServer() — mesh namespacing', () => {
   it('routes a call to its backend with the un-namespaced name', async () => {
     const crm = makeMeshBackend(['lookup']);
     const docs = makeMeshBackend(['search']);
-    const server = createProxyServer({ crm, docs });
+    const server = createProxyServer({ crm, docs }, { name: 'test-server' });
 
     const result = await invokeHandler(server, 'tools/call', {
       name: 'crm__lookup',
@@ -179,7 +202,7 @@ describe('createProxyServer() — mesh namespacing', () => {
 
   it('splits on the first separator, so an upstream name may contain one', async () => {
     const crm = makeMeshBackend(['find__by__email']);
-    const server = createProxyServer({ crm });
+    const server = createProxyServer({ crm }, { name: 'test-server' });
 
     expect(await listToolNames(server)).toEqual(['crm__find__by__email']);
     await invokeHandler(server, 'tools/call', {
@@ -205,7 +228,7 @@ describe('createProxyServer() — mesh unroutable calls', () => {
   for (const [label, name] of cases) {
     it(`rejects ${label} with BACKEND_UNROUTABLE`, async () => {
       const crm = makeMeshBackend(['lookup']);
-      const server = createProxyServer({ crm });
+      const server = createProxyServer({ crm }, { name: 'test-server' });
 
       await expect(
         invokeHandler(server, 'tools/call', { name, arguments: {} }),
@@ -222,10 +245,13 @@ describe('createProxyServer() — mesh unroutable calls', () => {
       capabilities: { prompts: {} },
       prompts: ['brief'],
     });
-    const server = createProxyServer({
-      crm: makeMeshBackend(['lookup']),
-      wiki: promptsOnly,
-    });
+    const server = createProxyServer(
+      {
+        crm: makeMeshBackend(['lookup']),
+        wiki: promptsOnly,
+      },
+      { name: 'test-server' },
+    );
 
     await expect(
       invokeHandler(server, 'tools/call', {
@@ -249,7 +275,7 @@ describe('createProxyServer() — mesh unroutable calls', () => {
     };
     const server = createProxyServer(
       { crm: makeMeshBackend(['lookup']) },
-      { toolMiddleware: [auditMW] },
+      { name: 'test-server', toolMiddleware: [auditMW] },
     );
 
     await expect(
@@ -263,7 +289,7 @@ describe('createProxyServer() — mesh unroutable calls', () => {
     const events: TelemetryEvent[] = [];
     const server = createProxyServer(
       { crm: makeMeshBackend(['lookup']) },
-      { onTelemetry: (e) => events.push(e) },
+      { name: 'test-server', onTelemetry: (e) => events.push(e) },
     );
 
     await expect(
@@ -291,7 +317,7 @@ describe('createProxyServer() — mesh configuration is global and namespaced', 
         crm: makeMeshBackend(['lookup', 'delete_account']),
         docs: makeMeshBackend(['delete_account']),
       },
-      { hiddenTools: ['crm__delete_account'] },
+      { name: 'test-server', hiddenTools: ['crm__delete_account'] },
     );
 
     expect(await listToolNames(server)).toEqual([
@@ -311,6 +337,7 @@ describe('createProxyServer() — mesh configuration is global and namespaced', 
     const server = createProxyServer(
       { crm: makeMeshBackend(['lookup']), docs: makeMeshBackend(['search']) },
       {
+        name: 'test-server',
         hiddenTools: (name) => {
           seen.push(name);
           return name.startsWith('crm__');
@@ -338,6 +365,7 @@ describe('createProxyServer() — mesh configuration is global and namespaced', 
     const server = createProxyServer(
       { crm: makeMeshBackend(['lookup']) },
       {
+        name: 'test-server',
         toolMiddleware: [transform, observer],
         passThroughTools: ['crm__lookup'],
       },
@@ -360,7 +388,7 @@ describe('createProxyServer() — mesh configuration is global and namespaced', 
     };
     const server = createProxyServer(
       { crm: makeMeshBackend(['lookup']), docs: makeMeshBackend(['search']) },
-      { toolMiddleware: [mw] },
+      { name: 'test-server', toolMiddleware: [mw] },
     );
 
     await invokeHandler(server, 'tools/call', {
@@ -381,7 +409,7 @@ describe('createProxyServer() — mesh degradation', () => {
     const events: TelemetryEvent[] = [];
     const server = createProxyServer(
       { crm, docs },
-      { onTelemetry: (e) => events.push(e) },
+      { name: 'test-server', onTelemetry: (e) => events.push(e) },
     );
 
     expect(await listToolNames(server)).toEqual(['crm__lookup']);
@@ -421,7 +449,7 @@ describe('createProxyServer() — mesh degradation', () => {
     const crm = makeMeshBackend(['lookup']);
     const docs = makeMeshBackend(['search']);
     vi.mocked(docs.callTool).mockRejectedValue(new Error('upstream down'));
-    const server = createProxyServer({ crm, docs });
+    const server = createProxyServer({ crm, docs }, { name: 'test-server' });
 
     await expect(
       invokeHandler(server, 'tools/call', {
@@ -440,10 +468,13 @@ describe('createProxyServer() — mesh degradation', () => {
   it('degrades silently but completely without an onTelemetry sink', async () => {
     const docs = makeMeshBackend(['search']);
     vi.mocked(docs.listTools).mockRejectedValue(new Error('upstream down'));
-    const server = createProxyServer({
-      crm: makeMeshBackend(['lookup']),
-      docs,
-    });
+    const server = createProxyServer(
+      {
+        crm: makeMeshBackend(['lookup']),
+        docs,
+      },
+      { name: 'test-server' },
+    );
 
     expect(await listToolNames(server)).toEqual(['crm__lookup']);
   });
@@ -457,6 +488,7 @@ describe('createProxyServer() — mesh degradation', () => {
     const server = createProxyServer(
       { crm: makeMeshBackend(['lookup']), docs },
       {
+        name: 'test-server',
         onTelemetry: () => {
           throw new Error('sink down');
         },
@@ -481,7 +513,10 @@ describe('createProxyServer() — mesh listing is unpaginated', () => {
           : { tools: [tool('b')] },
       ),
     );
-    const server = createProxyServer({ crm, docs: makeMeshBackend(['c']) });
+    const server = createProxyServer(
+      { crm, docs: makeMeshBackend(['c']) },
+      { name: 'test-server' },
+    );
 
     const result = (await invokeHandler(server, 'tools/list')) as {
       tools: { name: string }[];
@@ -504,7 +539,7 @@ describe('createProxyServer() — mesh listing is unpaginated', () => {
     const events: TelemetryEvent[] = [];
     const server = createProxyServer(
       { crm, docs: makeMeshBackend(['c']) },
-      { onTelemetry: (e) => events.push(e) },
+      { name: 'test-server', onTelemetry: (e) => events.push(e) },
     );
 
     expect(await listToolNames(server)).toEqual(['docs__c']);
@@ -518,6 +553,7 @@ describe('createProxyServer() — mesh listing is unpaginated', () => {
     const server = createProxyServer(
       { crm: makeMeshBackend(['lookup']) },
       {
+        name: 'test-server',
         localTools: [
           {
             tool: tool('why_blocked'),
@@ -538,21 +574,27 @@ describe('createProxyServer() — mesh listing is unpaginated', () => {
 
 describe('createProxyServer() — mesh capability union', () => {
   it('advertises a capability when any backend has it', () => {
-    const server = createProxyServer({
-      crm: makeMeshBackend(['lookup'], { capabilities: { tools: {} } }),
-      wiki: makeMeshBackend([], { capabilities: { prompts: {} } }),
-    });
+    const server = createProxyServer(
+      {
+        crm: makeMeshBackend(['lookup'], { capabilities: { tools: {} } }),
+        wiki: makeMeshBackend([], { capabilities: { prompts: {} } }),
+      },
+      { name: 'test-server' },
+    );
 
     expect(advertisedCapabilities(server)).toEqual({ tools: {}, prompts: {} });
   });
 
   it('advertises listChanged when any backend supports it', () => {
-    const server = createProxyServer({
-      crm: makeMeshBackend(['lookup'], { capabilities: { tools: {} } }),
-      docs: makeMeshBackend(['search'], {
-        capabilities: { tools: { listChanged: true } },
-      }),
-    });
+    const server = createProxyServer(
+      {
+        crm: makeMeshBackend(['lookup'], { capabilities: { tools: {} } }),
+        docs: makeMeshBackend(['search'], {
+          capabilities: { tools: { listChanged: true } },
+        }),
+      },
+      { name: 'test-server' },
+    );
 
     expect(advertisedCapabilities(server)).toEqual({
       tools: { listChanged: true },
@@ -563,6 +605,7 @@ describe('createProxyServer() — mesh capability union', () => {
     const server = createProxyServer(
       { wiki: makeMeshBackend([], { capabilities: { prompts: {} } }) },
       {
+        name: 'test-server',
         localTools: [
           {
             tool: tool('why_blocked'),
@@ -577,11 +620,14 @@ describe('createProxyServer() — mesh capability union', () => {
   });
 
   it('never advertises resources in mesh mode', async () => {
-    const server = createProxyServer({
-      crm: makeMeshBackend(['lookup'], {
-        capabilities: { tools: {}, resources: { listChanged: true } },
-      }),
-    });
+    const server = createProxyServer(
+      {
+        crm: makeMeshBackend(['lookup'], {
+          capabilities: { tools: {}, resources: { listChanged: true } },
+        }),
+      },
+      { name: 'test-server' },
+    );
 
     expect(advertisedCapabilities(server).resources).toBeUndefined();
     await expect(invokeHandler(server, 'resources/list')).rejects.toThrow(
@@ -597,6 +643,7 @@ describe('createProxyServer() — mesh localTools composition', () => {
     const server = createProxyServer(
       { crm: makeMeshBackend(['lookup']) },
       {
+        name: 'test-server',
         localTools: [
           {
             tool: tool('why_blocked'),
@@ -614,6 +661,7 @@ describe('createProxyServer() — mesh localTools composition', () => {
     const server = createProxyServer(
       { crm },
       {
+        name: 'test-server',
         localTools: [
           {
             tool: tool('crm__lookup'),
@@ -638,6 +686,7 @@ describe('createProxyServer() — mesh localTools composition', () => {
     const server = createProxyServer(
       { crm: makeMeshBackend(['lookup']) },
       {
+        name: 'test-server',
         hiddenTools: ['why_blocked'],
         localTools: [
           {
@@ -668,7 +717,7 @@ describe('createProxyServer() — mesh list-changed fan-in', () => {
     const docs = makeMeshBackend(['search'], {
       capabilities: { tools: { listChanged: true } },
     });
-    const server = createProxyServer({ crm, docs });
+    const server = createProxyServer({ crm, docs }, { name: 'test-server' });
     const send = vi
       .spyOn(server, 'sendToolListChanged')
       .mockResolvedValue(undefined);
@@ -699,7 +748,7 @@ describe('createProxyServer() — mesh list-changed fan-in', () => {
         resources: { listChanged: true },
       },
     });
-    const mesh = createProxyServer({ crm });
+    const mesh = createProxyServer({ crm }, { name: 'test-server' });
     const send = vi
       .spyOn(mesh, 'sendResourceListChanged')
       .mockResolvedValue(undefined);
@@ -719,8 +768,8 @@ describe('createProxyServer() — mesh list-changed fan-in', () => {
       },
     });
     // The mesh creates the bus first, and advertises no resources.
-    const mesh = createProxyServer({ crm: shared });
-    const direct = createProxyServer(shared);
+    const mesh = createProxyServer({ crm: shared }, { name: 'test-server' });
+    const direct = createProxyServer(shared, { name: 'test-server' });
     const meshSend = vi
       .spyOn(mesh, 'sendResourceListChanged')
       .mockResolvedValue(undefined);
@@ -745,10 +794,13 @@ describe('createProxyServer() — mesh prompts', () => {
       capabilities: { prompts: {} },
       prompts: ['brief'],
     });
-    const server = createProxyServer({
-      crm: makeMeshBackend(['lookup']),
-      wiki,
-    });
+    const server = createProxyServer(
+      {
+        crm: makeMeshBackend(['lookup']),
+        wiki,
+      },
+      { name: 'test-server' },
+    );
 
     const list = (await invokeHandler(server, 'prompts/list')) as {
       prompts: { name: string }[];
@@ -760,12 +812,15 @@ describe('createProxyServer() — mesh prompts', () => {
   });
 
   it('rejects an unroutable prompt name', async () => {
-    const server = createProxyServer({
-      wiki: makeMeshBackend([], {
-        capabilities: { prompts: {} },
-        prompts: ['brief'],
-      }),
-    });
+    const server = createProxyServer(
+      {
+        wiki: makeMeshBackend([], {
+          capabilities: { prompts: {} },
+          prompts: ['brief'],
+        }),
+      },
+      { name: 'test-server' },
+    );
 
     await expect(
       invokeHandler(server, 'prompts/get', { name: 'brief' }),
@@ -785,7 +840,10 @@ describe('createProxyServer() — mesh prompts', () => {
       seen.push(req.params.name);
       return next(req);
     };
-    const server = createProxyServer({ wiki }, { promptMiddleware: [mw] });
+    const server = createProxyServer(
+      { wiki },
+      { name: 'test-server', promptMiddleware: [mw] },
+    );
 
     await invokeHandler(server, 'prompts/get', { name: 'wiki__brief' });
 
@@ -802,7 +860,10 @@ describe('createProxyServer() — mesh prompts', () => {
     });
     const rewrite: PromptMiddleware = (req, next) =>
       next({ ...req, params: { ...req.params, arguments: { topic: 'q4' } } });
-    const server = createProxyServer({ wiki }, { promptMiddleware: [rewrite] });
+    const server = createProxyServer(
+      { wiki },
+      { name: 'test-server', promptMiddleware: [rewrite] },
+    );
 
     await invokeHandler(server, 'prompts/get', {
       name: 'wiki__brief',
@@ -834,7 +895,7 @@ describe('createProxyServer() — mesh prompts', () => {
           prompts: ['brief'],
         }),
       },
-      { promptMiddleware: [observer] },
+      { name: 'test-server', promptMiddleware: [observer] },
     );
 
     await expect(
@@ -859,7 +920,7 @@ describe('createProxyServer() — mesh prompts', () => {
     const events: TelemetryEvent[] = [];
     const server = createProxyServer(
       { wiki, kb },
-      { onTelemetry: (e) => events.push(e) },
+      { name: 'test-server', onTelemetry: (e) => events.push(e) },
     );
 
     const list = (await invokeHandler(server, 'prompts/list')) as {
@@ -883,7 +944,7 @@ describe('createProxyServer() — mesh boundary behaviour', () => {
       content: [],
       _meta: { upstream: 'trace' },
     });
-    const server = createProxyServer({ crm });
+    const server = createProxyServer({ crm }, { name: 'test-server' });
 
     const result = await invokeHandler(server, 'tools/call', {
       name: 'crm__lookup',

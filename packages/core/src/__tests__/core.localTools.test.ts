@@ -76,6 +76,7 @@ type ListResult = { tools: { name: string; description?: string }[] };
 describe('createProxyServer() — localTools appear in tools/list', () => {
   it('lists local tools alongside upstream tools', async () => {
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       localTools: [makeLocalTool('local_tool')],
     });
 
@@ -95,6 +96,7 @@ describe('createProxyServer() — localTools appear in tools/list', () => {
       return result;
     };
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       localTools: [makeLocalTool('local_tool')],
       listToolsMiddleware: [observe],
     });
@@ -105,6 +107,7 @@ describe('createProxyServer() — localTools appear in tools/list', () => {
 
   it('adds local tools to the first page only, so pagination does not duplicate them', async () => {
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       localTools: [makeLocalTool('local_tool')],
     });
 
@@ -116,6 +119,7 @@ describe('createProxyServer() — localTools appear in tools/list', () => {
 
   it('filters a shadowed upstream duplicate on later pages too, so the client sees one entry per name', async () => {
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       localTools: [makeLocalTool('shadowed_tool')],
     });
 
@@ -127,6 +131,7 @@ describe('createProxyServer() — localTools appear in tools/list', () => {
 
   it('a local tool shadows an upstream tool of the same name — one entry, the local one', async () => {
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       localTools: [makeLocalTool('shadowed_tool')],
     });
 
@@ -154,6 +159,7 @@ describe('createProxyServer() — a local tool call routes to its handler', () =
       },
     );
     const server = createProxyServer(backend, {
+      name: 'test-server',
       localTools: [makeLocalTool('local_tool', handler)],
     });
 
@@ -174,6 +180,7 @@ describe('createProxyServer() — a local tool call routes to its handler', () =
       return { ...result, content: [{ type: 'text', text: 'redacted' }] };
     };
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       localTools: [makeLocalTool('local_tool')],
       toolMiddleware: [redact],
     });
@@ -188,6 +195,7 @@ describe('createProxyServer() — a local tool call routes to its handler', () =
   it('a shadowed name routes to the local handler, not the upstream', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       localTools: [makeLocalTool('shadowed_tool')],
     });
 
@@ -208,6 +216,7 @@ describe('createProxyServer() — localTools precedence', () => {
   it('hiddenTools beats a local tool: filtered from the list, rejected with TOOL_HIDDEN', async () => {
     const handler = vi.fn(async () => ({ content: [] }));
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       localTools: [makeLocalTool('local_tool', handler)],
       hiddenTools: ['local_tool'],
     });
@@ -230,6 +239,7 @@ describe('createProxyServer() — localTools precedence', () => {
       return { ...result, content: [{ type: 'text', text: 'transformed' }] };
     };
     const server = createProxyServer(makeMockBackend(), {
+      name: 'test-server',
       localTools: [makeLocalTool('local_tool')],
       passThroughTools: ['local_tool'],
       toolMiddleware: [transform],
@@ -245,6 +255,7 @@ describe('createProxyServer() — localTools precedence', () => {
   it('throws at createProxyServer on a duplicate local tool name', () => {
     expect(() =>
       createProxyServer(makeMockBackend(), {
+        name: 'test-server',
         localTools: [makeLocalTool('dup'), makeLocalTool('dup')],
       }),
     ).toThrow(/duplicate local tool name "dup"/);
@@ -254,7 +265,10 @@ describe('createProxyServer() — localTools precedence', () => {
     expect(() =>
       startHttpProxy(
         makeMockBackend(),
-        { localTools: [makeLocalTool('dup'), makeLocalTool('dup')] },
+        {
+          name: 'test-server',
+          localTools: [makeLocalTool('dup'), makeLocalTool('dup')],
+        },
         { port: 0 },
       ),
     ).toThrow(/duplicate local tool name "dup"/);
@@ -267,6 +281,7 @@ describe('createProxyServer() — localTools against an upstream without tools',
   it('advertises the tools capability and serves the local tool', async () => {
     const backend = makeMockBackend({ resources: {} });
     const server = createProxyServer(backend, {
+      name: 'test-server',
       localTools: [makeLocalTool('local_tool')],
     });
 
@@ -284,6 +299,7 @@ describe('createProxyServer() — localTools against an upstream without tools',
   it('rejects an unknown tool with MethodNotFound instead of forwarding upstream', async () => {
     const backend = makeMockBackend({ resources: {} });
     const server = createProxyServer(backend, {
+      name: 'test-server',
       localTools: [makeLocalTool('local_tool')],
     });
 

@@ -142,6 +142,7 @@ const identity: Identity = {
 // ---------------------------------------------------------------------------
 
 const server = createProxyServer(backend, {
+  name: 'governance-proxy',
   toolMiddleware: [loggingMW],
   hiddenTools,
   passThroughTools,

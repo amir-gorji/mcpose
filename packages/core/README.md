@@ -84,7 +84,7 @@ const loggingMW: ToolMiddleware = async (req, next) => {
 };
 
 // 3. Start the proxy on stdio.
-await startProxy(backend, { toolMiddleware: [loggingMW] });
+await startProxy(backend, { name: 'my-proxy', toolMiddleware: [loggingMW] });
 ```
 
 Point your MCP client at this process instead of the upstream, and every tool call flows through `loggingMW`.
@@ -102,7 +102,7 @@ const backend = await createBackendClient({ url: 'http://localhost:9000/mcp' });
 
 const server = await startHttpProxy(
   backend,
-  { toolMiddleware: [loggingMW] },
+  { name: 'my-proxy', toolMiddleware: [loggingMW] },
   {
     port: 3000,
     resolveIdentity: extractJwt, // stamped on every ProxyContext in the session
@@ -144,9 +144,9 @@ Behavior worth knowing before you deploy it:
 | Export | Purpose |
 |---|---|
 | `createBackendClient(config)` | Connect to an upstream over stdio (`command`/`args`) or HTTP (`url`). |
-| `startProxy(backends, options?)` | Serve the proxy over **stdio**. Resolves when the transport closes. |
-| `startHttpProxy(backends, proxyOptions?, httpOptions?)` | Serve over **HTTP/SSE**: identity, mTLS, sessions, reconnect replay. Resolves with a listening `http.Server`. |
-| `createProxyServer(backends, options?)` | Build the underlying `Server` without binding a transport. Throws if a backend is not connected, so a mis-wired proxy fails at startup rather than on the first call. |
+| `startProxy(backends, options)` | Serve the proxy over **stdio**. Resolves when the transport closes. |
+| `startHttpProxy(backends, proxyOptions, httpOptions?)` | Serve over **HTTP/SSE**: identity, mTLS, sessions, reconnect replay. Resolves with a listening `http.Server`. |
+| `createProxyServer(backends, options)` | Build the underlying `Server` without binding a transport. Throws on a blank `options.name` or if a backend is not connected, so a mis-wired proxy fails at startup rather than on the first call. |
 | `compose(middlewares)` | Compose middleware into one, **outermost-first**. |
 | `markPassThroughObserver(mw)` | Return a new middleware that still runs for `passThroughTools`. For observers only, never transformers. |
 | `rejectionMcpError(reason, code, message)` | Build an `McpError` carrying a `RejectionReason` in `error.data`. |
@@ -207,7 +207,7 @@ await startProxy(
     crm: await createBackendClient({ url: 'https://crm.internal/mcp' }),
     docs: await createBackendClient({ command: 'node', args: ['./docs-server.mjs'] }),
   },
-  { hiddenTools: ['crm__delete_account'] },
+  { name: 'my-proxy', hiddenTools: ['crm__delete_account'] },
 );
 ```
 
@@ -238,7 +238,7 @@ See [ADR-0013](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0013-mult
 
 ```ts
 interface ProxyOptions {
-  name?:                 string;
+  name:                  string;  // Required, non-blank
   version?:              string;
   toolMiddleware?:       ReadonlyArray<ToolMiddleware>;
   resourceMiddleware?:   ReadonlyArray<ResourceMiddleware>;
@@ -263,7 +263,9 @@ interface LocalTool {
 </details>
 
 - `name` and `version` set the MCP server identity returned in `initialize`.
-  `name` defaults to `'mcpose'` and `version` to the mcpose library version, so set your own when you ship a proxy.
+  `name` is required and an empty or whitespace-only one throws at `createProxyServer` (and at `startHttpProxy`, before the first session).
+  It is also recorded as provenance on every `ProxyContext`, audit event, and `ReplayManifest` ([ADR-0012](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0012-proxy-identity-recorded-as-provenance.md)), so a default would record a whole fleet under one name and give a trail attribution in appearance only.
+  `version` keeps its default of the mcpose library version; set your own when you ship a proxy.
 - `hiddenTools` / `hiddenResources` reject calls with a structured [`RejectionReason`](#rejection-reasons) in the MCP error `data` field.
   The rejection is thrown *inside* the pipeline, so observing middleware such as audit records it; the upstream is never called.
 - `hiddenTools` also accepts a `HiddenToolPredicate` (`(name, args) => boolean`), because a name array cannot see through a dispatcher (meta-tool) that takes the real tool name as an argument.
@@ -338,7 +340,7 @@ interface HttpProxyOptions {
 
 function startHttpProxy(
   backend: BackendClient,
-  options?: ProxyOptions,
+  options: ProxyOptions,
   httpOptions?: HttpProxyOptions,
 ): Promise<http.Server>;
 ```
@@ -393,7 +395,7 @@ interface PolicyDecision {
 }
 
 interface ProxyIdentity {
-  name: string;     // ProxyOptions.name, defaulted to 'mcpose'
+  name: string;     // ProxyOptions.name, required and non-blank
   version: string;  // ProxyOptions.version, defaulted to the mcpose library version
 }
 

@@ -168,7 +168,7 @@ const loggingMW: ToolMiddleware = async (req, next) => {
 };
 
 // 3. Serve the proxy over stdio.
-await startProxy(backend, { toolMiddleware: [loggingMW] });
+await startProxy(backend, { name: 'my-proxy', toolMiddleware: [loggingMW] });
 ```
 
 Point your MCP client at this process instead of the upstream, and every tool call now flows through `loggingMW`.
@@ -185,7 +185,7 @@ await startProxy(
     crm: await createBackendClient({ url: 'https://crm.internal/mcp' }),
     docs: await createBackendClient({ command: 'node', args: ['./docs-server.mjs'] }),
   },
-  { toolMiddleware: [loggingMW], hiddenTools: ['crm__delete_account'] },
+  { name: 'my-proxy', toolMiddleware: [loggingMW], hiddenTools: ['crm__delete_account'] },
 );
 ```
 
@@ -343,6 +343,7 @@ const auditHandle = createAuditMiddleware({
 await startHttpProxy(
   backend,
   {
+    name: 'my-proxy',
     toolMiddleware: [
       createPiiMiddleware([/\b\d{9}\b/g, /[A-Z]{2}\d{6}/g]), // redaction runs first
       auditHandle.middleware,                                // so audit records clean data

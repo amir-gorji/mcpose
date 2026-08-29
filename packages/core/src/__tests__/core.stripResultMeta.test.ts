@@ -70,7 +70,7 @@ async function invokeHandler(
 describe('createProxyServer() — stripResultMeta defaults to on', () => {
   it('strips _meta from a tool call result before the client sees it', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     const result = await invokeHandler(server, 'tools/call', {
       name: 'search_issues',
@@ -88,7 +88,7 @@ describe('createProxyServer() — stripResultMeta defaults to on', () => {
     ['prompts/get', { name: 'p' }],
   ] as const)('strips result _meta from %s', async (method, params) => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     const result = await invokeHandler(server, method, { ...params });
     expect(result).not.toHaveProperty('_meta');
@@ -97,6 +97,7 @@ describe('createProxyServer() — stripResultMeta defaults to on', () => {
   it('applies to pass-through tools and resources too', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       passThroughTools: ['search_issues'],
       passThroughResources: ['res://a'],
     });
@@ -115,7 +116,7 @@ describe('createProxyServer() — stripResultMeta defaults to on', () => {
 
   it('leaves block-level _meta, per-tool _meta, and structuredContent untouched', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, {});
+    const server = createProxyServer(backend, { name: 'test-server' });
 
     const toolResult = (await invokeHandler(server, 'tools/call', {
       name: 'search_issues',
@@ -135,6 +136,7 @@ describe('createProxyServer() — stripResultMeta defaults to on', () => {
   it('does NOT strip a local tool result _meta', async () => {
     const backend = makeMockBackend();
     const server = createProxyServer(backend, {
+      name: 'test-server',
       localTools: [
         {
           tool: { name: 'local_echo', inputSchema: { type: 'object' } },
@@ -165,7 +167,10 @@ describe('createProxyServer() — the strip happens inside the innermost next', 
       seenMeta = result._meta;
       return result;
     };
-    const server = createProxyServer(backend, { toolMiddleware: [observe] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [observe],
+    });
 
     await invokeHandler(server, 'tools/call', {
       name: 'search_issues',
@@ -180,7 +185,10 @@ describe('createProxyServer() — the strip happens inside the innermost next', 
       const result = await next(req);
       return { ...result, _meta: { redactedBy: 'pii-mw' } };
     };
-    const server = createProxyServer(backend, { toolMiddleware: [addMeta] });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      toolMiddleware: [addMeta],
+    });
 
     const result = await invokeHandler(server, 'tools/call', {
       name: 'search_issues',
@@ -195,7 +203,10 @@ describe('createProxyServer() — the strip happens inside the innermost next', 
 describe('createProxyServer() — stripResultMeta: false restores forwarding', () => {
   it('forwards result _meta verbatim when disabled', async () => {
     const backend = makeMockBackend();
-    const server = createProxyServer(backend, { stripResultMeta: false });
+    const server = createProxyServer(backend, {
+      name: 'test-server',
+      stripResultMeta: false,
+    });
 
     const result = await invokeHandler(server, 'tools/call', {
       name: 'search_issues',

@@ -79,6 +79,37 @@ async function invoke(
   return handler({ method, params }, extra);
 }
 
+// ── name validation ────────────────────────────────────────────────────────
+
+describe('createProxyServer() — name is required and non-blank', () => {
+  // The name is provenance on every audit event and manifest (ADR-0012), so a
+  // blank one is a trail that looks attributed and is not (#122). Rejected at
+  // construction, like a duplicate local tool name.
+  it.each([
+    ['empty', ''],
+    ['whitespace-only', '   '],
+    ['a tab and a newline', '\t\n'],
+  ])('throws on a %s name', (_label, name) => {
+    expect(() => createProxyServer(makeRichBackend({ tools: {} }), { name })) //
+      .toThrow(/name must be a non-empty string/);
+  });
+
+  it('throws when a JS caller omits the name the type requires', () => {
+    expect(() =>
+      createProxyServer(
+        makeRichBackend({ tools: {} }),
+        {} as unknown as { name: string },
+      ),
+    ).toThrow(/name must be a non-empty string/);
+  });
+
+  it('accepts a name that is non-blank once trimmed', () => {
+    expect(() =>
+      createProxyServer(makeRichBackend({ tools: {} }), { name: '  edge  ' }),
+    ).not.toThrow();
+  });
+});
+
 // ── capability mirroring ──────────────────────────────────────────────────
 
 describe('createProxyServer() — capability edge cases', () => {

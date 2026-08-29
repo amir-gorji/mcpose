@@ -52,7 +52,11 @@ function rawInitialize(
 
 describe('startHttpProxy() — binds loopback by default', () => {
   it('listens on 127.0.0.1 when host is omitted', async () => {
-    const server = await startHttpProxy(makeMockBackend(), {}, { port: 0 });
+    const server = await startHttpProxy(
+      makeMockBackend(),
+      { name: 'test-server' },
+      { port: 0 },
+    );
     try {
       const addr = server.address();
       expect(addr).not.toBeNull();
@@ -66,7 +70,7 @@ describe('startHttpProxy() — binds loopback by default', () => {
   it('binds a non-loopback address only when asked to', async () => {
     const server = await startHttpProxy(
       makeMockBackend(),
-      {},
+      { name: 'test-server' },
       { port: 0, host: '0.0.0.0', onError: () => {} },
     );
     try {
@@ -81,7 +85,11 @@ describe('startHttpProxy() — binds loopback by default', () => {
 
 describe('startHttpProxy() — DNS-rebinding protection defaults to enforcing on loopback', () => {
   it('rejects a forged Host header with 403 by default', async () => {
-    const server = await startHttpProxy(makeMockBackend(), {}, { port: 0 });
+    const server = await startHttpProxy(
+      makeMockBackend(),
+      { name: 'test-server' },
+      { port: 0 },
+    );
     try {
       const status = await rawInitialize(getPort(server), {
         host: 'evil.example:1234',
@@ -93,7 +101,11 @@ describe('startHttpProxy() — DNS-rebinding protection defaults to enforcing on
   });
 
   it('accepts the real loopback Host and port by default', async () => {
-    const server = await startHttpProxy(makeMockBackend(), {}, { port: 0 });
+    const server = await startHttpProxy(
+      makeMockBackend(),
+      { name: 'test-server' },
+      { port: 0 },
+    );
     try {
       const port = getPort(server);
       expect(await rawInitialize(port, { host: `127.0.0.1:${port}` })).toBe(
@@ -108,7 +120,11 @@ describe('startHttpProxy() — DNS-rebinding protection defaults to enforcing on
   });
 
   it('rejects a cross-site Origin with 403 and accepts the loopback Origin', async () => {
-    const server = await startHttpProxy(makeMockBackend(), {}, { port: 0 });
+    const server = await startHttpProxy(
+      makeMockBackend(),
+      { name: 'test-server' },
+      { port: 0 },
+    );
     try {
       const port = getPort(server);
       expect(
@@ -131,7 +147,7 @@ describe('startHttpProxy() — DNS-rebinding protection defaults to enforcing on
   it('can be disabled explicitly, restoring the pre-3.0.0 behavior', async () => {
     const server = await startHttpProxy(
       makeMockBackend(),
-      {},
+      { name: 'test-server' },
       { port: 0, enableDnsRebindingProtection: false },
     );
     try {
@@ -147,7 +163,7 @@ describe('startHttpProxy() — DNS-rebinding protection defaults to enforcing on
   it('defaults to off for a non-loopback bind', async () => {
     const server = await startHttpProxy(
       makeMockBackend(),
-      {},
+      { name: 'test-server' },
       { port: 0, host: '0.0.0.0', onError: () => {} },
     );
     try {
@@ -167,7 +183,7 @@ describe('startHttpProxy() — explicit allowlists are used verbatim, never merg
   it('an explicit allowedHosts replaces the derived loopback list', async () => {
     const server = await startHttpProxy(
       makeMockBackend(),
-      {},
+      { name: 'test-server' },
       { port: 0, allowedHosts: ['proxy.internal:8080'] },
     );
     try {
@@ -191,7 +207,7 @@ describe('startHttpProxy() — non-loopback bind without resolveIdentity warns o
     const onError = vi.fn();
     const server = await startHttpProxy(
       makeMockBackend(),
-      {},
+      { name: 'test-server' },
       { port: 0, host: '0.0.0.0', onError },
     );
     try {
@@ -206,7 +222,7 @@ describe('startHttpProxy() — non-loopback bind without resolveIdentity warns o
     const onError = vi.fn();
     const server = await startHttpProxy(
       makeMockBackend(),
-      {},
+      { name: 'test-server' },
       {
         port: 0,
         host: '0.0.0.0',
@@ -232,7 +248,7 @@ describe('startHttpProxy() — non-loopback bind without resolveIdentity warns o
     const onError = vi.fn();
     const server = await startHttpProxy(
       makeMockBackend(),
-      {},
+      { name: 'test-server' },
       {
         port: 0,
         host: '0.0.0.0',
@@ -260,7 +276,7 @@ describe('startHttpProxy() — non-loopback bind without resolveIdentity warns o
     const onError = vi.fn();
     const server = await startHttpProxy(
       makeMockBackend(),
-      {},
+      { name: 'test-server' },
       { port: 0, onError },
     );
     try {
