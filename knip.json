@@ -21,6 +21,14 @@
       "entry": ["src/index.ts"],
       "project": ["src/**/*.ts"]
     },
+    "packages/store-redis": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/store-postgres": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
     "examples": {
       "project": ["**/*.ts"]
     }
