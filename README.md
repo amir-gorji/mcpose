@@ -108,7 +108,8 @@ Each package publishes independently and carries its own README on npm.
 | [`@mcpose/audit`](./packages/audit/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/audit)](https://www.npmjs.com/package/@mcpose/audit) | Stable | Tamper-evident HMAC audit chain and signed Merkle `ReplayManifest`. |
 | [`@mcpose/testing`](./packages/testing/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/testing)](https://www.npmjs.com/package/@mcpose/testing) | Stable | Runner-agnostic compliance assertions over an audit trail. |
 
-`@mcpose/policy`, `@mcpose/fintech-identity`, and `@mcpose/otel` appear in the [roadmap](#roadmap) and do not exist yet.
+`@mcpose/policy` and `@mcpose/otel` appear in the [roadmap](#roadmap) and do not exist yet.
+A fintech identity package was considered and rejected; identity mapping is host `resolveIdentity` code ([ADR-0020](./docs/adr/0020-no-fintech-identity-package.md)).
 
 ## Install
 
@@ -455,7 +456,6 @@ Shipped:
 Planned for v3:
 
 - [ ] `@mcpose/policy`: RBAC policy engine
-- [ ] `@mcpose/fintech-identity`: OIDC to financial identity profile
 - [ ] `@mcpose/otel`: OpenTelemetry span adapter for `onTelemetry`
 - [ ] Persistent `EventStore` adapters for Redis and Postgres
 - [ ] A delegation header spec, so core can populate `delegatedFrom` itself
