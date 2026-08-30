@@ -18,7 +18,7 @@
     "@arethetypeswrong/cli": "0.18.5",
     "eslint": "10.9.1",
     "eslint-config-prettier": "10.1.8",
-    "knip": "6.32.2",
+    "knip": "6.32.3",
     "prettier": "3.9.6",
     "publint": "0.3.24",
     "turbo": "2.10.12",
