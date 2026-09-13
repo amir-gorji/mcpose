@@ -242,11 +242,23 @@ export function createAuditMiddleware(
     //    must not fail (or mask the failure of) the audited call itself.
     try {
       const rejectionReason = threw ? getRejectionReason(thrown) : undefined;
-      const outcome: AuditEvent['outcome'] = !threw
-        ? 'success'
-        : rejectionReason !== undefined
+      // MCP signals tool-level failures in-band via isError, not by throwing
+      // (#171) — the same predicate core telemetry uses. Prompts have no
+      // isError concept, so this applies to tool calls only.
+      const toolError =
+        !threw &&
+        kind === undefined &&
+        typeof result === 'object' &&
+        result !== null &&
+        Array.isArray((result as { content?: unknown }).content) &&
+        (result as { isError?: unknown }).isError === true;
+      const outcome: AuditEvent['outcome'] = threw
+        ? rejectionReason !== undefined
           ? 'rejected'
-          : 'error';
+          : 'error'
+        : toolError
+          ? 'error'
+          : 'success';
 
       if (outcome !== 'rejected' || includeRejections) {
         let tier: SensitivityTier;
@@ -278,11 +290,16 @@ export function createAuditMiddleware(
           rejectionReason,
           error:
             outcome === 'error'
-              ? {
-                  name: thrown instanceof Error ? thrown.name : 'Error',
-                  message:
-                    thrown instanceof Error ? thrown.message : String(thrown),
-                }
+              ? threw
+                ? {
+                    name: thrown instanceof Error ? thrown.name : 'Error',
+                    message:
+                      thrown instanceof Error ? thrown.message : String(thrown),
+                  }
+                : {
+                    name: 'ToolError',
+                    message: 'Tool result returned isError: true',
+                  }
               : undefined,
           position,
           prevChainHash: session?.prevChainHash ?? '',

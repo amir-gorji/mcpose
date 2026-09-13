@@ -84,6 +84,52 @@ describe('createAuditMiddleware — tracer bullet', () => {
     expect(event.outcome).toBe('error');
   });
 
+describe('createAuditMiddleware — in-band tool errors', () => {
+  it('records error outcome for isError tool results without throwing', async () => {
+    // #171: MCP tool failures arrive in-band; the audit record must agree
+    // with telemetry instead of logging success.
+    const onEvent = vi.fn<AuditOptions['onEvent']>();
+    const { middleware } = createAuditMiddleware(makeOptions({ onEvent }));
+
+    const payload = { content: [{ type: 'text', text: 'boom' }], isError: true };
+    const returned = await middleware(makeReq('search'), async () => payload, makeCtx());
+
+    expect(returned).toBe(payload);
+    expect(onEvent).toHaveBeenCalledOnce();
+    const event: AuditEvent = onEvent.mock.calls[0]![0];
+    expect(event.outcome).toBe('error');
+    expect(event.error).toEqual({
+      name: 'ToolError',
+      message: 'Tool result returned isError: true',
+    });
+  });
+
+  it('does not treat prompt results as tool results', async () => {
+    const onEvent = vi.fn<AuditOptions['onEvent']>();
+    const { promptMiddleware } = createAuditMiddleware(makeOptions({ onEvent }));
+
+    await promptMiddleware(
+      { method: 'prompts/get' as const, params: { name: 'greet' } },
+      async () => ({ content: [], isError: true }),
+      makeCtx(),
+    );
+
+    const event: AuditEvent = onEvent.mock.calls[0]![0];
+    expect(event.outcome).toBe('success');
+  });
+
+  it('records success for ordinary tool results', async () => {
+    const onEvent = vi.fn<AuditOptions['onEvent']>();
+    const { middleware } = createAuditMiddleware(makeOptions({ onEvent }));
+
+    await middleware(makeReq('search'), async () => ({ content: [] }), makeCtx());
+
+    const event: AuditEvent = onEvent.mock.calls[0]![0];
+    expect(event.outcome).toBe('success');
+    expect(event.error).toBeUndefined();
+  });
+});
+
   it('sets replayManifestPosition sequentially within a session', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(
