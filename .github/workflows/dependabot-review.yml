@@ -26,7 +26,9 @@ name: Dependabot Review
 # GITHUB_TOKEN do not retrigger workflows, so a review that pushes fixes
 # leaves the PR labeled but unmergeable (mcpose CI never reruns on the new
 # head and dependabot-merge.yml refuses) until CI is rerun by hand. Clean
-# bumps, the common case, are unaffected.
+# bumps, the common case, are unaffected: the review merges main in only on a
+# real conflict (#199), since pull_request CI already ran on the head merged
+# onto main as of that run.
 
 on:
   pull_request_target:
@@ -104,9 +106,15 @@ jobs:
 
             Do this:
 
-            1. Fetch and merge `origin/main` into this branch. Resolve any
-               conflicts (package.json / pnpm-lock.yaml are the common case).
-               When a package.json conflict is just "both sides added a
+            1. Fetch `origin/main` and check for conflicts without merging:
+               `git merge-tree --write-tree HEAD origin/main`. If it exits 0,
+               do NOT merge main in: leave the branch as dependabot pushed it.
+               CI already ran on this head, merged onto main as of that run,
+               and any push you make cannot retrigger CI, which strands the
+               PR unmergeable (#199). Any exit code other than 0 or 1 is an
+               error: stop and treat the PR as blocked (step 8). Only on exit
+               1 (conflicts), merge `origin/main` and resolve them (package.json / pnpm-lock.yaml are the common case). When
+               a package.json conflict is just "both sides added a
                devDependency", keep both.
 
             2. Read AGENTS.md's exact-pin policy: `prettier`, `eslint`,
@@ -157,7 +165,8 @@ jobs:
                  independent bumps, and one bad one shouldn't sink the rest.
 
             7. If you made any changes (conflict resolution, policy holds,
-               mechanical fixes), commit them. Reference this PR's number in
+               mechanical fixes), commit them. Never push when you changed
+               nothing. Reference this PR's number in
                the commit message (e.g. "Hold back X, resolve conflict
                (#${{ github.event.pull_request.number }})"), imperative
                mood, no Co-Authored-By line. Push to this branch.

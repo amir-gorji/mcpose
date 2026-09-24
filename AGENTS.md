@@ -26,10 +26,10 @@ Run them in this order from the repository root.
 This is exactly the `.githooks/pre-push` chain, so a clean local run means a clean CI run.
 
 ```bash
-pnpm format:check   # prettier 3.9.6; `pnpm format` writes
+pnpm format:check   # prettier; `pnpm format` writes
 pnpm build          # turbo run build (tsc per package)
-pnpm lint           # eslint 10 flat + typescript-eslint type-aware; `pnpm lint:fix` writes
-pnpm ts:ci          # tsc 6.0.3 --noEmit against the hardened tsconfig.base.json
+pnpm lint           # eslint flat config + typescript-eslint type-aware; `pnpm lint:fix` writes
+pnpm ts:ci          # tsc --noEmit against the hardened tsconfig.base.json
 pnpm test           # vitest run --coverage, per-package ratcheted thresholds
 pnpm knip           # unused files, exports, and dependencies
 pnpm check:publish  # publint + attw --pack --profile esm-only
@@ -75,6 +75,8 @@ Dependabot PRs are reviewed and merged autonomously by two workflows, run by the
   It then runs the full gate chain and labels the PR `auto-merge-approved` or `needs-human-review`, with a comment explaining the outcome.
   It never merges.
 - [`dependabot-merge.yml`](./.github/workflows/dependabot-merge.yml) merges a PR once `mcpose CI` is green on it and it carries `auto-merge-approved`.
+  It skips any PR that edits `.github/workflows/`, which in practice is every GitHub Actions batch: `GITHUB_TOKEN` can never hold the `workflows` permission GitHub requires to merge one ([issue #197](https://github.com/amir-gorji/mcpose/issues/197)).
+  Merge those by hand after the review labels them, once the pinned SHAs check out against their release tags.
 
 `.github/dependabot.yml` batches updates ([issue #189](https://github.com/amir-gorji/mcpose/issues/189)): one weekly npm PR for minor and patch bumps, a separate one for majors, and one for GitHub Actions.
 One PR per dependency burned a CI matrix and a review cycle per patch, and six concurrent reviews all exited after zero turns and stranded their PRs.
