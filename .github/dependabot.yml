@@ -1,15 +1,8 @@
 version: 2
 
-# Batched, not one PR per dependency (#189). Ungrouped weekly runs opened six
-# PRs at once; their six concurrent Dependabot Review runs all exited after
-# zero turns and left every PR unlabeled. dependabot-review.yml already holds
-# back a single offending bump inside a multi-dependency PR, so a bundle is
-# not all-or-nothing.
-#
-# npm splits by update-type: minor and patch land as the routine weekly
-# batch, majors get their own PR and their own attention. The limit of 2
-# keeps the routine batch from starving behind a majors PR nobody is ready to
-# make a call on.
+# Batched, not one PR per dependency: see AGENTS.md "Dependabot automation"
+# and #189. Majors get their own PR; the limit of 2 keeps the routine batch
+# from starving behind a majors PR nobody is ready to make a call on.
 #
 # A major the repository has decided not to take yet goes in an `ignore`
 # rule here, never in a pnpm-workspace.yaml override cap (#105). `ignore` is
