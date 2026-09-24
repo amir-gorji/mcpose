@@ -5,6 +5,10 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   StreamableHTTPClientTransport: vi.fn(),
 }));
 
+vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
+  StdioClientTransport: vi.fn(),
+}));
+
 // A class, not an arrow function: createBackendClient calls `new Client(...)`,
 // and only `function`/`class` implementations are constructible.
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
@@ -164,5 +168,31 @@ describe('createBackendClient() HTTP transport options', () => {
 
     expect(opts?.requestInit).toBeUndefined();
     expect(opts?.authProvider).toBeUndefined();
+  });
+});
+
+describe('createBackendClient() stdio transport', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('spawns the command with the configured args', async () => {
+    const { StdioClientTransport } =
+      await import('@modelcontextprotocol/sdk/client/stdio.js');
+    await createBackendClient({ command: 'node', args: ['server.js'] });
+    expect(vi.mocked(StdioClientTransport).mock.lastCall?.[0]).toEqual({
+      command: 'node',
+      args: ['server.js'],
+    });
+  });
+
+  it('defaults args to an empty array', async () => {
+    const { StdioClientTransport } =
+      await import('@modelcontextprotocol/sdk/client/stdio.js');
+    await createBackendClient({ command: 'node' });
+    expect(vi.mocked(StdioClientTransport).mock.lastCall?.[0]).toEqual({
+      command: 'node',
+      args: [],
+    });
   });
 });

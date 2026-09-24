@@ -203,3 +203,48 @@ describe('createMockBackendClient()', () => {
     expect(result.tools[0]?.name).toBe('t');
   });
 });
+
+describe('createMockBackendClient() fixtures', () => {
+  it('serves documented defaults when no fixtures are given', async () => {
+    const backend = createMockBackendClient();
+    expect(await backend.callTool({ name: 'x', arguments: {} })).toEqual({
+      content: [{ type: 'text', text: 'mock response' }],
+    });
+    expect(await backend.listTools()).toEqual({ tools: [] });
+    expect(await backend.listResources()).toEqual({ resources: [] });
+    expect(await backend.readResource({ uri: 'res://a' })).toEqual({
+      contents: [{ uri: '', text: 'mock resource' }],
+    });
+    expect(await backend.listPrompts()).toEqual({ prompts: [] });
+    expect(await backend.getPrompt({ name: 'p' })).toEqual({ messages: [] });
+  });
+
+  it('serves supplied resource and prompt fixtures', async () => {
+    const backend = createMockBackendClient({
+      capabilities: { tools: {} },
+      resources: [{ uri: 'res://a', name: 'a' }],
+      readResourceResponse: { contents: [{ uri: 'res://a', text: 'body' }] },
+      prompts: [{ name: 'p' }],
+      getPromptResponse: {
+        messages: [{ role: 'user', content: { type: 'text', text: 'hi' } }],
+      },
+    });
+    expect(backend.getServerCapabilities()).toEqual({ tools: {} });
+    expect((await backend.listResources()).resources).toEqual([
+      { uri: 'res://a', name: 'a' },
+    ]);
+    expect((await backend.readResource({ uri: 'res://a' })).contents).toEqual([
+      { uri: 'res://a', text: 'body' },
+    ]);
+    expect((await backend.listPrompts()).prompts).toEqual([{ name: 'p' }]);
+    expect((await backend.getPrompt({ name: 'p' })).messages).toHaveLength(1);
+  });
+
+  it('clones fixtures per call so a mutating caller cannot corrupt them', async () => {
+    const backend = createMockBackendClient({
+      resources: [{ uri: 'res://a', name: 'a' }],
+    });
+    (await backend.listResources()).resources.pop();
+    expect((await backend.listResources()).resources).toHaveLength(1);
+  });
+});

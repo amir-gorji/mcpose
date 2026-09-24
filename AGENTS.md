@@ -76,12 +76,14 @@ Dependabot PRs are reviewed and merged autonomously by two workflows, run by the
   It never merges.
 - [`dependabot-merge.yml`](./.github/workflows/dependabot-merge.yml) merges a PR once `mcpose CI` is green on it and it carries `auto-merge-approved`.
 
-`.github/dependabot.yml` intentionally has no `groups:` block: dependabot opens one PR per dependency, so a bad bump only ever holds back or blocks itself, not a bundle of unrelated updates.
+`.github/dependabot.yml` batches updates ([issue #189](https://github.com/amir-gorji/mcpose/issues/189)): one weekly npm PR for minor and patch bumps, a separate one for majors, and one for GitHub Actions.
+One PR per dependency burned a CI matrix and a review cycle per patch, and six concurrent reviews all exited after zero turns and stranded their PRs.
+A bundle is not all-or-nothing: the review holds back just the offending bump, so the rest of the batch still lands.
 
-It does carry an `ignore` rule for major bumps of `vitest` and `@vitest/coverage-v8`.
-A major that the repository has decided not to take yet belongs there, not in `pnpm-workspace.yaml`: an override cap resolves the bump away silently and lets a merged PR claim an update that never happened, while an ignore rule stops the PR from being opened at all and leaves the declared spec honest.
-See [issue #105](https://github.com/amir-gorji/mcpose/issues/105) for the vitest 4 hold-back reasoning.
+A major that the repository has decided not to take yet belongs in an `ignore` rule there, not in `pnpm-workspace.yaml`: an override cap resolves the bump away silently and lets a merged PR claim an update that never happened, while an ignore rule stops the PR from being opened at all and leaves the declared spec honest.
+See [issue #105](https://github.com/amir-gorji/mcpose/issues/105) for where that rule came from.
 Ignore rules only suppress version updates, so a security advisory on the ignored line still opens a PR.
+A hold-back also has a cost: when the only fix for an advisory ships on the ignored major, osv-scan goes red on every PR until the migration lands, as it did for vitest in [issue #187](https://github.com/amir-gorji/mcpose/issues/187).
 
 ## Policies
 
