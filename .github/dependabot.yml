@@ -36,10 +36,11 @@ updates:
     ignore:
       - dependency-name: 'typescript'
         versions: ['>=7']
-  # Stays on the automated review lane, unlike a repo whose review workflow
-  # triggers on pull_request: dependabot-review.yml runs via
-  # pull_request_target from main, so a batch that bumps an action used
-  # inside that workflow is still reviewed by the version already on main.
+  # Reviewed automatically but merged by hand (#197). dependabot-review.yml
+  # runs via pull_request_target from main, so a batch that bumps an action
+  # used inside that workflow is still reviewed by the version already on
+  # main. dependabot-merge.yml cannot merge it: GITHUB_TOKEN never holds the
+  # `workflows` permission a PR editing .github/workflows/ needs.
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:

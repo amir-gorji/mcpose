@@ -75,6 +75,8 @@ Dependabot PRs are reviewed and merged autonomously by two workflows, run by the
   It then runs the full gate chain and labels the PR `auto-merge-approved` or `needs-human-review`, with a comment explaining the outcome.
   It never merges.
 - [`dependabot-merge.yml`](./.github/workflows/dependabot-merge.yml) merges a PR once `mcpose CI` is green on it and it carries `auto-merge-approved`.
+  It skips any PR that edits `.github/workflows/`, which in practice is every GitHub Actions batch: `GITHUB_TOKEN` can never hold the `workflows` permission GitHub requires to merge one ([issue #197](https://github.com/amir-gorji/mcpose/issues/197)).
+  Merge those by hand after the review labels them, once the pinned SHAs check out against their release tags.
 
 `.github/dependabot.yml` batches updates ([issue #189](https://github.com/amir-gorji/mcpose/issues/189)): one weekly npm PR for minor and patch bumps, a separate one for majors, and one for GitHub Actions.
 One PR per dependency burned a CI matrix and a review cycle per patch, and six concurrent reviews all exited after zero turns and stranded their PRs.

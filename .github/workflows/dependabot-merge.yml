@@ -70,6 +70,17 @@ jobs:
             exit 0
           fi
 
+          # GITHUB_TOKEN can never hold the `workflows` permission, so GitHub
+          # refuses to merge a PR that edits .github/workflows/ with it
+          # (#197). Those PRs (every GitHub Actions batch, in practice) are
+          # still reviewed and labeled, then merged by hand. A token with
+          # `workflows` scope would let this bot lane rewrite its own
+          # privileged workflows, so that is not the fix.
+          if gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' | grep -q '^\.github/workflows/'; then
+            echo "PR #$PR_NUMBER edits .github/workflows/, which GITHUB_TOKEN cannot merge. Merge it by hand."
+            exit 0
+          fi
+
           # mcpose CI's own checks must all be green on the PR's current
           # head. Checked by name so an unrelated/self check (this workflow,
           # the Claude review job, claude-code-review.yml) never gates this.
