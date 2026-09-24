@@ -55,7 +55,7 @@
   },
   "devDependencies": {
     "@opentelemetry/api": "^1.9.0",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.5.1",
     "@vitest/coverage-v8": "5.0.1",
     "mcpose": "workspace:*",
     "typescript": "6.0.3",

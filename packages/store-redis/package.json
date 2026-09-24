@@ -55,7 +55,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.5.1",
     "@vitest/coverage-v8": "5.0.1",
     "redis": "^6.2.1",
     "typescript": "6.0.3",

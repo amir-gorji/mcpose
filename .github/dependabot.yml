@@ -1,10 +1,47 @@
 version: 2
+
+# Batched, not one PR per dependency (#189). Ungrouped weekly runs opened six
+# PRs at once; their six concurrent Dependabot Review runs all exited after
+# zero turns and left every PR unlabeled. dependabot-review.yml already holds
+# back a single offending bump inside a multi-dependency PR, so a bundle is
+# not all-or-nothing.
+#
+# npm splits by update-type: minor and patch land as the routine weekly
+# batch, majors get their own PR and their own attention. The limit of 2
+# keeps the routine batch from starving behind a majors PR nobody is ready to
+# make a call on.
+#
+# A major the repository has decided not to take yet goes in an `ignore`
+# rule here, never in a pnpm-workspace.yaml override cap (#105). `ignore` is
+# evaluated before `groups`, so grouping cannot smuggle it into a batch.
 updates:
   - package-ecosystem: 'npm'
     directory: '/'
     schedule:
       interval: 'weekly'
+    open-pull-requests-limit: 2
+    groups:
+      npm:
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
+      npm-major:
+        patterns:
+          - '*'
+        update-types:
+          - 'major'
+  # Stays on the automated review lane, unlike a repo whose review workflow
+  # triggers on pull_request: dependabot-review.yml runs via
+  # pull_request_target from main, so a batch that bumps an action used
+  # inside that workflow is still reviewed by the version already on main.
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:
       interval: 'weekly'
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns:
+          - '*'
