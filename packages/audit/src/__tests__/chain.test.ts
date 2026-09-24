@@ -122,6 +122,45 @@ describe('Merkle tree (v2, domain-separated)', () => {
     };
     expect(verifyMerkleProof(leaves[0]!, flipped, root)).toBe(false);
   });
+
+  it('rejects an index the proof path cannot represent (#175)', () => {
+    // One leaf: no siblings, so only index 0 is a position in the tree.
+    const one = computeMerkleRoot(['aa']);
+    const empty = { siblings: [], directions: [] };
+    expect(verifyMerkleProof('aa', { ...empty, index: 0 }, one)).toBe(true);
+    for (const index of [1, 2, 7, Number.MAX_SAFE_INTEGER]) {
+      expect(verifyMerkleProof('aa', { ...empty, index }, one)).toBe(false);
+    }
+
+    // Two leaves: one sibling level, so index must be 0 or 1. Higher even
+    // indices share every direction bit with 0 and used to verify.
+    const two = computeMerkleRoot(['aa', 'bb']);
+    const proof = computeMerkleProof(['aa', 'bb'], 0);
+    expect(verifyMerkleProof('aa', proof, two)).toBe(true);
+    for (const index of [2, 4, 6, 1024]) {
+      expect(verifyMerkleProof('aa', { ...proof, index }, two)).toBe(false);
+    }
+
+    // Odd tree: the padded last leaf still verifies only at its own index.
+    const root = computeMerkleRoot(leaves);
+    const last = computeMerkleProof(leaves, 2);
+    expect(verifyMerkleProof(leaves[2]!, last, root)).toBe(true);
+    for (const index of [4, 6, 10]) {
+      expect(verifyMerkleProof(leaves[2]!, { ...last, index }, root)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('rejects unsafe-integer indices', () => {
+    const root = computeMerkleRoot(leaves);
+    const proof = computeMerkleProof(leaves, 0);
+    for (const index of [2 ** 53, 2 ** 60, Number.MAX_VALUE]) {
+      expect(verifyMerkleProof(leaves[0]!, { ...proof, index }, root)).toBe(
+        false,
+      );
+    }
+  });
 });
 
 // ── Keyed verification end-to-end ─────────────────────────────────────────────

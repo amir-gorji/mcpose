@@ -241,9 +241,11 @@ export function computeMerkleProof(
  * Verifies a Merkle proof for an event's `chainHash` (the raw chain hash —
  * the leaf tag is applied internally).
  *
- * Rejects malformed proofs: `siblings`/`directions` length mismatch, or
+ * Rejects malformed proofs: `siblings`/`directions` length mismatch,
  * directions inconsistent with `proof.index` (each level's direction is
- * fully determined by the index).
+ * fully determined by the index), or an index that the path cannot
+ * represent (`index >= 2 ** siblings.length`, which leaves high bits
+ * unconsumed after traversal).
  */
 export function verifyMerkleProof(
   leafChainHash: string,
@@ -251,7 +253,7 @@ export function verifyMerkleProof(
   root: string,
 ): boolean {
   if (
-    !Number.isInteger(proof.index) ||
+    !Number.isSafeInteger(proof.index) ||
     proof.index < 0 ||
     proof.siblings.length !== proof.directions.length
   ) {
@@ -272,5 +274,8 @@ export function verifyMerkleProof(
         : nodeHash(sibling, current);
     idx = Math.floor(idx / 2);
   }
+  // Bits left over mean the claimed position lies outside a tree of this
+  // depth: a two-leaf proof for position 0 must not also verify at 2 or 4.
+  if (idx !== 0) return false;
   return current === root;
 }
