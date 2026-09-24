@@ -55,12 +55,12 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.5.1",
     "@types/pg": "^8.23.1",
-    "@vitest/coverage-v8": "3.2.7",
+    "@vitest/coverage-v8": "5.0.1",
     "pg": "^8.23.0",
     "pg-mem": "^3.0.14",
     "typescript": "6.0.3",
-    "vitest": "3.2.7"
+    "vitest": "5.0.1"
   }
 }
