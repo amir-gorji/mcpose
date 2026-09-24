@@ -4,6 +4,8 @@ import { createAuditMiddleware } from '../middleware.js';
 import { createDefaultSigningKeyProvider } from '../signingKey.js';
 import { createSensitivityResolver } from '../sensitivity.js';
 import { createInMemorySubjectKeyStore } from '../subjectKeyStore.js';
+import { sha256hex, stableStringify } from '../chain.js';
+import { verifyAuditChain, verifyManifestSignature } from '../verify.js';
 import type { AuditEvent, AuditOptions, ReplayManifest } from '../types.js';
 import type { Identity } from 'mcpose';
 import { createProxyContext } from 'mcpose';
@@ -83,52 +85,6 @@ describe('createAuditMiddleware — tracer bullet', () => {
     const event: AuditEvent = onEvent.mock.calls[0]![0];
     expect(event.outcome).toBe('error');
   });
-
-describe('createAuditMiddleware — in-band tool errors', () => {
-  it('records error outcome for isError tool results without throwing', async () => {
-    // #171: MCP tool failures arrive in-band; the audit record must agree
-    // with telemetry instead of logging success.
-    const onEvent = vi.fn<AuditOptions['onEvent']>();
-    const { middleware } = createAuditMiddleware(makeOptions({ onEvent }));
-
-    const payload = { content: [{ type: 'text', text: 'boom' }], isError: true };
-    const returned = await middleware(makeReq('search'), async () => payload, makeCtx());
-
-    expect(returned).toBe(payload);
-    expect(onEvent).toHaveBeenCalledOnce();
-    const event: AuditEvent = onEvent.mock.calls[0]![0];
-    expect(event.outcome).toBe('error');
-    expect(event.error).toEqual({
-      name: 'ToolError',
-      message: 'Tool result returned isError: true',
-    });
-  });
-
-  it('does not treat prompt results as tool results', async () => {
-    const onEvent = vi.fn<AuditOptions['onEvent']>();
-    const { promptMiddleware } = createAuditMiddleware(makeOptions({ onEvent }));
-
-    await promptMiddleware(
-      { method: 'prompts/get' as const, params: { name: 'greet' } },
-      async () => ({ content: [], isError: true }),
-      makeCtx(),
-    );
-
-    const event: AuditEvent = onEvent.mock.calls[0]![0];
-    expect(event.outcome).toBe('success');
-  });
-
-  it('records success for ordinary tool results', async () => {
-    const onEvent = vi.fn<AuditOptions['onEvent']>();
-    const { middleware } = createAuditMiddleware(makeOptions({ onEvent }));
-
-    await middleware(makeReq('search'), async () => ({ content: [] }), makeCtx());
-
-    const event: AuditEvent = onEvent.mock.calls[0]![0];
-    expect(event.outcome).toBe('success');
-    expect(event.error).toBeUndefined();
-  });
-});
 
   it('sets replayManifestPosition sequentially within a session', async () => {
     const events: AuditEvent[] = [];
@@ -981,5 +937,185 @@ describe('createAuditMiddleware — prompt calls', () => {
         true,
       );
     }
+  });
+});
+
+describe('createAuditMiddleware — in-band tool errors (#171)', () => {
+  // MCP reports a tool failure in the result (`isError: true`) rather than by
+  // throwing, so the audit record must say `error` where telemetry does.
+  const inBandError = {
+    content: [{ type: 'text' as const, text: 'boom' }],
+    isError: true,
+  };
+
+  function record() {
+    const events: AuditEvent[] = [];
+    const signingKey = createDefaultSigningKeyProvider('test-secret');
+    const handle = createAuditMiddleware(
+      makeOptions({
+        signingKey,
+        onEvent: (e) => {
+          events.push(e);
+        },
+      }),
+    );
+    return { events, signingKey, ...handle };
+  }
+
+  it('records an isError tool result as error and returns it untouched', async () => {
+    const { events, middleware } = record();
+
+    const returned = await middleware(
+      makeReq('search'),
+      async () => inBandError,
+      makeCtx(),
+    );
+
+    expect(returned).toBe(inBandError);
+    expect(events[0]!.outcome).toBe('error');
+    expect(events[0]!.error).toEqual({
+      name: 'ToolError',
+      message: 'Tool result returned isError: true',
+    });
+    expect(events[0]!.outputHash).toBe(sha256hex(stableStringify(inBandError)));
+  });
+
+  it('does not copy the tool text into the unencrypted error detail', async () => {
+    const { events, middleware } = record();
+
+    await middleware(
+      makeReq('transfer'),
+      async () => ({
+        content: [{ type: 'text' as const, text: 'IBAN DK5000400440116243' }],
+        isError: true,
+      }),
+      makeCtx(),
+    );
+
+    expect(events[0]!.sensitivityTier).toBe('high');
+    expect(JSON.stringify(events[0]!.error)).not.toContain('IBAN');
+  });
+
+  it('records success for a tool result without isError', async () => {
+    const { events, middleware } = record();
+
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx(),
+    );
+
+    expect(events[0]!.outcome).toBe('success');
+    expect(events[0]!.error).toBeUndefined();
+  });
+
+  it('never classifies a prompt result as an in-band error', async () => {
+    const { events, promptMiddleware } = record();
+
+    await promptMiddleware(
+      { method: 'prompts/get' as const, params: { name: 'greet' } },
+      async () => ({ messages: [], isError: true }),
+      makeCtx(),
+    );
+
+    expect(events[0]!.outcome).toBe('success');
+    expect(events[0]!.error).toBeUndefined();
+  });
+
+  it('still records a thrown error with its own name and message', async () => {
+    const { events, middleware } = record();
+
+    await expect(
+      middleware(
+        makeReq('search'),
+        async () => {
+          throw new TypeError('upstream down');
+        },
+        makeCtx(),
+      ),
+    ).rejects.toThrow('upstream down');
+
+    expect(events[0]!.outcome).toBe('error');
+    expect(events[0]!.error).toEqual({
+      name: 'TypeError',
+      message: 'upstream down',
+    });
+  });
+
+  it('still records a structured rejection as rejected without an error', async () => {
+    const { events, middleware } = record();
+    const rejection = Object.assign(new Error('hidden'), {
+      code: -32601,
+      data: { rejectionReason: 'TOOL_HIDDEN' },
+    });
+
+    await expect(
+      middleware(
+        makeReq('search'),
+        async () => {
+          throw rejection;
+        },
+        makeCtx(),
+      ),
+    ).rejects.toBe(rejection);
+
+    expect(events[0]!.outcome).toBe('rejected');
+    expect(events[0]!.rejectionReason).toBe('TOOL_HIDDEN');
+    expect(events[0]!.error).toBeUndefined();
+  });
+
+  it('chains all four outcomes into a session that verifies', async () => {
+    const { events, signingKey, middleware, closeSession } = record();
+    const ctx = makeCtx('session-171');
+    const rejection = Object.assign(new Error('hidden'), {
+      data: { rejectionReason: 'TOOL_HIDDEN' },
+    });
+
+    await middleware(makeReq('search'), async () => ({ content: [] }), ctx);
+    await middleware(makeReq('search'), async () => inBandError, ctx);
+    await middleware(
+      makeReq('search'),
+      async () => {
+        throw new Error('upstream down');
+      },
+      ctx,
+    ).catch(() => undefined);
+    await middleware(
+      makeReq('search'),
+      async () => {
+        throw rejection;
+      },
+      ctx,
+    ).catch(() => undefined);
+
+    expect(events.map((e) => e.outcome)).toEqual([
+      'success',
+      'error',
+      'error',
+      'rejected',
+    ]);
+    await expect(verifyAuditChain(events, signingKey)).resolves.toEqual({
+      valid: true,
+    });
+    const manifest = await closeSession('session-171');
+    expect(manifest?.eventCount).toBe(4);
+    await expect(verifyManifestSignature(manifest!, signingKey)).resolves.toBe(
+      true,
+    );
+  });
+
+  it('breaks verification when an in-band error is rewritten as success', async () => {
+    const { events, signingKey, middleware } = record();
+    const ctx = makeCtx('session-171-tamper');
+
+    await middleware(makeReq('search'), async () => inBandError, ctx);
+    const { error: _error, ...rest } = events[0]!;
+    const forged: AuditEvent = { ...rest, outcome: 'success' };
+
+    await expect(verifyAuditChain([forged], signingKey)).resolves.toEqual({
+      valid: false,
+      index: 0,
+      reason: 'chainHash mismatch',
+    });
   });
 });
