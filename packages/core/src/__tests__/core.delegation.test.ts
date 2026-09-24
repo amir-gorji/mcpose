@@ -920,6 +920,12 @@ describe('detectDelegationLoop()', () => {
     ).toBeUndefined();
     expect(detectDelegationLoop(createProxyContext())).toBeUndefined();
   });
+
+  it('returns nothing for an identity with no chain at all', () => {
+    expect(
+      detectDelegationLoop(createProxyContext({ identity })),
+    ).toBeUndefined();
+  });
 });
 
 // ── The serializer, for hosts ───────────────────────────────────────────────

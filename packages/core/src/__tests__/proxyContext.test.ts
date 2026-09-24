@@ -33,6 +33,11 @@ describe('createProxyContext()', () => {
     });
   });
 
+  it('carries a stamped policy decision through', () => {
+    const policy = { decision: 'allow', ruleId: 'r1' } as const;
+    expect(createProxyContext({ policy }).policy).toEqual(policy);
+  });
+
   it('omits sessionId/headers/signal keys when they are not provided', () => {
     const ctx = createProxyContext({ transport: 'http' });
 
