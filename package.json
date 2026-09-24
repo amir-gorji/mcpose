@@ -16,13 +16,13 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
-    "eslint": "10.10.0",
+    "eslint": "10.11.0",
     "eslint-config-prettier": "10.1.8",
-    "knip": "6.35.1",
-    "prettier": "3.9.6",
+    "knip": "6.37.0",
+    "prettier": "3.9.8",
     "publint": "0.3.24",
-    "turbo": "2.10.12",
-    "typescript-eslint": "8.70.0"
+    "turbo": "2.11.2",
+    "typescript-eslint": "8.70.1"
   },
   "packageManager": "pnpm@11.0.8"
 }
