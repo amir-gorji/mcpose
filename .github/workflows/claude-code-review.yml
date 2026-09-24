@@ -19,7 +19,16 @@ jobs:
     # last commit. Those PRs get their own reviewer in dependabot-review.yml,
     # which opts dependabot in explicitly, so allowing it here too would only
     # double-review them.
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    #
+    # Fork PRs are excluded too (#190): GitHub runs pull_request for a fork
+    # with no OIDC token and no secrets, so the action cannot authenticate
+    # and the job fails on every external contribution. pull_request_target
+    # would fix that by handing this agent secrets over untrusted fork code,
+    # which is the wrong trade. Ask for a fork review with @claude instead
+    # (claude.yml runs in the base repository's context).
+    if: |
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
 
     runs-on: ubuntu-latest
     timeout-minutes: 20
