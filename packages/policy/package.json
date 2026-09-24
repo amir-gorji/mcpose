@@ -56,7 +56,7 @@
     "@types/node": "^26.5.1",
     "@vitest/coverage-v8": "5.0.1",
     "mcpose": "workspace:*",
-    "typescript": "7.0.2",
+    "typescript": "6.0.3",
     "vitest": "5.0.1"
   }
 }
