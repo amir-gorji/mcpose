@@ -53,10 +53,10 @@
     "@mcpose/audit": "^3.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.5.1",
     "typescript": "6.0.3",
-    "vitest": "3.2.7",
-    "@vitest/coverage-v8": "3.2.7",
+    "vitest": "5.0.1",
+    "@vitest/coverage-v8": "5.0.1",
     "mcpose": "workspace:*",
     "@mcpose/audit": "workspace:*"
   }
