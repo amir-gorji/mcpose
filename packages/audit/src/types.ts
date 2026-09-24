@@ -124,7 +124,11 @@ export interface AuditEventBase {
   outcome: 'success' | 'rejected' | 'error';
   /** Present when outcome is 'rejected' (from the MCP error's data field). */
   rejectionReason?: RejectionReason;
-  /** Present when outcome is 'error': what the upstream call threw. */
+  /**
+   * Present when outcome is 'error': what the upstream call threw, or
+   * `{ name: 'ToolError' }` with a fixed message when a tool result carried
+   * `isError: true` in-band.
+   */
   error?: { name: string; message: string };
   inputHash: string;
   outputHash: string;

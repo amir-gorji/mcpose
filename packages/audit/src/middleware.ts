@@ -15,7 +15,7 @@ import {
   sha256hex,
   stableStringify,
 } from './chain.js';
-import { markPassThroughObserver } from 'mcpose';
+import { hasToolContent, markPassThroughObserver } from 'mcpose';
 import type {
   Identity,
   ProxyContext,
@@ -164,6 +164,7 @@ export function createAuditMiddleware(
     req: Req,
     next: (req: Req) => Promise<Res>,
     ctx: ProxyContext,
+    isInBandError?: (result: Res) => boolean,
   ): Promise<Res> => {
     // Subkey derivation runs BEFORE the upstream call: if the signing
     // provider is unavailable the call fails fast rather than running
@@ -242,11 +243,16 @@ export function createAuditMiddleware(
     //    must not fail (or mask the failure of) the audited call itself.
     try {
       const rejectionReason = threw ? getRejectionReason(thrown) : undefined;
-      const outcome: AuditEvent['outcome'] = !threw
-        ? 'success'
-        : rejectionReason !== undefined
+      // A call can fail without throwing: an MCP tool reports failure
+      // in-band with `isError: true` (#171). The caller supplies the
+      // predicate, so only tool calls pass one and prompts never match.
+      const inBandError = !threw && isInBandError?.(result as Res) === true;
+      const outcome: AuditEvent['outcome'] =
+        rejectionReason !== undefined
           ? 'rejected'
-          : 'error';
+          : threw || inBandError
+            ? 'error'
+            : 'success';
 
       if (outcome !== 'rejected' || includeRejections) {
         let tier: SensitivityTier;
@@ -277,13 +283,20 @@ export function createAuditMiddleware(
           outcome,
           rejectionReason,
           error:
-            outcome === 'error'
-              ? {
-                  name: thrown instanceof Error ? thrown.name : 'Error',
-                  message:
-                    thrown instanceof Error ? thrown.message : String(thrown),
-                }
-              : undefined,
+            outcome !== 'error'
+              ? undefined
+              : threw
+                ? {
+                    name: thrown instanceof Error ? thrown.name : 'Error',
+                    message:
+                      thrown instanceof Error ? thrown.message : String(thrown),
+                  }
+                : // A fixed message: `error` is never encrypted, so copying the
+                  // tool's own text here would leak a high-tier payload.
+                  {
+                    name: 'ToolError',
+                    message: 'Tool result returned isError: true',
+                  },
           position,
           prevChainHash: session?.prevChainHash ?? '',
           tier,
@@ -312,7 +325,13 @@ export function createAuditMiddleware(
   // Tool calls: wrapped so `passThroughTools` stay audited. Prompts have no
   // pass-through concept, so the prompt middleware needs no wrapper.
   const inner: AuditMiddlewareHandle['middleware'] = (req, next, ctx) =>
-    observe(undefined, req, next, ctx);
+    observe(
+      undefined,
+      req,
+      next,
+      ctx,
+      (result) => hasToolContent(result) && result.isError === true,
+    );
   const middleware = markPassThroughObserver(inner);
   const promptMiddleware: AuditMiddlewareHandle['promptMiddleware'] = (
     req,
