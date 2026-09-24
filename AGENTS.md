@@ -26,7 +26,7 @@ Run them in this order from the repository root.
 This is exactly the `.githooks/pre-push` chain, so a clean local run means a clean CI run.
 
 ```bash
-pnpm format:check   # prettier 3.9.6; `pnpm format` writes
+pnpm format:check   # prettier; `pnpm format` writes
 pnpm build          # turbo run build (tsc per package)
 pnpm lint           # eslint 10 flat + typescript-eslint type-aware; `pnpm lint:fix` writes
 pnpm ts:ci          # tsc 6.0.3 --noEmit against the hardened tsconfig.base.json
