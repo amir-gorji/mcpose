@@ -27,8 +27,8 @@ name: Dependabot Review
 # leaves the PR labeled but unmergeable (mcpose CI never reruns on the new
 # head and dependabot-merge.yml refuses) until CI is rerun by hand. Clean
 # bumps, the common case, are unaffected: the review merges main in only on a
-# real conflict (#199), since pull_request CI already tests the PR merged
-# onto main.
+# real conflict (#199), since pull_request CI already ran on the head merged
+# onto main as of that run.
 
 on:
   pull_request_target:
@@ -109,10 +109,11 @@ jobs:
             1. Fetch `origin/main` and check for conflicts without merging:
                `git merge-tree --write-tree HEAD origin/main`. If it exits 0,
                do NOT merge main in: leave the branch as dependabot pushed it.
-               CI already tests the PR merged onto main, and any push you make
-               cannot retrigger CI, which strands the PR unmergeable (#199).
-               Only if it reports conflicts, merge `origin/main` and resolve
-               them (package.json / pnpm-lock.yaml are the common case). When
+               CI already ran on this head, merged onto main as of that run,
+               and any push you make cannot retrigger CI, which strands the
+               PR unmergeable (#199). Any exit code other than 0 or 1 is an
+               error: stop and treat the PR as blocked (step 8). Only on exit
+               1 (conflicts), merge `origin/main` and resolve them (package.json / pnpm-lock.yaml are the common case). When
                a package.json conflict is just "both sides added a
                devDependency", keep both.
 

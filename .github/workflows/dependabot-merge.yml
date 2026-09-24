@@ -76,7 +76,10 @@ jobs:
           # still reviewed and labeled, then merged by hand. A token with
           # `workflows` scope would let this bot lane rewrite its own
           # privileged workflows, so that is not the fix.
-          if gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' | grep -q '^\.github/workflows/'; then
+          # Captured first so an API error aborts under `bash -e` rather than
+          # reading as "no workflow files" and falling through to a merge.
+          FILES=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename')
+          if echo "$FILES" | grep -q '^\.github/workflows/'; then
             echo "PR #$PR_NUMBER edits .github/workflows/, which GITHUB_TOKEN cannot merge. Merge it by hand."
             exit 0
           fi

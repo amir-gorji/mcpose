@@ -28,8 +28,8 @@ This is exactly the `.githooks/pre-push` chain, so a clean local run means a cle
 ```bash
 pnpm format:check   # prettier; `pnpm format` writes
 pnpm build          # turbo run build (tsc per package)
-pnpm lint           # eslint 10 flat + typescript-eslint type-aware; `pnpm lint:fix` writes
-pnpm ts:ci          # tsc 6.0.3 --noEmit against the hardened tsconfig.base.json
+pnpm lint           # eslint flat config + typescript-eslint type-aware; `pnpm lint:fix` writes
+pnpm ts:ci          # tsc --noEmit against the hardened tsconfig.base.json
 pnpm test           # vitest run --coverage, per-package ratcheted thresholds
 pnpm knip           # unused files, exports, and dependencies
 pnpm check:publish  # publint + attw --pack --profile esm-only
