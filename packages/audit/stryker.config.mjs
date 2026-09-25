@@ -27,5 +27,8 @@ export default {
   // Re-measured on 2026-08-29 at 85.68 (404 killed, 9 timeout, 59 survived,
   // 10 no cov) after #130 added erasable mode, whose store and derivation
   // paths are fully covered. floor(85.68) - 2 is 83, another ratchet up.
-  thresholds: { high: 90, low: 84, break: 83 },
+  // Re-measured on 2026-09-25 at 86.03 (455 killed, 13 timeout, 66 survived,
+  // 10 no cov) after #206 patched the vitest-runner for vitest 5, from a clean
+  // incremental report. floor(86.03) - 2 is 84, a ratchet up from 83.
+  thresholds: { high: 90, low: 84, break: 84 },
 };

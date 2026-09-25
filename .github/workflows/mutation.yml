@@ -33,16 +33,19 @@ jobs:
           node-version: 24
           cache: 'pnpm'
       # Stryker only re-tests mutants whose code changed since the cached run.
+      # A toolchain change is not a code change, so the cache key carries the
+      # lockfile hash: a report written under a broken runner (#206) would
+      # otherwise replay its false survivors forever.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/audit/.stryker-tmp/incremental.json
-          key: stryker-audit-${{ github.sha }}
-          restore-keys: stryker-audit-
+          key: stryker-audit-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: stryker-audit-${{ hashFiles('pnpm-lock.yaml') }}-
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/core/.stryker-tmp/incremental.json
-          key: stryker-core-${{ github.sha }}
-          restore-keys: stryker-core-
+          key: stryker-core-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: stryker-core-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm --filter @mcpose/audit mutation

@@ -44,6 +44,8 @@ pnpm --filter @mcpose/audit mutation   # stryker run, packages/audit
 pnpm --filter mcpose mutation          # stryker run, packages/core
 ```
 
+`@stryker-mutator/vitest-runner` carries a `pnpm patch` (`patches/`, declared in `pnpm-workspace.yaml`): on vitest 5 the per-test name filter matched nothing, so every covered mutant survived ([stryker-js#6210](https://github.com/stryker-mutator/stryker-js/issues/6210), [issue #206](https://github.com/amir-gorji/mcpose/issues/206)).
+Drop the patch once a runner release fixes it, and re-measure both packages after any runner or vitest bump: a wrong score in this lane looks like a real one.
 Stryker mutates in place rather than in a sandbox, because a sandbox copy breaks the relative `extends` in each package `tsconfig.json`.
 A completed run restores the originals, but a killed run can leave mutated sources behind, so check `git status` before trusting the working tree after an interrupted run.
 

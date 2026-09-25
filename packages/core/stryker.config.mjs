@@ -21,5 +21,8 @@ export default {
   // the existing 77, so the raise-only ratchet leaves `break` where it is.
   // Measure on an idle machine: a concurrent Stryker run inflates the score by
   // turning survivors into timeouts, which count as killed.
-  thresholds: { high: 75, low: 67, break: 77 },
+  // Re-measured on 2026-09-25 at 80.29 (1091 killed, 5 timeout, 226 survived,
+  // 43 no cov) after #206 patched the vitest-runner for vitest 5, from a clean
+  // incremental report. floor(80.29) - 2 is 78, a ratchet up from 77.
+  thresholds: { high: 75, low: 67, break: 78 },
 };
