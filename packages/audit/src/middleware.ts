@@ -54,6 +54,21 @@ interface SessionState {
   startedAt: string;
   identity: Identity;
   proxy: ProxyIdentity;
+  /**
+   * Calls admitted to this session whose event is not yet appended and
+   * persisted. `closeSession` drains this to zero before sealing, so a call
+   * that is still awaiting the upstream when the session is torn down
+   * (client DELETE, TTL expiry, shutdown) lands in the manifest instead of
+   * emitting an orphan at position 0 (#168).
+   */
+  inflight: number;
+  /** Resolves the pending drain wait once `inflight` returns to zero. */
+  onDrained?: () => void;
+  /**
+   * The in-progress close, so concurrent `closeSession` calls share one
+   * drain, one signature, and one manifest.
+   */
+  closing?: Promise<ReplayManifest | undefined>;
 }
 
 function aesEncrypt(plaintext: string, key: Buffer, aad: string): string {
@@ -219,8 +234,16 @@ export function createAuditMiddleware(
         startedAt,
         identity,
         proxy,
+        inflight: 0,
       });
     }
+    // Admission: captured once, synchronously with the lookup above, and
+    // counted as in flight until the post-call section has appended and
+    // persisted the event. `closeSession` waits for that count to reach zero,
+    // so this call cannot lose its session mid-flight and re-resolving the id
+    // after the upstream returns is neither needed nor safe (#168).
+    const session = sessionId ? sessions.get(sessionId) : undefined;
+    if (session) session.inflight++;
 
     const tool = req.params.name;
     const args = (req.params.arguments as Record<string, unknown>) ?? {};
@@ -267,7 +290,6 @@ export function createAuditMiddleware(
           tier = 'high';
         }
 
-        const session = sessionId ? sessions.get(sessionId) : undefined;
         const position = session?.events.length ?? 0;
         const event = buildEvent({
           ctx,
@@ -316,6 +338,10 @@ export function createAuditMiddleware(
         requestId: ctx.requestId,
         ...(sessionId === undefined ? {} : { sessionId }),
       });
+    } finally {
+      // Settle after the event is appended and `onEvent` has settled, so a
+      // draining close also waits for pending persistence.
+      if (session && --session.inflight === 0) session.onDrained?.();
     }
 
     if (threw) throw thrown;
@@ -339,11 +365,27 @@ export function createAuditMiddleware(
     ctx,
   ) => observe('prompt', req, next, ctx);
 
-  const closeSession: AuditMiddlewareHandle['closeSession'] = async (
-    sessionId,
-  ) => {
+  const closeSession: AuditMiddlewareHandle['closeSession'] = (sessionId) => {
     const session = sessions.get(sessionId);
-    if (!session) return undefined;
+    if (!session) return Promise.resolve(undefined);
+    // A close already in progress is the close: joining it is what keeps a
+    // DELETE that races a TTL expiry from signing two manifests.
+    session.closing ??= sealSession(sessionId, session);
+    return session.closing;
+  };
+
+  const sealSession = async (
+    sessionId: string,
+    session: SessionState,
+  ): Promise<ReplayManifest | undefined> => {
+    // Drain: every admitted call appends its event before it settles, so the
+    // manifest sealed below covers them all with continuous positions. The
+    // loop re-checks because a call can be admitted while one drain waits.
+    while (session.inflight > 0) {
+      await new Promise<void>((resolve) => {
+        session.onDrained = resolve;
+      });
+    }
     sessions.delete(sessionId);
     if (session.events.length === 0) return undefined;
 

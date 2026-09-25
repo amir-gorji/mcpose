@@ -276,6 +276,100 @@ describe('createAuditMiddleware — error and rejection events', () => {
   });
 });
 
+describe('createAuditMiddleware — close during an in-flight call (#168)', () => {
+  function deferred<T = void>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  it('closeSession waits for admitted calls, so the manifest covers them', async () => {
+    const events: AuditEvent[] = [];
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({ onEvent: (e) => void events.push(e) }),
+    );
+
+    // An earlier completed event, then a call blocked inside the upstream.
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx('s'),
+    );
+    const entered = deferred();
+    const release = deferred();
+    const blocked = middleware(
+      makeReq('search'),
+      async () => {
+        entered.resolve();
+        await release.promise;
+        return { content: [] };
+      },
+      makeCtx('s'),
+    );
+    await entered.promise;
+
+    const closing = closeSession('s');
+    // The close must not settle while the call is still in flight.
+    let settled = false;
+    void closing.then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
+
+    release.resolve();
+    await blocked;
+    const manifest = await closing;
+
+    expect(events.map((e) => e.replayManifestPosition)).toEqual([0, 1]);
+    expect(manifest?.eventCount).toBe(2);
+    expect(manifest?.merkleProofs).toHaveLength(2);
+    expect(await verifyAuditChain(events, signingKey)).toEqual({ valid: true });
+    // Sealed once: the session is gone afterwards.
+    expect(await closeSession('s')).toBeUndefined();
+  });
+
+  it('waits for a pending onEvent sink before sealing', async () => {
+    const persisted = deferred();
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({ onEvent: () => persisted.promise }),
+    );
+    const call = middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx('s'),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const closing = closeSession('s');
+    let settled = false;
+    void closing.then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
+
+    persisted.resolve();
+    await call;
+    expect((await closing)?.eventCount).toBe(1);
+  });
+
+  it('concurrent closeSession calls share one manifest', async () => {
+    const { middleware, closeSession } = createAuditMiddleware(makeOptions());
+    const release = deferred();
+    const blocked = middleware(
+      makeReq('search'),
+      async () => {
+        await release.promise;
+        return { content: [] };
+      },
+      makeCtx('s'),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const [a, b] = [closeSession('s'), closeSession('s')];
+    release.resolve();
+    await blocked;
+    const [ma, mb] = await Promise.all([a, b]);
+    expect(ma).toBeDefined();
+    expect(mb).toBe(ma);
+  });
+});
+
 describe('createAuditMiddleware — session hygiene', () => {
   it('closeSession is idempotent: second call returns undefined', async () => {
     const { middleware, closeSession } = createAuditMiddleware(makeOptions());
