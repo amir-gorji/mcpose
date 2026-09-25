@@ -183,6 +183,53 @@ describe('assertPiiRedacted', () => {
     expect(() => assertPiiRedacted(events[0]!, [SSN])).toThrow(/PII pattern/);
   });
 
+  it('checks for PII on repeated assertions with a global pattern', async () => {
+    const { events } = await collectEvents(1, {
+      resolver: () => 'low',
+      args: { ssn: '123-45-6789' },
+    });
+    const pattern = /123-45-6789/g;
+
+    expect(() => assertPiiRedacted(events[0]!, [pattern])).toThrow(
+      /PII pattern/,
+    );
+    expect(() => assertPiiRedacted(events[0]!, [pattern])).toThrow(
+      /PII pattern/,
+    );
+    expect(pattern.lastIndex).toBe(0);
+  });
+
+  it('ignores and preserves nonzero lastIndex for a global pattern', async () => {
+    const { events } = await collectEvents(1, {
+      resolver: () => 'low',
+      args: { ssn: '123-45-6789' },
+    });
+    const event = events[0]!;
+    const globalPattern = /123-45-6789/g;
+    const initialLastIndex = Number.MAX_SAFE_INTEGER;
+    globalPattern.lastIndex = initialLastIndex;
+
+    expect(() => assertPiiRedacted(event, [globalPattern])).toThrow(
+      /PII pattern/,
+    );
+    expect(globalPattern.lastIndex).toBe(initialLastIndex);
+  });
+
+  it('ignores and preserves nonzero lastIndex for a sticky pattern', async () => {
+    const { events } = await collectEvents(1, {
+      resolver: () => 'low',
+      args: { ssn: '123-45-6789' },
+    });
+    const event = events[0]!;
+    const stickyPattern = /^\{"inputRaw":/y;
+    stickyPattern.lastIndex = 1;
+
+    expect(() => assertPiiRedacted(event, [stickyPattern])).toThrow(
+      /PII pattern/,
+    );
+    expect(stickyPattern.lastIndex).toBe(1);
+  });
+
   it('passes for a well-formed high-tier event (payload encrypted)', async () => {
     const { events } = await collectEvents(1, {
       resolver: () => 'high',
