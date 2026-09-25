@@ -75,8 +75,8 @@ await startHttpProxy(
   await createBackendClient({ command: 'node', args: ['./crm-server.js'] }),
   {
     name: 'crm-proxy',
-    toolMiddleware: [audit.middleware, consent.middleware],
-    promptMiddleware: [audit.promptMiddleware, consent.promptMiddleware],
+    toolMiddleware: [consent.middleware, audit.middleware],
+    promptMiddleware: [consent.promptMiddleware, audit.promptMiddleware],
   },
   { resolveIdentity: async (req) => verifyJwt(req.headers.authorization) },
 );
@@ -97,10 +97,14 @@ try {
 Put the consent middleware **inside** `@mcpose/audit`, the same way `@mcpose/policy` goes:
 
 ```ts
-toolMiddleware: [audit.middleware, consent.middleware],
+toolMiddleware: [consent.middleware, audit.middleware],
 ```
 
-`ProxyOptions` arrays run outermost-first, so `audit.middleware` wraps `consent.middleware`.
+`ProxyOptions` arrays run in **response-processing order**, so the last element is the outermost layer.
+Writing the two handles in that order makes `audit.middleware` wrap `consent.middleware`, which is what "consent inside, audit outside" means.
+In the [root README's phrasing](https://github.com/amir-gorji/mcpose#array-order-the-one-surprising-rule): transformers first, observers last.
+`compose()` takes the opposite, outermost-first order, so a `ProxyOptions` array is not a `compose()` argument.
+See [ADR-0002](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0002-proxy-options-array-response-processing-order.md).
 
 The refusal happens before the backend call whichever way round you compose them, so this is not about safety.
 It is about evidence.
@@ -111,7 +115,8 @@ For a regulated deployment, that record is the point.
 "We refused because there was no consent" is a claim you want a signed trail to back.
 
 Where you put it relative to `@mcpose/policy` is your call, and it changes only which reason a caller sees first.
-`[audit, policy, consent]` tells an unauthorized caller they are unauthorized without consulting the consent source at all, which also keeps the lookup off the path of calls that were going to be denied anyway.
+`[consent.middleware, policy.middleware, audit.middleware]` tells an unauthorized caller they are unauthorized without consulting the consent source at all.
+It also keeps the lookup off the path of calls that were going to be denied anyway, and audit stays last so it wraps both gates.
 
 ## Fail closed, in every direction
 

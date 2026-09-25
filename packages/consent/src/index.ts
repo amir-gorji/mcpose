@@ -74,8 +74,10 @@ interface NamedRequest {
  *
  * Every refusal is a `CONSENT_MISSING` rejection thrown from inside the
  * pipeline, so audit middleware composed OUTSIDE this one records it as a
- * rejected call carrying that reason. Compose it as
- * `toolMiddleware: [audit.middleware, consent.middleware]`.
+ * rejected call carrying that reason.
+ * `ProxyOptions` arrays are in response-processing order, where the last
+ * element is outermost (ADR-0002), so compose it as
+ * `toolMiddleware: [consent.middleware, audit.middleware]`.
  *
  * What counts as consent — its granularity, its expiry, how withdrawal is
  * recorded — is entirely the host's. This package is the enforcement point,

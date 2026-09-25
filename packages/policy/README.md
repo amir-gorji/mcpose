@@ -107,10 +107,15 @@ try {
 Put the policy middleware **innermost** and `@mcpose/audit` outside it:
 
 ```ts
-toolMiddleware: [audit.middleware, policy.middleware],
+toolMiddleware: [policy.middleware, audit.middleware],
+promptMiddleware: [policy.promptMiddleware, audit.promptMiddleware],
 ```
 
-`ProxyOptions` arrays run outermost-first, so `audit.middleware` wraps `policy.middleware`.
+`ProxyOptions` arrays run in **response-processing order**, so the last element is the outermost layer.
+Writing the two handles in that order makes `audit.middleware` wrap `policy.middleware`, which is what "policy inside, audit outside" means.
+In the [root README's phrasing](https://github.com/amir-gorji/mcpose#array-order-the-one-surprising-rule): transformers first, observers last.
+`compose()` takes the opposite, outermost-first order, so a `ProxyOptions` array is not a `compose()` argument.
+See [ADR-0002](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0002-proxy-options-array-response-processing-order.md).
 
 The denial happens before the backend call whichever way round you compose them, so this ordering is not about safety.
 It is about evidence.
