@@ -206,6 +206,32 @@ describe('startHttpProxy() session lifecycle', () => {
         ).toThrow(new RegExp(`mcpose: ${option}`));
       });
 
+      it.each([2_147_483_648, 30 * 24 * 60 * 60 * 1000])(
+        'rejects finite session TTLs above the Node timer limit: %s',
+        (sessionTtlMs) => {
+          expect(() =>
+            startHttpProxy(
+              makeMockBackend(),
+              { name: 'test-server' },
+              { port: 0, path: '/mcp', sessionTtlMs },
+            ),
+          ).toThrow(/sessionTtlMs must be <= 2147483647/);
+        },
+      );
+
+      it('accepts the maximum finite session TTL', async () => {
+        const server = await startHttpProxy(
+          makeMockBackend(),
+          { name: 'test-server' },
+          { port: 0, path: '/mcp', sessionTtlMs: 2_147_483_647 },
+        );
+        try {
+          expect(server.listening).toBe(true);
+        } finally {
+          await closeServer(server);
+        }
+      });
+
       it('accepts maxSessions: Infinity', async () => {
         const server = await startHttpProxy(
           makeMockBackend(),
