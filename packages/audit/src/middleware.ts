@@ -72,6 +72,19 @@ interface SessionState {
   closing?: Promise<ReplayManifest | undefined>;
 }
 
+/**
+ * A session that has been drained and removed from admission but whose
+ * manifest is not yet delivered (#169). The unsigned manifest is fixed at
+ * seal time, so every retry signs and delivers the same bytes; the signature
+ * is kept once obtained, so a sink failure never triggers a second signing.
+ */
+interface SealedSession {
+  unsigned: Omit<ReplayManifest, 'signature'>;
+  signature?: string;
+  /** The in-progress sign-and-deliver attempt, shared by concurrent retries. */
+  attempt?: Promise<ReplayManifest>;
+}
+
 function aesEncrypt(plaintext: string, key: Buffer, aad: string): string {
   if (key.length !== 32) {
     throw new RangeError(
@@ -143,6 +156,8 @@ export function createAuditMiddleware(
   options: AuditOptions,
 ): AuditMiddlewareHandle {
   const sessions = new Map<string, SessionState>();
+  // Drained sessions awaiting signature or delivery, retried by closeSession.
+  const sealed = new Map<string, SealedSession>();
   const includeRejections = options.includeRejections ?? true;
   const closeDrainTimeoutMs = options.closeDrainTimeoutMs ?? 30_000;
   const reportAuditError: NonNullable<AuditOptions['onAuditError']> =
@@ -392,11 +407,17 @@ export function createAuditMiddleware(
 
   const closeSession: AuditMiddlewareHandle['closeSession'] = (sessionId) => {
     const session = sessions.get(sessionId);
-    if (!session) return Promise.resolve(undefined);
-    // A close already in progress is the close: joining it is what keeps a
-    // DELETE that races a TTL expiry from signing two manifests.
-    session.closing ??= sealSession(sessionId, session);
-    return session.closing;
+    if (session) {
+      // A close already in progress is the close: joining it is what keeps a
+      // DELETE that races a TTL expiry from signing two manifests.
+      session.closing ??= sealSession(sessionId, session);
+      return session.closing;
+    }
+    // Sealed but undelivered: a signer or sink failed on an earlier close.
+    // Retry from where it stopped instead of reporting the session unknown.
+    const pending = sealed.get(sessionId);
+    if (pending) return finalize(sessionId, pending);
+    return Promise.resolve(undefined);
   };
 
   const sealSession = async (
@@ -434,6 +455,9 @@ export function createAuditMiddleware(
       });
     }
     delete session.onDrained;
+    // Sealed: the session leaves the admission map here, so no later call can
+    // append to a manifest that is already being signed. What follows can
+    // still fail, so the sealed state is kept until delivery succeeds (#169).
     sessions.delete(sessionId);
     if (session.events.length === 0) return undefined;
 
@@ -455,18 +479,57 @@ export function createAuditMiddleware(
       merkleProofs,
       signedBy: options.signingKey.keyId,
     };
-    const payload = canonicalJson({
-      domain: DOMAIN_MANIFEST,
-      manifest: unsigned,
-    });
-    const signature = (
-      await options.signingKey.sign(Buffer.from(payload))
-    ).toString('hex');
+    const previous = sealed.get(sessionId);
+    if (previous) {
+      // The id was reused before the earlier session's manifest was delivered.
+      // The host had every chance to retry; keeping the newer one is the only
+      // choice that does not lose the session that is closing now.
+      onAuditError(
+        new Error(
+          `mcpose/audit: closeSession(${sessionId}) replaced an undelivered manifest for an earlier session with the same id`,
+        ),
+        { tool: '', requestId: '', sessionId },
+      );
+    }
+    const pending: SealedSession = { unsigned };
+    sealed.set(sessionId, pending);
+    return finalize(sessionId, pending);
+  };
 
-    const manifest: ReplayManifest = { ...unsigned, signature };
-
-    await options.onManifest?.(manifest);
-    return manifest;
+  /**
+   * Signs and delivers a sealed manifest. Each step is memoized on the sealed
+   * state, so a retry after a transient signer failure signs the same payload
+   * (same `closedAt`, so the same bytes) and a retry after a sink failure
+   * re-delivers the identical signed manifest rather than minting a second
+   * one. Concurrent retries share one attempt.
+   */
+  const finalize = (
+    sessionId: string,
+    pending: SealedSession,
+  ): Promise<ReplayManifest> => {
+    pending.attempt ??= (async () => {
+      try {
+        if (pending.signature === undefined) {
+          const payload = canonicalJson({
+            domain: DOMAIN_MANIFEST,
+            manifest: pending.unsigned,
+          });
+          pending.signature = (
+            await options.signingKey.sign(Buffer.from(payload))
+          ).toString('hex');
+        }
+        const manifest: ReplayManifest = {
+          ...pending.unsigned,
+          signature: pending.signature,
+        };
+        await options.onManifest?.(manifest);
+        sealed.delete(sessionId);
+        return manifest;
+      } finally {
+        delete pending.attempt;
+      }
+    })();
+    return pending.attempt;
   };
 
   return { middleware, promptMiddleware, closeSession };

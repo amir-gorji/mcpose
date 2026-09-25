@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createAuditMiddleware } from '../middleware.js';
 import { createDefaultSigningKeyProvider } from '../signingKey.js';
 import { createSensitivityResolver } from '../sensitivity.js';
-import { verifyAuditChain } from '../verify.js';
+import { verifyAuditChain, verifyManifestSignature } from '../verify.js';
 import type { AuditEvent, AuditOptions } from '../types.js';
 import { createProxyContext } from 'mcpose';
 import type { Identity } from 'mcpose';
@@ -611,5 +611,127 @@ describe('createAuditMiddleware — session hygiene', () => {
       makeCtx('k1'),
     );
     expect(events).toHaveLength(1);
+  });
+});
+
+describe('createAuditMiddleware — sealed state survives a failed close (#169)', () => {
+  const MANIFEST_DOMAIN = 'mcpose/v2/manifest';
+
+  /** Delegates to the real provider but rejects the first N manifest payloads. */
+  function flakySigner(failures: number) {
+    let remaining = failures;
+    const manifestSigns = vi.fn();
+    const provider: AuditOptions['signingKey'] = {
+      keyId: signingKey.keyId,
+      algorithm: signingKey.algorithm,
+      sign: async (data) => {
+        if (data.toString().includes(MANIFEST_DOMAIN)) {
+          manifestSigns();
+          if (remaining > 0) {
+            remaining -= 1;
+            throw new Error('kms unavailable');
+          }
+        }
+        return signingKey.sign(data);
+      },
+    };
+    return { provider, manifestSigns };
+  }
+
+  async function recordOne(
+    middleware: ReturnType<typeof createAuditMiddleware>['middleware'],
+    sessionId: string,
+  ) {
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx(sessionId),
+    );
+  }
+
+  it('a one-shot signing failure is retryable and the retry delivers a valid manifest', async () => {
+    const { provider } = flakySigner(1);
+    const onManifest = vi.fn();
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({ signingKey: provider, onManifest }),
+    );
+    await recordOne(middleware, 's');
+
+    await expect(closeSession('s')).rejects.toThrow('kms unavailable');
+    expect(onManifest).not.toHaveBeenCalled();
+
+    const manifest = await closeSession('s');
+    expect(manifest).toBeDefined();
+    expect(await verifyManifestSignature(manifest!, signingKey)).toBe(true);
+    expect(manifest!.eventCount).toBe(1);
+    expect(onManifest).toHaveBeenCalledTimes(1);
+    expect(onManifest).toHaveBeenCalledWith(manifest);
+
+    // Delivered: the sealed state is released and the id is unknown again.
+    expect(await closeSession('s')).toBeUndefined();
+  });
+
+  it('a one-shot onManifest failure re-delivers the identical manifest without signing again', async () => {
+    const { provider, manifestSigns } = flakySigner(0);
+    const delivered: unknown[] = [];
+    const onManifest = vi
+      .fn()
+      .mockImplementationOnce(async (manifest: unknown) => {
+        delivered.push(manifest);
+        throw new Error('manifest store down');
+      })
+      .mockImplementation(async (manifest: unknown) => {
+        delivered.push(manifest);
+      });
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({ signingKey: provider, onManifest }),
+    );
+    await recordOne(middleware, 's');
+
+    await expect(closeSession('s')).rejects.toThrow('manifest store down');
+    const manifest = await closeSession('s');
+
+    expect(delivered).toHaveLength(2);
+    // Same bytes both times: same closedAt, same signature, no second artifact.
+    expect(JSON.stringify(delivered[1])).toBe(JSON.stringify(delivered[0]));
+    expect(delivered[1]).toEqual(manifest);
+    expect(manifestSigns).toHaveBeenCalledTimes(1);
+    expect(await verifyManifestSignature(manifest!, signingKey)).toBe(true);
+    expect(await closeSession('s')).toBeUndefined();
+  });
+
+  it('concurrent retries share one attempt', async () => {
+    const { provider, manifestSigns } = flakySigner(1);
+    const onManifest = vi.fn();
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({ signingKey: provider, onManifest }),
+    );
+    await recordOne(middleware, 's');
+    await expect(closeSession('s')).rejects.toThrow('kms unavailable');
+
+    const [a, b] = await Promise.all([closeSession('s'), closeSession('s')]);
+    expect(a).toBeDefined();
+    expect(b).toBe(a);
+    expect(manifestSigns).toHaveBeenCalledTimes(2);
+    expect(onManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it('a sealed session does not admit new calls: they start a fresh session under the id', async () => {
+    const { provider } = flakySigner(1);
+    const onAuditError = vi.fn();
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({ signingKey: provider, onAuditError }),
+    );
+    await recordOne(middleware, 's');
+    await expect(closeSession('s')).rejects.toThrow('kms unavailable');
+
+    // The id is reused while the first manifest is still undelivered.
+    await recordOne(middleware, 's');
+    const second = await closeSession('s');
+    expect(second?.eventCount).toBe(1);
+    expect(onAuditError).toHaveBeenCalledTimes(1);
+    expect(String(onAuditError.mock.calls[0]![0])).toMatch(
+      /replaced an undelivered manifest/,
+    );
   });
 });
