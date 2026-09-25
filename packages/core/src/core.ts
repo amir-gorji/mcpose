@@ -201,7 +201,8 @@ export interface HttpProxyOptions {
   maxSessions?: number;
   /**
    * Session TTL in milliseconds. Sessions are closed after this duration,
-   * which fires {@link onSessionClosed}. Default: 30 minutes. Set to
+   * which fires {@link onSessionClosed}. Default: 30 minutes. Finite values
+   * must not exceed Node's maximum timer delay of 2,147,483,647 ms. Set to
    * `Infinity` to opt out of the TTL.
    */
   sessionTtlMs?: number;
@@ -1426,6 +1427,8 @@ function isLoopbackHost(host: string): boolean {
   );
 }
 
+const MAX_NODE_TIMER_DELAY_MS = 2 ** 31 - 1;
+
 /**
  * Starts the proxy over Streamable HTTP with stateful sessions.
  *
@@ -1470,6 +1473,11 @@ export function startHttpProxy(
   if (!(sessionTtlMs > 0)) {
     throw new Error(
       `mcpose: sessionTtlMs must be > 0 or Infinity, got ${String(httpOptions.sessionTtlMs)}`,
+    );
+  }
+  if (Number.isFinite(sessionTtlMs) && sessionTtlMs > MAX_NODE_TIMER_DELAY_MS) {
+    throw new Error(
+      `mcpose: sessionTtlMs must be <= ${MAX_NODE_TIMER_DELAY_MS} or Infinity, got ${String(httpOptions.sessionTtlMs)}`,
     );
   }
   // Filled in once the server is listening (the real port is only known

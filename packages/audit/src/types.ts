@@ -232,6 +232,15 @@ export interface AuditOptions {
    */
   includeRejections?: boolean;
   /**
+   * How long `closeSession` waits for calls already admitted to the session
+   * to append and persist their events before it seals the manifest. Past
+   * the deadline the manifest covers what has landed, and each straggler is
+   * reported through `onAuditError` with its tool and requestId. `Infinity`
+   * waits without bound.
+   * @default 30_000
+   */
+  closeDrainTimeoutMs?: number;
+  /**
    * Called when the audit layer itself fails (event serialization, a
    * throwing onEvent sink). The audit layer NEVER throws into the tool-call
    * path; failures are reported here instead. If this hook itself throws,
@@ -254,10 +263,13 @@ export interface AuditMiddlewareHandle {
    */
   promptMiddleware: PromptMiddleware;
   /**
-   * Signal that a session has ended. Computes the Merkle tree over all audit
-   * events for the session, signs the full manifest, fires onManifest, and
-   * returns the ReplayManifest. Returns undefined if the session had no
-   * events or is unknown.
+   * Signal that a session has ended. Waits for every call already admitted
+   * to the session to append and persist its event, then computes the
+   * Merkle tree over all audit events for the session, signs the full
+   * manifest, fires onManifest, and returns the ReplayManifest. A call still
+   * inside its handler at teardown therefore lands in the manifest rather
+   * than orphaned at position 0. Concurrent calls for the same session share
+   * one close. Returns undefined if the session had no events or is unknown.
    */
   closeSession(sessionId: string): Promise<ReplayManifest | undefined>;
 }

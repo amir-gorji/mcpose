@@ -97,6 +97,7 @@ If a manifest is expected, assert that it exists rather than asserting through i
 
 Two notes that trip people up:
 
+- `assertPiiRedacted` tests a fresh copy of each regular expression from index zero, so global and sticky patterns are repeatable and the caller's `lastIndex` is preserved.
 - `assertAuditChainIntegrity` **throws on an empty chain**, deliberately: a log truncated to zero events must not pass a compliance assertion. If an empty session is the expected outcome, assert that explicitly instead.
 - `assertDelegationHonored` checks structure, never signatures, and that is a decision rather than a gap.
   [ADR-0016](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0016-delegation-chain-wire-format.md) resolved delegation as unsigned attribution: per-hop signatures need key distribution between proxies that do not share an operator, and an unverifiable signature field is worse than an honest trust statement.
