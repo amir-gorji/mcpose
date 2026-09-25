@@ -12,6 +12,9 @@ overrides:
   qs: '>=6.16.0 <7'
   vite: '>=7.3.5 <8'
 
+patchedDependencies:
+  '@stryker-mutator/vitest-runner@10.0.0': 10f8494cf65ab9a83f58402a0bc08169fa7da1054da158af8af078c338ddf3c2
+
 importers:
 
   .:
@@ -70,7 +73,7 @@ importers:
         version: 10.0.0(@types/node@26.6.2)
       '@stryker-mutator/vitest-runner':
         specifier: 10.0.0
-        version: 10.0.0(@stryker-mutator/core@10.0.0(@types/node@26.6.2))(vitest@5.0.1)
+        version: 10.0.0(patch_hash=10f8494cf65ab9a83f58402a0bc08169fa7da1054da158af8af078c338ddf3c2)(@stryker-mutator/core@10.0.0(@types/node@26.6.2))(vitest@5.0.1)
       '@types/node':
         specifier: ^26.5.1
         version: 26.6.2
@@ -124,7 +127,7 @@ importers:
         version: 10.0.0(@types/node@26.6.2)
       '@stryker-mutator/vitest-runner':
         specifier: 10.0.0
-        version: 10.0.0(@stryker-mutator/core@10.0.0(@types/node@26.6.2))(vitest@5.0.1)
+        version: 10.0.0(patch_hash=10f8494cf65ab9a83f58402a0bc08169fa7da1054da158af8af078c338ddf3c2)(@stryker-mutator/core@10.0.0(@types/node@26.6.2))(vitest@5.0.1)
       '@types/node':
         specifier: ^26.5.1
         version: 26.6.2
@@ -3789,7 +3792,7 @@ snapshots:
 
   '@stryker-mutator/util@10.0.0': {}
 
-  '@stryker-mutator/vitest-runner@10.0.0(@stryker-mutator/core@10.0.0(@types/node@26.6.2))(vitest@5.0.1)':
+  '@stryker-mutator/vitest-runner@10.0.0(patch_hash=10f8494cf65ab9a83f58402a0bc08169fa7da1054da158af8af078c338ddf3c2)(@stryker-mutator/core@10.0.0(@types/node@26.6.2))(vitest@5.0.1)':
     dependencies:
       '@stryker-mutator/api': 10.0.0
       '@stryker-mutator/core': 10.0.0(@types/node@26.6.2)
