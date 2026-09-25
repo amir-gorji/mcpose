@@ -316,7 +316,7 @@ interface HttpProxyOptions {
   onError?: (err: unknown) => void;
   maxBodyBytes?: number; // Default: 4 MB (4,194,304); excess returns 413
   maxSessions?: number;  // Default: 1000; excess requests return 503; Infinity opts out
-  sessionTtlMs?: number; // Default: 30 minutes (1,800,000); Infinity opts out
+  sessionTtlMs?: number; // Default: 30 minutes (1,800,000); max finite 2,147,483,647; Infinity opts out
   /** Resolves caller identity once per session. Errors abort the session with 401. */
   resolveIdentity?: (req: http.IncomingMessage) => Identity | Promise<Identity>;
   /** Re-validates an existing session on every routed request. Return false (or throw) for a 401. */
@@ -355,6 +355,7 @@ Unlimited sessions that never expire are a memory exhaustion path open to any cl
 Both are overridable, and `Infinity` is the explicit opt-out for either.
 `maxSessions: 0` is not an opt-out: it already means "reject every session", so it keeps that meaning.
 A `maxSessions` below zero, or a `sessionTtlMs` of zero or below, throws at startup rather than silently disabling the bound.
+So does a finite `sessionTtlMs` above 2,147,483,647 ms (about 24.8 days), Node's maximum timer delay: `setTimeout` would otherwise clamp it to 1 ms and expire every session immediately, so anything longer must use `Infinity`.
 
 This is a behavior change: both options used to be opt-in, so a proxy started with defaults accepted unlimited sessions that never expired.
 A long-lived deployment that relied on that must now pass `sessionTtlMs: Infinity`, `maxSessions: Infinity`, or values that match its own limits.
