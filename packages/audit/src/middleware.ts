@@ -145,8 +145,20 @@ export function createAuditMiddleware(
   const sessions = new Map<string, SessionState>();
   const includeRejections = options.includeRejections ?? true;
   const closeDrainTimeoutMs = options.closeDrainTimeoutMs ?? 30_000;
-  const onAuditError: NonNullable<AuditOptions['onAuditError']> =
+  const reportAuditError: NonNullable<AuditOptions['onAuditError']> =
     options.onAuditError ?? ((err) => console.error(err));
+  // A throwing reporter is outside the audited call path too (#172): it must
+  // not replace a tool result, mask an upstream error, or abort a drain.
+  const onAuditError: NonNullable<AuditOptions['onAuditError']> = (
+    err,
+    info,
+  ) => {
+    try {
+      reportAuditError(err, info);
+    } catch {
+      // Nothing left to report it to.
+    }
+  };
 
   // Private subkeys, derived once from the signing secret THROUGH the oracle with
   // domain separation. The provider never exposes raw key bytes, and keyId must

@@ -243,7 +243,8 @@ export interface AuditOptions {
   /**
    * Called when the audit layer itself fails (event serialization, a
    * throwing onEvent sink). The audit layer NEVER throws into the tool-call
-   * path; failures are reported here instead.
+   * path; failures are reported here instead. If this hook itself throws,
+   * the exception is contained and never reaches the caller either.
    * @default console.error
    */
   onAuditError?: (
