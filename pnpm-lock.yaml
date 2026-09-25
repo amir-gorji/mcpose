@@ -92,6 +92,12 @@ importers:
 
   packages/consent:
     devDependencies:
+      '@mcpose/audit':
+        specifier: workspace:*
+        version: link:../audit
+      '@mcpose/policy':
+        specifier: workspace:*
+        version: link:../policy
       '@types/node':
         specifier: ^26.5.1
         version: 26.6.2
@@ -155,6 +161,9 @@ importers:
 
   packages/policy:
     devDependencies:
+      '@mcpose/audit':
+        specifier: workspace:*
+        version: link:../audit
       '@types/node':
         specifier: ^26.5.1
         version: 26.6.2
