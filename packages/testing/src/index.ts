@@ -124,7 +124,8 @@ export function assertPiiRedacted(event: AuditEvent, patterns: RegExp[]): void {
     outputRaw: event.outputRaw,
   });
   for (const pattern of patterns) {
-    if (pattern.test(raw)) {
+    const matcher = new RegExp(pattern.source, pattern.flags);
+    if (matcher.test(raw)) {
       throw new Error(
         `PII pattern ${pattern} found in audit event for tool "${event.tool}"`,
       );
