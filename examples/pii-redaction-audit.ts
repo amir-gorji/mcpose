@@ -172,14 +172,9 @@ async function main() {
     {
       port: 3000,
       resolveIdentity,
-      // Flush the replay manifest when the session ends.  `onSessionClosed` is
-      // fire-and-forget (void), so handle the rejection here rather than
-      // returning the promise to a caller that will not await it.
-      onSessionClosed: (sessionId) => {
-        auditHandle.closeSession(sessionId).catch((err: unknown) => {
-          console.error('closeSession failed:', err);
-        });
-      },
+      // Flush the replay manifest when the session ends.  The proxy awaits
+      // the returned promise and routes a rejection to `onError`.
+      onSessionClosed: (sessionId) => auditHandle.closeSession(sessionId),
     },
   );
 
@@ -187,11 +182,11 @@ async function main() {
   console.error(`Proxying → ${UPSTREAM_URL}`);
   console.error('PII patterns:', PII_PATTERNS.map((r) => r.source).join(', '));
 
-  // Graceful shutdown.
+  // Graceful shutdown.  `server.close` completes only after every session's
+  // manifest has flushed, so exit from its callback rather than right away.
   const shutdown = () => {
     console.error('\nShutting down...');
-    server.close();
-    process.exit(0);
+    server.close(() => process.exit(0));
   };
 
   process.on('SIGINT', shutdown);

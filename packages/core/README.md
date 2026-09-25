@@ -124,6 +124,8 @@ Behavior worth knowing before you deploy it:
 - **Credential headers never reach middleware.** `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, and `x-api-key` are stripped from `ProxyContext.headers`, and with that from anything middleware logs.
   `resolveIdentity` reads the raw `http.IncomingMessage`, so it still sees them.
 - **`onSessionClosed` fires on every session-end path**: client DELETE, TTL expiry, and server shutdown, so audit manifests flush in all three cases.
+  A returned promise is awaited, and `server.close()` does not complete until every session's hook has settled, so `await` the close before exiting the process.
+  A hook that throws or rejects is reported through `onError` and never breaks teardown.
 - **Limit breaches are structured.** 503 (session limit) and 413 (body limit) responses carry `error.data.rejectionReason` set to `SESSION_LIMIT` / `BODY_LIMIT`.
 - **SSE replay is scoped per stream.** The in-memory store replays only events from the reconnecting stream; an unknown or already-evicted `Last-Event-ID` replays nothing.
 
@@ -328,8 +330,8 @@ interface HttpProxyOptions {
   tlsOptions?: https.ServerOptions;
   /** SSE reconnect replay store. Defaults to in-memory. Pass null to disable. */
   eventStore?: PersistentEventStore | null;
-  /** Called when a session closes: client DELETE, TTL expiry, or server shutdown. */
-  onSessionClosed?: (sessionId: string) => void;
+  /** Called when a session closes: client DELETE, TTL expiry, or server shutdown. A returned promise is awaited. */
+  onSessionClosed?: (sessionId: string) => unknown;
   /** Hosts allowed in the Host header. Default: derived from the bind address and real port on loopback. */
   allowedHosts?: string[];
   /** Origins allowed in the Origin header. Default: derived, matching allowedHosts. */

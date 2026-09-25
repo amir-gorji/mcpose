@@ -343,6 +343,8 @@ interface AuditMiddlewareHandle {
 </details>
 
 `closeSession` returns `undefined` if the session had no events or is unknown; wire it to `HttpProxyOptions.onSessionClosed`.
+The proxy awaits the returned promise, reports a rejection through `HttpProxyOptions.onError`, and holds `server.close()` open until every session's manifest has settled.
+Await the close before exiting the process, or the final manifest can be lost.
 The returned `middleware` is already marked as a pass-through observer, so tools in `passThroughTools` stay audited with no extra setup.
 
 `promptMiddleware` audits `prompts/get` calls and shares the session chain with `middleware`, so tool and prompt events interleave in one trail and one manifest.
