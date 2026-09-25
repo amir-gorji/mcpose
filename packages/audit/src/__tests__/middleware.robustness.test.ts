@@ -143,6 +143,84 @@ describe('createAuditMiddleware — never blocks the call path', () => {
     ).rejects.toThrow('upstream down');
   });
 
+  it('a throwing onAuditError reporter does not fail a successful call', async () => {
+    const onAuditError = vi.fn(() => {
+      throw new Error('reporter down');
+    });
+    const { middleware } = createAuditMiddleware(
+      makeOptions({
+        onEvent: () => {
+          throw new Error('sink down');
+        },
+        onAuditError,
+      }),
+    );
+
+    await expect(
+      middleware(
+        makeReq('search'),
+        async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+        makeCtx('s1'),
+      ),
+    ).resolves.toEqual({ content: [{ type: 'text', text: 'ok' }] });
+    expect(onAuditError).toHaveBeenCalledTimes(1);
+  });
+
+  it('a throwing onAuditError reporter does not mask the upstream error', async () => {
+    const upstreamError = new Error('upstream down');
+    const onAuditError = vi.fn(() => {
+      throw new Error('reporter down');
+    });
+    const { middleware } = createAuditMiddleware(
+      makeOptions({
+        onEvent: () => {
+          throw new Error('sink down');
+        },
+        onAuditError,
+      }),
+    );
+
+    await expect(
+      middleware(
+        makeReq('search'),
+        async () => {
+          throw upstreamError;
+        },
+        makeCtx('s1'),
+      ),
+    ).rejects.toBe(upstreamError);
+    expect(onAuditError).toHaveBeenCalledTimes(1);
+  });
+
+  it('a throwing onAuditError reporter keeps the sensitivity fallback and event', async () => {
+    const events: AuditEvent[] = [];
+    const onAuditError = vi.fn(() => {
+      throw new Error('reporter down');
+    });
+    const { middleware } = createAuditMiddleware(
+      makeOptions({
+        sensitivityResolver: () => {
+          throw new Error('resolver bug');
+        },
+        onEvent: (event) => {
+          events.push(event);
+        },
+        onAuditError,
+      }),
+    );
+
+    await expect(
+      middleware(
+        makeReq('search', { ssn: '123-45-6789' }),
+        async () => ({ content: [] }),
+        makeCtx('s1'),
+      ),
+    ).resolves.toEqual({ content: [] });
+    expect(onAuditError).toHaveBeenCalledTimes(1);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.sensitivityTier).toBe('high');
+  });
+
   it('circular and BigInt arguments still produce an event', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(

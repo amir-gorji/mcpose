@@ -130,6 +130,16 @@ export function createAuditMiddleware(
   const includeRejections = options.includeRejections ?? true;
   const onAuditError: NonNullable<AuditOptions['onAuditError']> =
     options.onAuditError ?? ((err) => console.error(err));
+  const reportAuditError = (
+    err: unknown,
+    info: Parameters<typeof onAuditError>[1],
+  ): void => {
+    try {
+      onAuditError(err, info);
+    } catch {
+      // A reporting hook is also outside the audited call path.
+    }
+  };
 
   // Private subkeys, derived once from the signing secret THROUGH the oracle with
   // domain separation. The provider never exposes raw key bytes, and keyId must
@@ -259,7 +269,7 @@ export function createAuditMiddleware(
         try {
           tier = options.sensitivityResolver(tool, identity, args);
         } catch (err) {
-          onAuditError(err, {
+          reportAuditError(err, {
             tool,
             requestId: ctx.requestId,
             ...(sessionId === undefined ? {} : { sessionId }),
@@ -311,7 +321,7 @@ export function createAuditMiddleware(
         await options.onEvent(event);
       }
     } catch (err) {
-      onAuditError(err, {
+      reportAuditError(err, {
         tool,
         requestId: ctx.requestId,
         ...(sessionId === undefined ? {} : { sessionId }),
