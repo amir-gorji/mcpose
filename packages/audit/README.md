@@ -129,6 +129,9 @@ Wiring `onSessionClosed` to `closeSession`, as above, is therefore the whole pat
 `closeSession` waits for every call the session has already admitted to append and persist its event before it seals, so a tool call still running when the client sends DELETE or the TTL fires ends up in the manifest at its proper position rather than as an orphan.
 Concurrent `closeSession` calls for one session share a single drain and a single signed manifest.
 The wait is bounded by `closeDrainTimeoutMs` (default 30 seconds, `Infinity` to wait without bound): past it the manifest seals what has landed, and each call still in flight is reported through `onAuditError` with its tool and requestId, so a handler that never settles cannot hold the session's recorded events unsigned forever.
+A close that fails after the drain, because the signing provider or `onManifest` rejected, is retryable: the sealed session is kept, and calling `closeSession` again with the same id resumes from the failed step.
+The retry signs the same payload and delivers the same manifest, so a transient KMS or manifest-store outage costs a retry rather than a second signed artifact or a lost session.
+The state is released only once `onManifest` has settled successfully, so a host that never retries keeps that sealed state in memory.
 Skip the wiring and an abandoned session leaves its events unsigned in memory for the life of the process, which is both a leak and a silent hole in the audit record.
 
 `sessionTtlMs` defaults to 30 minutes and `maxSessions` to 1000, so that expiry happens whether or not a host configures either.

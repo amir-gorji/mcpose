@@ -270,6 +270,12 @@ export interface AuditMiddlewareHandle {
    * inside its handler at teardown therefore lands in the manifest rather
    * than orphaned at position 0. Concurrent calls for the same session share
    * one close. Returns undefined if the session had no events or is unknown.
+   *
+   * A rejection from the signing provider or from onManifest is retryable:
+   * the sealed session is retained, and calling closeSession again with the
+   * same id resumes where it stopped. A retry signs the same payload and
+   * delivers the same manifest, never a second signed artifact. The state
+   * is released only once onManifest has settled successfully.
    */
   closeSession(sessionId: string): Promise<ReplayManifest | undefined>;
 }
