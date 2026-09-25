@@ -53,6 +53,7 @@
     "mcpose": ">=3.0.0 <4"
   },
   "devDependencies": {
+    "@mcpose/audit": "workspace:*",
     "@types/node": "^26.5.1",
     "@vitest/coverage-v8": "5.0.1",
     "mcpose": "workspace:*",
