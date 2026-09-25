@@ -232,6 +232,15 @@ export interface AuditOptions {
    */
   includeRejections?: boolean;
   /**
+   * How long `closeSession` waits for calls already admitted to the session
+   * to append and persist their events before it seals the manifest. Past
+   * the deadline the manifest covers what has landed, and each straggler is
+   * reported through `onAuditError` with its tool and requestId. `Infinity`
+   * waits without bound.
+   * @default 30_000
+   */
+  closeDrainTimeoutMs?: number;
+  /**
    * Called when the audit layer itself fails (event serialization, a
    * throwing onEvent sink). The audit layer NEVER throws into the tool-call
    * path; failures are reported here instead.

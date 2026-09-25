@@ -127,6 +127,7 @@ Two wiring details decide whether this actually works:
 Wiring `onSessionClosed` to `closeSession`, as above, is therefore the whole pattern: an abandoned session still expires on the TTL, and its manifest still gets signed and handed to `onManifest`.
 `closeSession` waits for every call the session has already admitted to append and persist its event before it seals, so a tool call still running when the client sends DELETE or the TTL fires ends up in the manifest at its proper position rather than as an orphan.
 Concurrent `closeSession` calls for one session share a single drain and a single signed manifest.
+The wait is bounded by `closeDrainTimeoutMs` (default 30 seconds, `Infinity` to wait without bound): past it the manifest seals what has landed, and each call still in flight is reported through `onAuditError` with its tool and requestId, so a handler that never settles cannot hold the session's recorded events unsigned forever.
 Skip the wiring and an abandoned session leaves its events unsigned in memory for the life of the process, which is both a leak and a silent hole in the audit record.
 
 `sessionTtlMs` defaults to 30 minutes and `maxSessions` to 1000, so that expiry happens whether or not a host configures either.

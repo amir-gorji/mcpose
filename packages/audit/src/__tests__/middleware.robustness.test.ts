@@ -349,6 +349,101 @@ describe('createAuditMiddleware — close during an in-flight call (#168)', () =
     expect((await closing)?.eventCount).toBe(1);
   });
 
+  it('counts a call as in flight from before subkey derivation, not after', async () => {
+    // The first sign() call (chain subkey derivation) blocks, so the call is
+    // suspended in the pre-call await when close arrives. It must still be
+    // sealed into the manifest rather than resurrect the session afterwards.
+    const release = deferred();
+    const inner = createDefaultSigningKeyProvider('test-secret');
+    let first = true;
+    const slowKey: typeof inner = {
+      keyId: inner.keyId,
+      algorithm: inner.algorithm,
+      sign: async (payload: Buffer) => {
+        if (first) {
+          first = false;
+          await release.promise;
+        }
+        return inner.sign(payload);
+      },
+    };
+    const events: AuditEvent[] = [];
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({ signingKey: slowKey, onEvent: (e) => void events.push(e) }),
+    );
+    const call = middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx('s'),
+    );
+    const closing = closeSession('s');
+    let settled = false;
+    void closing.then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
+
+    release.resolve();
+    await call;
+    expect((await closing)?.eventCount).toBe(1);
+    expect(events[0]!.replayManifestPosition).toBe(0);
+    expect(await closeSession('s')).toBeUndefined();
+  });
+
+  it('a rejected pre-call key fetch does not leave the session looking busy', async () => {
+    const onAuditError = vi.fn();
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({
+        onAuditError,
+        keyStore: {
+          getOrCreate: () => Promise.reject(new Error('kms down')),
+          destroy: async () => ({ destroyedAt: new Date().toISOString() }),
+        },
+      }),
+    );
+    await expect(
+      middleware(
+        makeReq('search'),
+        async () => ({ content: [] }),
+        makeCtx('s'),
+      ),
+    ).rejects.toThrow('kms down');
+    // No events, so no manifest, but the close must resolve promptly rather
+    // than wait on a call that already failed.
+    expect(await closeSession('s')).toBeUndefined();
+    expect(onAuditError).not.toHaveBeenCalled();
+  });
+
+  it('seals after closeDrainTimeoutMs and reports each stuck call', async () => {
+    const events: AuditEvent[] = [];
+    const onAuditError = vi.fn();
+    const { middleware, closeSession } = createAuditMiddleware(
+      makeOptions({
+        closeDrainTimeoutMs: 20,
+        onAuditError,
+        onEvent: (e) => void events.push(e),
+      }),
+    );
+    await middleware(
+      makeReq('search'),
+      async () => ({ content: [] }),
+      makeCtx('s'),
+    );
+    const ctx = makeCtx('s');
+    void middleware(makeReq('search'), () => new Promise(() => {}), ctx);
+
+    const manifest = await closeSession('s');
+    expect(manifest?.eventCount).toBe(1);
+    expect(events).toHaveLength(1);
+    expect(onAuditError).toHaveBeenCalledTimes(1);
+    expect(onAuditError.mock.calls[0]![0]).toBeInstanceOf(Error);
+    expect(onAuditError.mock.calls[0]![1]).toEqual({
+      tool: 'search',
+      requestId: ctx.requestId,
+      sessionId: 's',
+    });
+    expect(await closeSession('s')).toBeUndefined();
+  });
+
   it('concurrent closeSession calls share one manifest', async () => {
     const { middleware, closeSession } = createAuditMiddleware(makeOptions());
     const release = deferred();
