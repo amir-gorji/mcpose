@@ -130,6 +130,7 @@ describe('scopeEventStore()', () => {
 
     expect(await a.getStreamIdForEventId?.(cursor)).toBe('_GET_stream');
     expect(await b.getStreamIdForEventId?.(cursor)).toBeUndefined();
+    expect(await a.getStreamIdForEventId?.('unknown')).toBeUndefined();
 
     const send = vi.fn().mockResolvedValue(undefined);
     expect(await b.replayEventsAfter(cursor, { send })).toBe('');
