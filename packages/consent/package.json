@@ -1,7 +1,7 @@
 {
   "name": "@mcpose/consent",
   "version": "1.0.0",
-  "description": "Fail-closed GDPR/CCPA consent gate middleware for mcpose \u2014 host-resolved consent, audited refusals",
+  "description": "Fail-closed GDPR/CCPA consent gate middleware for mcpose — host-resolved consent, audited refusals",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
