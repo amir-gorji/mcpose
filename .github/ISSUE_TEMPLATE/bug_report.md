@@ -14,6 +14,11 @@ A one or two sentence description of the problem.
 - [ ] `mcpose`
 - [ ] `@mcpose/audit`
 - [ ] `@mcpose/testing`
+- [ ] `@mcpose/policy`
+- [ ] `@mcpose/consent`
+- [ ] `@mcpose/otel`
+- [ ] `@mcpose/store-redis`
+- [ ] `@mcpose/store-postgres`
 - [ ] Documentation
 
 ## Steps to reproduce

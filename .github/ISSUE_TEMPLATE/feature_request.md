@@ -32,6 +32,11 @@ Any other approaches you considered and why they are worse.
 - [ ] `mcpose`
 - [ ] `@mcpose/audit`
 - [ ] `@mcpose/testing`
+- [ ] `@mcpose/policy`
+- [ ] `@mcpose/consent`
+- [ ] `@mcpose/otel`
+- [ ] `@mcpose/store-redis`
+- [ ] `@mcpose/store-postgres`
 - [ ] Documentation
 
 ## Additional context
