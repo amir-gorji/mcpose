@@ -119,6 +119,31 @@ describe('startHttpProxy() session lifecycle', () => {
         await closeServer(server);
       }
     });
+
+    it('routes a rejected async onSessionClosed on TTL expiry to onError (#176)', async () => {
+      const errors: unknown[] = [];
+      const server = await startHttpProxy(
+        makeMockBackend(),
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          sessionTtlMs: 1000,
+          onError: (err) => errors.push(err),
+          onSessionClosed: () => Promise.reject(new Error('flush rejected')),
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      try {
+        await initSession(baseUrl);
+        await vi.advanceTimersByTimeAsync(1001);
+        expect(errors).toHaveLength(1);
+        expect((errors[0] as Error).message).toBe('flush rejected');
+      } finally {
+        await closeServer(server);
+      }
+    });
   });
 
   describe('bounded-by-default lifecycle (#107)', () => {
@@ -551,6 +576,62 @@ describe('startHttpProxy() session lifecycle', () => {
       await closeServer(server);
 
       expect(closed).toEqual([sessionId]);
+      expect(server.listening).toBe(false);
+    });
+
+    it('awaits an async onSessionClosed before the close callback runs (#176)', async () => {
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => (release = resolve));
+      let finished = false;
+      const server = await startHttpProxy(
+        makeMockBackend(),
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          onSessionClosed: async () => {
+            await pending;
+            finished = true;
+          },
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      await initSession(baseUrl);
+      let closeCallbackRan = false;
+      const closing = closeServer(server).then(() => {
+        closeCallbackRan = true;
+      });
+
+      await new Promise((r) => setImmediate(r));
+      expect(finished).toBe(false);
+      expect(closeCallbackRan).toBe(false);
+
+      release();
+      await closing;
+      expect(finished).toBe(true);
+      expect(server.listening).toBe(false);
+    });
+
+    it('routes a rejected onSessionClosed to onError and still closes (#176)', async () => {
+      const errors: unknown[] = [];
+      const server = await startHttpProxy(
+        makeMockBackend(),
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          onError: (err) => errors.push(err),
+          onSessionClosed: () => Promise.reject(new Error('flush failed')),
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      await initSession(baseUrl);
+      await closeServer(server);
+
+      expect(errors).toHaveLength(1);
+      expect((errors[0] as Error).message).toBe('flush failed');
       expect(server.listening).toBe(false);
     });
   });
