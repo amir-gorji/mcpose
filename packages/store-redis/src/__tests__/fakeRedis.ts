@@ -1,9 +1,13 @@
 /**
- * In-memory stand-in for the three commands {@link RedisEventStoreClient}
- * uses. Faithful about the parts the adapter depends on: entry ordering,
- * inclusive and exclusive `XRANGE` bounds, and key expiry.
+ * In-memory stand-in for the commands {@link RedisEventStoreClient} and
+ * {@link RedisSessionRegistryClient} use. Faithful about the parts the
+ * adapters depend on: entry ordering, inclusive and exclusive `XRANGE`
+ * bounds, and key expiry.
  */
-import type { RedisEventStoreClient } from '../index.js';
+import type {
+  RedisEventStoreClient,
+  RedisSessionRegistryClient,
+} from '../index.js';
 
 type Entry = { id: string; message: Record<string, string> };
 
@@ -14,8 +18,11 @@ function compare(a: string, b: string): number {
   return Number(aMs) - Number(bMs) || Number(aSeq) - Number(bSeq);
 }
 
-export class FakeRedis implements RedisEventStoreClient {
+export class FakeRedis
+  implements RedisEventStoreClient, RedisSessionRegistryClient
+{
   private readonly streams = new Map<string, Entry[]>();
+  private readonly strings = new Map<string, string>();
   private readonly expiresAt = new Map<string, number>();
   private seq = 0;
   /** Milliseconds added to `Date.now()`, so tests can walk past a TTL. */
@@ -25,19 +32,27 @@ export class FakeRedis implements RedisEventStoreClient {
     return Date.now() + this.offsetMs;
   }
 
-  private live(key: string): Entry[] | undefined {
+  /** Drops an expired key; true when the key may still hold data. */
+  private reap(key: string): boolean {
     const expiry = this.expiresAt.get(key);
     if (expiry !== undefined && expiry <= this.now()) {
       this.streams.delete(key);
+      this.strings.delete(key);
       this.expiresAt.delete(key);
-      return undefined;
+      return false;
     }
-    return this.streams.get(key);
+    return true;
+  }
+
+  private live(key: string): Entry[] | undefined {
+    return this.reap(key) ? this.streams.get(key) : undefined;
   }
 
   /** Keys currently holding data, for asserting on the layout. */
   keys(): string[] {
-    return [...this.streams.keys()].filter((k) => this.live(k) !== undefined);
+    return [...this.streams.keys(), ...this.strings.keys()].filter((k) =>
+      this.reap(k),
+    );
   }
 
   ttlOf(key: string): number | undefined {
@@ -74,5 +89,27 @@ export class FakeRedis implements RedisEventStoreClient {
     if (!this.streams.has(key)) return false;
     this.expiresAt.set(key, this.now() + ms);
     return true;
+  }
+
+  async set(
+    key: string,
+    value: string,
+    options?: { expiration: { type: 'PXAT'; value: number } },
+  ): Promise<'OK'> {
+    this.strings.set(key, value);
+    if (options === undefined) this.expiresAt.delete(key);
+    else this.expiresAt.set(key, options.expiration.value);
+    this.reap(key);
+    return 'OK';
+  }
+
+  async get(key: string): Promise<string | null> {
+    return (this.reap(key) && this.strings.get(key)) || null;
+  }
+
+  async del(key: string): Promise<number> {
+    const had = this.reap(key) && this.strings.delete(key);
+    this.expiresAt.delete(key);
+    return had ? 1 : 0;
   }
 }

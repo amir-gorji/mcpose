@@ -1,5 +1,7 @@
 /**
- * Postgres-backed {@link EventStore} for mcpose's Streamable HTTP transport.
+ * Postgres-backed {@link EventStore} and {@link SessionRegistry} for mcpose's
+ * Streamable HTTP transport: together they let a session resume after a
+ * proxy restart or on another instance.
  *
  * @module @mcpose/store-postgres
  */
@@ -9,13 +11,14 @@ import type {
   StreamId,
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import type { SessionRecord, SessionRegistry } from 'mcpose';
 
 /**
- * The slice of a `pg` client this store actually calls. A `Pool`, a
+ * The slice of a `pg` client this package actually calls. A `Pool`, a
  * `PoolClient`, and a `Client` all satisfy it structurally, and so does a
  * test double.
  */
-export interface PostgresEventStoreClient {
+export interface PostgresClient {
   query(
     text: string,
     values?: unknown[],
@@ -88,10 +91,9 @@ const MAX_BIGINT = 9223372036854775807n;
  * reconnect replay durable, uncapped, per-stream history instead of the
  * in-memory store's 1000-event cap shared across every stream in the process.
  *
- * Note that this is the storage half of restart and fleet resumability, not
- * the whole of it: mcpose's session registry is still in memory, so a client
- * reconnecting to a restarted proxy is rejected on its `mcp-session-id`
- * before this store is consulted. See the package README.
+ * This is the storage half of restart and fleet resumability; pair it with
+ * {@link createPostgresSessionRegistry} so the reconnecting client's
+ * `mcp-session-id` is known to the instance it lands on.
  *
  * The client must already be connected: connection lifecycle, pooling, TLS,
  * and reconnection stay with the host application, and this store only reads
@@ -110,7 +112,7 @@ const MAX_BIGINT = 9223372036854775807n;
  * ```
  */
 export function createPostgresEventStore(
-  client: PostgresEventStoreClient,
+  client: PostgresClient,
   options: PostgresEventStoreOptions = {},
 ): PostgresEventStore {
   const table = options.table ?? 'mcpose_events';
@@ -225,6 +227,130 @@ export function createPostgresEventStore(
         );
       }
       return streamId;
+    },
+  };
+}
+
+export interface PostgresSessionRegistryOptions {
+  /**
+   * Table holding the session records, optionally schema-qualified.
+   * Interpolated into SQL, so it is validated as an identifier and rejected
+   * otherwise.
+   *
+   * @default 'mcpose_sessions'
+   */
+  table?: string;
+  /**
+   * Run {@link PostgresSessionRegistry.pruneExpired} in the background once
+   * every this many writes. `0` disables it.
+   *
+   * @default 1000
+   */
+  pruneEveryWrites?: number;
+  /** Called when an opportunistic background prune fails. Defaults to `console.error`. */
+  onError?: (err: unknown) => void;
+}
+
+export interface PostgresSessionRegistry extends SessionRegistry {
+  /** Creates the table and its index if they do not exist. Never runs implicitly. */
+  init(): Promise<void>;
+  /**
+   * Deletes every record past its deadline. Expiry is already enforced on
+   * read, so this only reclaims space.
+   *
+   * @returns the number of rows deleted.
+   */
+  pruneExpired(): Promise<number>;
+}
+
+/**
+ * Builds a {@link SessionRegistry} backed by one Postgres table, one row per
+ * session, expiring at the deadline mcpose fixed when the session was
+ * created. Give it the same pool as {@link createPostgresEventStore}: a
+ * resumed session needs both its record and its replay history.
+ *
+ * ```ts
+ * const sessionRegistry = createPostgresSessionRegistry(pool);
+ * await sessionRegistry.init();
+ * await startHttpProxy(backends, {}, { eventStore, sessionRegistry });
+ * ```
+ */
+export function createPostgresSessionRegistry(
+  client: PostgresClient,
+  options: PostgresSessionRegistryOptions = {},
+): PostgresSessionRegistry {
+  const table = options.table ?? 'mcpose_sessions';
+  if (!IDENTIFIER.test(table)) {
+    throw new Error(
+      `@mcpose/store-postgres: table must be a plain SQL identifier, got ${JSON.stringify(table)}`,
+    );
+  }
+  const pruneEveryWrites = options.pruneEveryWrites ?? 1000;
+  const onError = options.onError ?? console.error;
+  const indexBase = table.replace('.', '_');
+
+  let writes = 0;
+
+  const pruneExpired = async (): Promise<number> => {
+    const result = await client.query(
+      `DELETE FROM ${table} WHERE expires_at <= $1`,
+      [new Date()],
+    );
+    return result.rowCount ?? result.rows.length;
+  };
+
+  return {
+    async init() {
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS ${table} (
+           session_id text PRIMARY KEY,
+           record     jsonb NOT NULL,
+           expires_at timestamptz
+         )`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS ${indexBase}_expires_at_idx ON ${table} (expires_at)`,
+      );
+    },
+
+    pruneExpired,
+
+    async set(sessionId, record) {
+      await client.query(
+        `INSERT INTO ${table} (session_id, record, expires_at) VALUES ($1, $2, $3)
+           ON CONFLICT (session_id) DO UPDATE
+           SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at`,
+        [
+          sessionId,
+          JSON.stringify(record),
+          record.expiresAt === undefined ? null : new Date(record.expiresAt),
+        ],
+      );
+      writes += 1;
+      if (pruneEveryWrites > 0 && writes % pruneEveryWrites === 0) {
+        pruneExpired().catch(onError);
+      }
+    },
+
+    async get(sessionId) {
+      const { rows } = await client.query(
+        `SELECT record FROM ${table}
+          WHERE session_id = $1 AND (expires_at IS NULL OR expires_at > $2)`,
+        [sessionId, new Date()],
+      );
+      const record = rows[0]?.['record'];
+      if (record === undefined) return undefined;
+      // jsonb comes back parsed from pg, but a driver configured with a
+      // different type parser can hand back the raw text.
+      return (
+        typeof record === 'string' ? JSON.parse(record) : record
+      ) as SessionRecord;
+    },
+
+    async delete(sessionId) {
+      await client.query(`DELETE FROM ${table} WHERE session_id = $1`, [
+        sessionId,
+      ]);
     },
   };
 }

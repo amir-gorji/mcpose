@@ -21,6 +21,7 @@ For tamper-evident audit trails see [`@mcpose/audit`](https://www.npmjs.com/pack
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Serving over HTTP/SSE](#serving-over-httpsse)
+  - [Surviving a restart](#surviving-a-restart)
 - [Core concepts](#core-concepts)
 - [API surface](#api-surface)
   - [Backend config (`BackendConfig`)](#backend-config-backendconfig)
@@ -130,6 +131,39 @@ Behavior worth knowing before you deploy it:
 - **Limit breaches are structured.** 503 (session limit) and 413 (body limit) responses carry `error.data.rejectionReason` set to `SESSION_LIMIT` / `BODY_LIMIT`.
 - **SSE replay is scoped per stream and per session.** The in-memory store replays only events from the reconnecting stream; an unknown or already-evicted `Last-Event-ID` replays nothing.
   Stream ids are namespaced as `<sessionId>:<streamId>` before they reach any `EventStore`, so one store shared by every session keeps their histories apart, and a `Last-Event-ID` presented from another session is rejected with a 400 rather than replayed.
+- **Sessions live in the process unless you share them.** Without a `sessionRegistry`, a resume against a restarted proxy or another instance is a 404 no matter how durable the event store is, because the session id itself is unknown there.
+  With one, a record of every session is written before the initialize response goes out, and an `mcp-session-id` this instance does not hold is looked up and rebuilt from it.
+  See [Surviving a restart](#surviving-a-restart).
+
+### Surviving a restart
+
+A durable `eventStore` keeps the replay history; a `sessionRegistry` keeps the session.
+[`@mcpose/store-redis`](https://github.com/amir-gorji/mcpose/blob/main/packages/store-redis/README.md) and [`@mcpose/store-postgres`](https://github.com/amir-gorji/mcpose/blob/main/packages/store-postgres/README.md) ship both halves, and you want them from the same backing store:
+
+```ts
+await startHttpProxy(backend, { name: 'my-proxy' }, {
+  eventStore: createRedisEventStore(redis),
+  sessionRegistry: createRedisSessionRegistry(redis),
+});
+```
+
+What a `SessionRegistry` holds is a `SessionRecord`: the client's `initialize` params verbatim, the `Identity` that `resolveIdentity` produced, and the deadline the session was given at creation.
+The record is plain JSON, so an `Identity` whose `claims` do not survive a JSON round-trip will not come back the way it went in.
+The rules that follow from that, per [ADR-0021](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0021-session-resume-replays-the-initialize.md):
+
+- **A resumed session negotiates what the original did.** The instance that resumes it replays the stored `initialize` through the SDK's own request path, so protocol version, client capabilities and client info are what the client sent, and the SDK's Host and Origin checks run against the resuming request.
+  If the SDK refuses that replay, the client gets the SDK's answer, not a 404.
+- **Identity is carried, not re-resolved.** `resolveIdentity` ran once, at initialize; `validateSession` still runs on every routed request, on the resumed instance too, so a leaked id is no easier to use after a restart.
+- **The deadline is fixed at creation.** A resumed session gets what is left of its original `sessionTtlMs`, never a fresh one, so a session cannot outlive its bound by hopping between instances.
+- **Client DELETE and TTL expiry delete the record; server shutdown keeps it.** A session that outlives the process is the point, and its deadline expires it on its own.
+  `onSessionClosed` fires on the shutting-down instance as before, and again on whichever instance finally closes the session.
+- **`maxSessions` is per instance.** It bounds the memory each process holds, so a resume against a full instance is a 503 and the record stays for another one.
+- **A registry failure fails closed.** An initialize whose record cannot be written is rejected (a 400 from the SDK, with the real error on `onError` and nothing about the backing store in the response), and a lookup that fails is a 500.
+  Sessions this instance already holds are never affected: the registry is read only for an id it does not know.
+
+Two things a registry does not do.
+It does not carry the audit chain: `@mcpose/audit` keeps its per-session state in memory, so the shutting-down instance seals its manifest and the resuming instance starts a new chain under the same session id.
+And it does not make a fleet without sticky routing safe from double work: two instances can both hold a live copy of one session, and both will fire `onSessionClosed` for it.
 
 ## Core concepts
 
@@ -332,6 +366,8 @@ interface HttpProxyOptions {
   tlsOptions?: https.ServerOptions;
   /** SSE reconnect replay store. Defaults to in-memory. Pass null to disable. */
   eventStore?: PersistentEventStore | null;
+  /** Shared record of live sessions, so a resume survives a restart or reaches another instance. */
+  sessionRegistry?: SessionRegistry;
   /** Called when a session closes: client DELETE, TTL expiry, or server shutdown. A returned promise is awaited. */
   onSessionClosed?: (sessionId: string) => unknown;
   /** Hosts allowed in the Host header. Default: derived from the bind address and real port on loopback. */

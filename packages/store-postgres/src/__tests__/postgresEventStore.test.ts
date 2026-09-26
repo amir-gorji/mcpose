@@ -4,10 +4,13 @@ import type { Pool } from 'pg';
 import { newDb, type MemoryDbOptions } from 'pg-mem';
 import {
   createPostgresEventStore,
+  createPostgresSessionRegistry,
   type PostgresEventStore,
-  type PostgresEventStoreClient,
+  type PostgresSessionRegistry,
+  type PostgresClient,
 } from '../index.js';
 import { describeEventStoreContract } from './eventStoreContract.js';
+import { describeSessionRegistryContract } from './sessionRegistryContract.js';
 
 const message = { jsonrpc: '2.0', method: 'ping' } as JSONRPCMessage;
 
@@ -20,7 +23,7 @@ async function memStore(
   dbOptions: MemoryDbOptions = {},
 ): Promise<PostgresEventStore> {
   const pg = newDb(dbOptions).adapters.createPg() as {
-    Client: new () => PostgresEventStoreClient & {
+    Client: new () => PostgresClient & {
       connect(): Promise<void>;
     };
   };
@@ -33,10 +36,109 @@ async function memStore(
 
 describeEventStoreContract('postgres (pg-mem)', () => memStore());
 
+async function memClient(
+  dbOptions: MemoryDbOptions = {},
+): Promise<PostgresClient> {
+  const pg = newDb(dbOptions).adapters.createPg() as {
+    Client: new () => PostgresClient & { connect(): Promise<void> };
+  };
+  const client = new pg.Client();
+  await client.connect();
+  return client;
+}
+
+async function memRegistry(
+  options: Parameters<typeof createPostgresSessionRegistry>[1] = {},
+  dbOptions: MemoryDbOptions = {},
+): Promise<PostgresSessionRegistry> {
+  const registry = createPostgresSessionRegistry(
+    await memClient(dbOptions),
+    options,
+  );
+  await registry.init();
+  return registry;
+}
+
+describeSessionRegistryContract('postgres (pg-mem)', () => memRegistry());
+
+describe('createPostgresSessionRegistry()', () => {
+  const record = {
+    initialize: {
+      protocolVersion: '2025-11-25',
+      capabilities: {},
+      clientInfo: { name: 'c', version: '1' },
+    },
+  };
+
+  it('is safe to init twice', async () => {
+    const registry = await memRegistry({}, { noAstCoverageCheck: true });
+    await expect(registry.init()).resolves.toBeUndefined();
+  });
+
+  it('refuses a table name that is not a plain identifier', () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    expect(() =>
+      createPostgresSessionRegistry({ query }, { table: 'x; DROP TABLE y' }),
+    ).toThrow(/plain SQL identifier/);
+  });
+
+  it('prunes only records past their deadline', async () => {
+    const registry = await memRegistry();
+    await registry.set('gone', { ...record, expiresAt: Date.now() - 1 });
+    await registry.set('live', { ...record, expiresAt: Date.now() + 60_000 });
+    await registry.set('forever', record);
+    expect(await registry.pruneExpired()).toBe(1);
+    expect(await registry.get('live')).toBeDefined();
+    expect(await registry.get('forever')).toEqual(record);
+  });
+
+  it('prunes in the background every pruneEveryWrites writes', async () => {
+    const registry = await memRegistry({ pruneEveryWrites: 2 });
+    await registry.set('gone', { ...record, expiresAt: Date.now() - 1 });
+    await registry.set('live', record);
+    await vi.waitFor(async () => {
+      expect(await registry.pruneExpired()).toBe(0);
+    });
+  });
+
+  it('routes a failing background prune to onError', async () => {
+    const errors: unknown[] = [];
+    let calls = 0;
+    const query = vi.fn(async (text: string) => {
+      calls += 1;
+      if (text.startsWith('DELETE')) throw new Error('prune failed');
+      return { rows: [] };
+    });
+    const registry = createPostgresSessionRegistry(
+      { query },
+      { pruneEveryWrites: 1, onError: (err) => errors.push(err) },
+    );
+    await registry.set('s1', record);
+    await vi.waitFor(() => {
+      expect((errors[0] as Error).message).toBe('prune failed');
+    });
+    expect(calls).toBe(2);
+  });
+
+  it('accepts a record handed back as raw JSON text', async () => {
+    const query = vi.fn(async () => ({
+      rows: [{ record: JSON.stringify(record) }],
+    }));
+    const registry = createPostgresSessionRegistry({ query });
+    expect(await registry.get('s1')).toEqual(record);
+  });
+
+  it('falls back to counting rows when the driver reports no rowCount', async () => {
+    const query = vi.fn(async () => ({ rows: [{}, {}] }));
+    const registry = createPostgresSessionRegistry({ query });
+    expect(await registry.pruneExpired()).toBe(2);
+  });
+});
+
 describe('createPostgresEventStore()', () => {
   it('accepts a live pg Pool with no cast', () => {
     // If pg reshapes `query`, this stops compiling.
-    const asClient = (pool: Pool): PostgresEventStoreClient => pool;
+    const asClient = (pool: Pool): PostgresClient => pool;
     expect(asClient).toBeTypeOf('function');
   });
 
@@ -180,7 +282,7 @@ const postgresUrl = process.env['MCPOSE_POSTGRES_URL'];
 describe.skipIf(!postgresUrl)(
   'createPostgresEventStore() against a live Postgres',
   () => {
-    let pool: PostgresEventStoreClient & { end(): Promise<void> };
+    let pool: PostgresClient & { end(): Promise<void> };
     let run = 0;
 
     beforeAll(async () => {
@@ -198,6 +300,14 @@ describe.skipIf(!postgresUrl)(
       await store.init();
       await pool.query(`TRUNCATE ${table}`);
       return store;
+    });
+
+    describeSessionRegistryContract('postgres (live server)', async () => {
+      const table = `mcpose_test_sessions_${String(process.pid)}_${String(run++)}`;
+      const registry = createPostgresSessionRegistry(pool, { table });
+      await registry.init();
+      await pool.query(`TRUNCATE ${table}`);
+      return registry;
     });
   },
 );

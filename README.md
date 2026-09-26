@@ -111,8 +111,8 @@ Each package publishes independently and carries its own README on npm.
 | [`@mcpose/consent`](./packages/consent/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/consent)](https://www.npmjs.com/package/@mcpose/consent) | Stable | Fail-closed GDPR/CCPA consent gate: host-resolved consent, audited refusals. |
 | [`@mcpose/testing`](./packages/testing/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/testing)](https://www.npmjs.com/package/@mcpose/testing) | Stable | Runner-agnostic compliance assertions over an audit trail. |
 | [`@mcpose/otel`](./packages/otel/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/otel)](https://www.npmjs.com/package/@mcpose/otel) | Preview | OpenTelemetry span adapter for the `onTelemetry` hook. |
-| [`@mcpose/store-redis`](./packages/store-redis/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/store-redis)](https://www.npmjs.com/package/@mcpose/store-redis) | Beta | Redis-backed `EventStore`: durable, uncapped SSE reconnect replay. |
-| [`@mcpose/store-postgres`](./packages/store-postgres/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/store-postgres)](https://www.npmjs.com/package/@mcpose/store-postgres) | Beta | Postgres-backed `EventStore`: durable, uncapped SSE reconnect replay. |
+| [`@mcpose/store-redis`](./packages/store-redis/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/store-redis)](https://www.npmjs.com/package/@mcpose/store-redis) | Beta | Redis-backed `EventStore` and `SessionRegistry`: SSE reconnect replay that survives a restart. |
+| [`@mcpose/store-postgres`](./packages/store-postgres/README.md) | [![npm](https://img.shields.io/npm/v/@mcpose/store-postgres)](https://www.npmjs.com/package/@mcpose/store-postgres) | Beta | Postgres-backed `EventStore` and `SessionRegistry`: SSE reconnect replay that survives a restart. |
 
 A fintech identity package was considered and rejected; identity mapping is host `resolveIdentity` code ([ADR-0020](./docs/adr/0020-no-fintech-identity-package.md)).
 
@@ -484,10 +484,7 @@ Shipped:
 - [x] Persistent `EventStore` adapters: [`@mcpose/store-redis`](./packages/store-redis/README.md) and [`@mcpose/store-postgres`](./packages/store-postgres/README.md)
 - [x] The delegation chain wire format, so core populates `delegatedFrom` from the request itself
 - [x] `@mcpose/consent` and cryptographic erasure: a fail-closed consent gate, plus an opt-in erasable audit mode whose per-subject keys can be destroyed without touching the chain ([ADR-0018](./docs/adr/0018-cryptographic-erasure-and-the-chain.md))
-
-Planned for v3:
-
-- [ ] A shared session registry, so a resume can survive a restart or reach a different instance (the persistent stores above are the storage half of this)
+- [x] A shared session registry, so a resume survives a restart or reaches a different instance, with Redis and Postgres adapters beside the event stores ([ADR-0021](./docs/adr/0021-session-resume-replays-the-initialize.md))
 
 Session re-execution from a `ReplayManifest` is v4.
 

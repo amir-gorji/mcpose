@@ -1,9 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import type { RedisClientType } from 'redis';
-import { createRedisEventStore, type RedisEventStoreClient } from '../index.js';
+import {
+  createRedisEventStore,
+  createRedisSessionRegistry,
+  type RedisEventStoreClient,
+  type RedisSessionRegistryClient,
+} from '../index.js';
 import { FakeRedis } from './fakeRedis.js';
 import { describeEventStoreContract } from './eventStoreContract.js';
+import { describeSessionRegistryContract } from './sessionRegistryContract.js';
 
 const message = { jsonrpc: '2.0', method: 'ping' } as JSONRPCMessage;
 
@@ -108,6 +114,65 @@ describe('createRedisEventStore()', () => {
   });
 });
 
+describeSessionRegistryContract('redis (fake client)', async () =>
+  createRedisSessionRegistry(new FakeRedis()),
+);
+
+describe('createRedisSessionRegistry()', () => {
+  const record = {
+    initialize: {
+      protocolVersion: '2025-11-25',
+      capabilities: {},
+      clientInfo: { name: 'c', version: '1' },
+    },
+  };
+
+  it('accepts a live node-redis client with no cast', () => {
+    const asClient = (c: RedisClientType): RedisSessionRegistryClient => c;
+    expect(asClient).toBeTypeOf('function');
+  });
+
+  it('keys records by session id under the default prefix', async () => {
+    const redis = new FakeRedis();
+    await createRedisSessionRegistry(redis).set('s1', record);
+    expect(redis.keys()).toEqual(['mcpose:sessions:s1']);
+  });
+
+  it('honours a custom key prefix', async () => {
+    const redis = new FakeRedis();
+    await createRedisSessionRegistry(redis, { keyPrefix: 'tenant-a:' }).set(
+      's1',
+      record,
+    );
+    expect(redis.keys()).toEqual(['tenant-a:s1']);
+  });
+
+  it('expires the key at the deadline, rounded up to a whole millisecond', async () => {
+    // Frozen clock: the TTL is read against the same instant it was written.
+    vi.useFakeTimers();
+    try {
+      const redis = new FakeRedis();
+      const registry = createRedisSessionRegistry(redis);
+      const expiresAt = Date.now() + 1000.4;
+      await registry.set('s1', { ...record, expiresAt });
+      expect(redis.ttlOf('mcpose:sessions:s1')).toBe(1001);
+      redis.offsetMs = 1001;
+      expect(await registry.get('s1')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears an earlier deadline when a record is rewritten without one', async () => {
+    const redis = new FakeRedis();
+    const registry = createRedisSessionRegistry(redis);
+    await registry.set('s1', { ...record, expiresAt: Date.now() + 1000 });
+    await registry.set('s1', record);
+    redis.offsetMs = 10_000;
+    expect(await registry.get('s1')).toEqual(record);
+  });
+});
+
 const redisUrl = process.env['MCPOSE_REDIS_URL'];
 
 // Opt-in lane against a real server: `MCPOSE_REDIS_URL=redis://localhost:6379
@@ -134,6 +199,13 @@ describe.skipIf(!redisUrl)(
         keyPrefix: `mcpose-test:${String(process.pid)}:${String(run++)}:`,
         ttlMs: 60_000,
       }),
+    );
+
+    describeSessionRegistryContract('redis (live server)', async () =>
+      createRedisSessionRegistry(
+        client as unknown as RedisSessionRegistryClient,
+        { keyPrefix: `mcpose-test:${String(process.pid)}:${String(run++)}:` },
+      ),
     );
   },
 );
