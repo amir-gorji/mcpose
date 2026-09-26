@@ -40,8 +40,10 @@ pnpm check:publish  # publint + attw --pack --profile esm-only
 Mutation testing is the one gate that is deliberately outside that chain, because a full run takes minutes rather than seconds.
 
 ```bash
-pnpm --filter @mcpose/audit mutation   # stryker run, packages/audit
-pnpm --filter mcpose mutation          # stryker run, packages/core
+pnpm --filter @mcpose/audit mutation    # stryker run, packages/audit
+pnpm --filter mcpose mutation           # stryker run, packages/core
+pnpm --filter @mcpose/policy mutation   # stryker run, packages/policy
+pnpm --filter @mcpose/consent mutation  # stryker run, packages/consent
 ```
 
 `@stryker-mutator/vitest-runner` carries a `pnpm patch` (`patches/`, declared in `pnpm-workspace.yaml`): on vitest 5 the per-test name filter matched nothing, so every covered mutant survived ([stryker-js#6210](https://github.com/stryker-mutator/stryker-js/issues/6210), [issue #206](https://github.com/amir-gorji/mcpose/issues/206)).
@@ -62,7 +64,7 @@ Which layer enforces what:
 The per-edit layer is the Claude Code `PostToolUse` hook in [`.claude/hooks/ts-quality.sh`](./.claude/hooks/ts-quality.sh): it runs `prettier --write` then `eslint --fix` on every `.ts` file an agent edits and blocks the tool result on failure.
 CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs the whole chain on a Node 20 / 22 / 24 matrix, plus gitleaks and osv-scan, with all actions SHA-pinned.
 The mutation lane ([`.github/workflows/mutation.yml`](./.github/workflows/mutation.yml)) is a separate workflow, so the pre-push chain still matches the `ci.yml` matrix exactly.
-It runs on pushes to `main` that touch `packages/audit/**`, `packages/core/**`, a Stryker config, or the workflow itself, and on `workflow_dispatch`.
+It runs on pushes to `main` that touch `packages/audit/**`, `packages/core/**`, `packages/policy/**`, `packages/consent/**`, a Stryker config, or the workflow itself, and on `workflow_dispatch`.
 There is no cron: a nightly run would re-mutate unchanged code for no new information, and GitHub disables schedules on quiet repositories.
 Because it only reports after a merge, run it locally before landing a change that reshapes test assertions in either package.
 `git push --no-verify` is the emergency escape hatch and is not a normal workflow.

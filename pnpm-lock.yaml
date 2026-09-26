@@ -101,6 +101,12 @@ importers:
       '@mcpose/policy':
         specifier: workspace:*
         version: link:../policy
+      '@stryker-mutator/core':
+        specifier: 10.0.0
+        version: 10.0.0(@types/node@26.6.2)
+      '@stryker-mutator/vitest-runner':
+        specifier: 10.0.0
+        version: 10.0.0(patch_hash=10f8494cf65ab9a83f58402a0bc08169fa7da1054da158af8af078c338ddf3c2)(@stryker-mutator/core@10.0.0(@types/node@26.6.2))(vitest@5.0.1)
       '@types/node':
         specifier: ^26.5.1
         version: 26.6.2
@@ -167,6 +173,12 @@ importers:
       '@mcpose/audit':
         specifier: workspace:*
         version: link:../audit
+      '@stryker-mutator/core':
+        specifier: 10.0.0
+        version: 10.0.0(@types/node@26.6.2)
+      '@stryker-mutator/vitest-runner':
+        specifier: 10.0.0
+        version: 10.0.0(patch_hash=10f8494cf65ab9a83f58402a0bc08169fa7da1054da158af8af078c338ddf3c2)(@stryker-mutator/core@10.0.0(@types/node@26.6.2))(vitest@5.0.1)
       '@types/node':
         specifier: ^26.5.1
         version: 26.6.2
