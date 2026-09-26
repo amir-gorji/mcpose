@@ -246,10 +246,15 @@ export interface HttpProxyOptions {
    * shutdown). Wire {@link AuditMiddlewareHandle.closeSession} here to flush
    * the ReplayManifest for the session.
    *
+   * A returned promise is awaited: `server.close()` does not complete until
+   * every session's hook has settled, so a host that exits in the close
+   * callback never loses a final manifest. A throw or a rejection is routed
+   * to {@link onError} and never breaks teardown.
+   *
    * @example
    * onSessionClosed: (sessionId) => auditHandle.closeSession(sessionId)
    */
-  onSessionClosed?: (sessionId: string) => void;
+  onSessionClosed?: (sessionId: string) => unknown;
   /**
    * Re-validates an existing session on every routed request. Return `false`
    * (or throw) to reject with 401. Use to bind sessions to their original
@@ -1512,22 +1517,22 @@ export function startHttpProxy(
 
   /**
    * Single teardown path for every way a session can end: client DELETE,
-   * TTL expiry, and server shutdown. Clears the TTL timer, fires
-   * `onSessionClosed` (guarded — a throwing hook must not break teardown),
-   * and closes the proxy server so it leaves the listChanged fan-out bus.
-   * Idempotent: a second call for the same id is a no-op.
+   * TTL expiry, and server shutdown. Clears the TTL timer, fires and awaits
+   * `onSessionClosed` (guarded — a throwing or rejecting hook must not break
+   * teardown), and closes the proxy server so it leaves the listChanged
+   * fan-out bus. Idempotent: a second call for the same id is a no-op.
    */
-  const destroySession = (id: string): Promise<void> => {
+  const destroySession = async (id: string): Promise<void> => {
     const session = sessions.get(id);
-    if (!session) return Promise.resolve();
+    if (!session) return;
     sessions.delete(id);
     if (session.ttlTimer !== undefined) clearTimeout(session.ttlTimer);
     try {
-      httpOptions.onSessionClosed?.(id);
+      await httpOptions.onSessionClosed?.(id);
     } catch (err) {
       reportError(err);
     }
-    return session.proxyServer.close().catch(reportError);
+    await session.proxyServer.close().catch(reportError);
   };
 
   const requestHandler = (
@@ -1728,7 +1733,8 @@ export function startHttpProxy(
     shuttingDown = true;
 
     // Tear down every session through the single teardown path (clears TTL
-    // timers, fires onSessionClosed so audit manifests flush on shutdown).
+    // timers, fires and awaits onSessionClosed so audit manifests flush
+    // before the close callback runs).
     void Promise.allSettled(
       [...sessions.keys()].map((id) => destroySession(id)),
     ).finally(() => {

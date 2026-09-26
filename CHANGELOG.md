@@ -19,6 +19,10 @@ released together.
 
 - **`@mcpose/audit`** — `verifyAuditChain(events, signingKey)` and `verifyManifestSignature(manifest, signingKey)`, the keyed verifiers. Keyless assertions prove internal consistency; these prove authenticity.
 
+### Fixed
+
+- **`mcpose`** — `HttpProxyOptions.onSessionClosed` may return a promise. The proxy awaits it on every session-end path, routes a rejection to `onError` instead of leaving an unhandled rejection, and holds `server.close()` open until every session's hook has settled, so a host exiting in the close callback no longer loses its final audit manifest (#176).
+
 ## [2.1.1] - 2026-07-16
 
 ### Changed
