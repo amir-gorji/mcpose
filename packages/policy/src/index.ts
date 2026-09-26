@@ -161,13 +161,28 @@ function assertRules(rules: ReadonlyArray<PolicyRule>): void {
   }
 }
 
-/** The same wildcard mistake, in a sensitivity rule's roles. */
+/**
+ * The two ways a sensitivity rule can be written so it matches less than its
+ * author meant: `'*'` as an element of `roles`, and a `deniedTiers` element
+ * that is not a tier at all. Both leave a rule that can never fire, and a
+ * tier rule only ever subtracts access, so the call it meant to block goes
+ * through.
+ */
 function assertSensitivityRules(rules: ReadonlyArray<SensitivityRule>): void {
   for (const [i, rule] of rules.entries()) {
     if (rule.roles !== '*' && rule.roles.includes('*')) {
       throw new TypeError(
         `sensitivityRules[${i}]: '*' inside the roles array is a literal role name, not a wildcard, and matches nothing. Write roles: '*' instead.`,
       );
+    }
+    for (const [j, tier] of rule.deniedTiers.entries()) {
+      if (!TIERS.has(tier)) {
+        throw new TypeError(
+          `sensitivityRules[${i}]: deniedTiers[${j}] is ${JSON.stringify(
+            tier,
+          )}, which is not one of 'low', 'medium', 'high'. It is compared against a resolved tier, so it matches nothing and the rule blocks less than its author meant. Fix the spelling or drop the entry.`,
+        );
+      }
     }
   }
 }
