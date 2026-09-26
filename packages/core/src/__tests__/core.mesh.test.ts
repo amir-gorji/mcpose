@@ -34,6 +34,7 @@ function makeMeshBackend(
   overrides: {
     capabilities?: ServerCapabilities;
     prompts?: ReadonlyArray<string>;
+    resources?: ReadonlyArray<string>;
   } = {},
 ): MockBackend {
   const notificationHandlers = new Map<string, () => Promise<void>>();
@@ -48,8 +49,17 @@ function makeMeshBackend(
       .mockImplementation((params: { name: string }) =>
         Promise.resolve({ content: [{ type: 'text', text: params.name }] }),
       ),
-    listResources: vi.fn().mockResolvedValue({ resources: [] }),
-    readResource: vi.fn().mockResolvedValue({ contents: [] }),
+    listResources: vi.fn().mockResolvedValue({
+      resources: (overrides.resources ?? []).map((uri) => ({
+        uri,
+        name: uri,
+      })),
+    }),
+    readResource: vi.fn().mockImplementation((params: { uri: string }) =>
+      Promise.resolve({
+        contents: [{ uri: params.uri, text: params.uri }],
+      }),
+    ),
     listPrompts: vi.fn().mockResolvedValue({
       prompts: (overrides.prompts ?? []).map((name) => ({ name })),
     }),
@@ -115,6 +125,23 @@ describe('createProxyServer() — backend key validation', () => {
     expect(() => createProxyServer({}, { name: 'test-server' })).toThrow(
       /backends record is empty/,
     );
+  });
+
+  it('throws on a key that is not an identifier', () => {
+    for (const key of ['crm cache', 'crm/eu', 'crm:1', '-crm', 'crm#']) {
+      expect(() =>
+        createProxyServer(
+          { [key]: makeMeshBackend(['lookup']) },
+          { name: 'test-server' },
+        ),
+      ).toThrow(/must be an identifier/);
+    }
+    expect(() =>
+      createProxyServer(
+        { 'crm_v2.eu-west': makeMeshBackend(['lookup']) },
+        { name: 'test-server' },
+      ),
+    ).not.toThrow();
   });
 
   it('throws on an empty backend key', () => {
@@ -619,20 +646,20 @@ describe('createProxyServer() — mesh capability union', () => {
     expect(await listToolNames(server)).toEqual(['why_blocked']);
   });
 
-  it('never advertises resources in mesh mode', async () => {
+  it('advertises resources when any backend serves them', async () => {
     const server = createProxyServer(
       {
         crm: makeMeshBackend(['lookup'], {
           capabilities: { tools: {}, resources: { listChanged: true } },
         }),
+        wiki: makeMeshBackend(['search']),
       },
       { name: 'test-server' },
     );
 
-    expect(advertisedCapabilities(server).resources).toBeUndefined();
-    await expect(invokeHandler(server, 'resources/list')).rejects.toThrow(
-      'No handler registered for method: resources/list',
-    );
+    expect(advertisedCapabilities(server).resources).toEqual({
+      listChanged: true,
+    });
   });
 });
 
@@ -741,7 +768,7 @@ describe('createProxyServer() — mesh list-changed fan-in', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('does not forward a surface the mesh does not advertise', async () => {
+  it('forwards a resource list change from any backend', async () => {
     const crm = makeMeshBackend(['lookup'], {
       capabilities: {
         tools: { listChanged: true },
@@ -757,17 +784,16 @@ describe('createProxyServer() — mesh list-changed fan-in', () => {
       'notifications/resources/list_changed',
     )?.();
 
-    expect(send).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledOnce();
   });
 
-  it('keeps a backend shared with a 1:1 proxy forwarding every surface', async () => {
+  it('keeps a backend shared with a 1:1 proxy forwarding to both', async () => {
     const shared = makeMeshBackend(['lookup'], {
       capabilities: {
         tools: { listChanged: true },
         resources: { listChanged: true },
       },
     });
-    // The mesh creates the bus first, and advertises no resources.
     const mesh = createProxyServer({ crm: shared }, { name: 'test-server' });
     const direct = createProxyServer(shared, { name: 'test-server' });
     const meshSend = vi
@@ -782,7 +808,201 @@ describe('createProxyServer() — mesh list-changed fan-in', () => {
     )?.();
 
     expect(directSend).toHaveBeenCalledOnce();
-    expect(meshSend).not.toHaveBeenCalled();
+    expect(meshSend).toHaveBeenCalledOnce();
+  });
+});
+
+// ── Resources ───────────────────────────────────────────────────────────────
+
+describe('createProxyServer() — mesh resources (ADR-0022)', () => {
+  const withResources = (uris: ReadonlyArray<string>) =>
+    makeMeshBackend([], {
+      capabilities: { resources: {} },
+      resources: uris,
+    });
+
+  it('exposes every backend resource as mcpose://<key>/<uri>, collisions included', async () => {
+    const server = createProxyServer(
+      {
+        crm: withResources(['file:///notes.md', 'crm://accounts/1']),
+        wiki: withResources(['file:///notes.md']),
+      },
+      { name: 'test-server' },
+    );
+    const { resources } = (await invokeHandler(server, 'resources/list')) as {
+      resources: { uri: string; name: string }[];
+    };
+    expect(resources).toEqual([
+      { uri: 'mcpose://crm/file:///notes.md', name: 'file:///notes.md' },
+      { uri: 'mcpose://crm/crm://accounts/1', name: 'crm://accounts/1' },
+      { uri: 'mcpose://wiki/file:///notes.md', name: 'file:///notes.md' },
+    ]);
+  });
+
+  it('routes resources/read by the mcpose:// prefix and forwards the upstream URI', async () => {
+    const crm = withResources(['file:///notes.md']);
+    const wiki = withResources(['file:///notes.md']);
+    const server = createProxyServer({ crm, wiki }, { name: 'test-server' });
+    const result = await invokeHandler(server, 'resources/read', {
+      uri: 'mcpose://wiki/file:///notes.md?rev=2#top',
+    });
+    expect(result).toEqual({
+      contents: [
+        {
+          uri: 'file:///notes.md?rev=2#top',
+          text: 'file:///notes.md?rev=2#top',
+        },
+      ],
+    });
+    expect(wiki.readResource).toHaveBeenCalledWith(
+      { uri: 'file:///notes.md?rev=2#top' },
+      undefined,
+    );
+    expect(crm.readResource).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unwrapped, unknown-key, or empty URI with BACKEND_UNROUTABLE', async () => {
+    const server = createProxyServer(
+      { crm: withResources(['file:///notes.md']) },
+      { name: 'test-server' },
+    );
+    for (const uri of [
+      'file:///notes.md',
+      'mcpose://hr/file:///notes.md',
+      'mcpose://crm/',
+      'mcpose://crm',
+      'mcpose:///file:///notes.md',
+    ]) {
+      const error = await invokeHandler(server, 'resources/read', {
+        uri,
+      }).catch((err: unknown) => err);
+      expect(error).toMatchObject({
+        code: ErrorCode.InvalidRequest,
+        data: { rejectionReason: 'BACKEND_UNROUTABLE' },
+      });
+    }
+  });
+
+  it('rejects a key naming a backend without resources', async () => {
+    const server = createProxyServer(
+      {
+        crm: withResources(['file:///notes.md']),
+        tools: makeMeshBackend(['lookup']),
+      },
+      { name: 'test-server' },
+    );
+    await expect(
+      invokeHandler(server, 'resources/read', {
+        uri: 'mcpose://tools/file:///notes.md',
+      }),
+    ).rejects.toMatchObject({
+      data: { rejectionReason: 'BACKEND_UNROUTABLE' },
+    });
+  });
+
+  it('matches hiddenResources and passThroughResources on the exposed URI', async () => {
+    const crm = withResources(['file:///a.md', 'file:///b.md']);
+    const seen: string[] = [];
+    const server = createProxyServer(
+      { crm },
+      {
+        name: 'test-server',
+        hiddenResources: ['mcpose://crm/file:///a.md'],
+        passThroughResources: ['mcpose://crm/file:///b.md'],
+        resourceMiddleware: [
+          (req, next) => {
+            seen.push(req.params.uri);
+            return next(req);
+          },
+        ],
+      },
+    );
+    const { resources } = (await invokeHandler(server, 'resources/list')) as {
+      resources: { uri: string }[];
+    };
+    expect(resources.map((r) => r.uri)).toEqual(['mcpose://crm/file:///b.md']);
+
+    await expect(
+      invokeHandler(server, 'resources/read', {
+        uri: 'mcpose://crm/file:///a.md',
+      }),
+    ).rejects.toMatchObject({ data: { rejectionReason: 'RESOURCE_HIDDEN' } });
+
+    await invokeHandler(server, 'resources/read', {
+      uri: 'mcpose://crm/file:///b.md',
+    });
+    expect(seen).toEqual([]);
+    expect(crm.readResource).toHaveBeenCalledWith(
+      { uri: 'file:///b.md' },
+      undefined,
+    );
+  });
+
+  it('lets middleware re-route a read, and audits the unroutable rejection inside the pipeline', async () => {
+    const crm = withResources(['file:///a.md']);
+    const wiki = withResources(['file:///a.md']);
+    const outcomes: string[] = [];
+    const server = createProxyServer(
+      { crm, wiki },
+      {
+        name: 'test-server',
+        resourceMiddleware: [
+          async (req, next) => {
+            try {
+              const result = await next({
+                ...req,
+                params: {
+                  ...req.params,
+                  uri: req.params.uri.replace(
+                    'mcpose://crm/',
+                    'mcpose://wiki/',
+                  ),
+                },
+              });
+              outcomes.push('ok');
+              return result;
+            } catch (err) {
+              outcomes.push(
+                String(
+                  (err as { data?: { rejectionReason?: string } }).data
+                    ?.rejectionReason,
+                ),
+              );
+              throw err;
+            }
+          },
+        ],
+      },
+    );
+    await invokeHandler(server, 'resources/read', {
+      uri: 'mcpose://crm/file:///a.md',
+    });
+    expect(wiki.readResource).toHaveBeenCalledOnce();
+    expect(crm.readResource).not.toHaveBeenCalled();
+
+    await invokeHandler(server, 'resources/read', {
+      uri: 'file:///a.md',
+    }).catch(() => undefined);
+    expect(outcomes).toEqual(['ok', 'BACKEND_UNROUTABLE']);
+  });
+
+  it('degrades resources/list when one backend fails and reports it', async () => {
+    const down = withResources([]);
+    (down.listResources as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('boom'),
+    );
+    const events: TelemetryEvent[] = [];
+    const server = createProxyServer(
+      { crm: withResources(['file:///a.md']), down },
+      { name: 'test-server', onTelemetry: (e) => events.push(e) },
+    );
+    const { resources } = (await invokeHandler(server, 'resources/list')) as {
+      resources: { uri: string }[];
+    };
+    expect(resources.map((r) => r.uri)).toEqual(['mcpose://crm/file:///a.md']);
+    expect(events).toMatchObject([
+      { type: 'backend_degraded', backend: 'down', method: 'resources/list' },
+    ]);
   });
 });
 

@@ -14,9 +14,11 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Mesh**: A proxy configured with a record of named upstreams instead of one, serving all of them through a single pipeline, session, and audit trail. The single-upstream shape stays a 1:1 proxy (ADR-0013). _Avoid_: "cluster", "federation", "multiplexer"
 
-**Backend key**: The record key naming one upstream of a mesh. Non-empty, never contains `__`, and forms the `<backendKey>__<name>` prefix the client sees. Part of the proxy's public contract: renaming one renames every tool. _Avoid_: "backend id", "namespace" for the key itself
+**Backend key**: The record key naming one upstream of a mesh. An identifier (`[A-Za-z0-9][A-Za-z0-9._-]*`, never containing `__`) that forms the `<backendKey>__<name>` prefix and the `mcpose://<backendKey>/` URI prefix the client sees. Part of the proxy's public contract: renaming one renames every tool and every resource. _Avoid_: "backend id", "namespace" for the key itself
 
 **Namespaced name**: The name a mesh exposes for an upstream tool or prompt, `<backendKey>__<name>`. Every `ProxyOptions` predicate, list, and middleware sees this name, never the upstream one. _Avoid_: "prefixed name", "qualified name"
+
+**Exposed URI**: The URI a mesh exposes for an upstream resource, `mcpose://<backendKey>/<uri>`, the upstream URI appended verbatim. The resource analogue of the **namespaced name**: `hiddenResources`, `passThroughResources`, and `resourceMiddleware` see it, the upstream never does, and a read that does not carry it is `BACKEND_UNROUTABLE` (ADR-0022). _Avoid_: "wrapped URI", "rewritten URI", which suggest the upstream URI changed
 
 **mcpose**: The core proxy library — pipeline, transport adapters, ProxyContext. Published as `mcpose` on npm (`packages/core`). _Avoid_: using to mean the full ecosystem
 

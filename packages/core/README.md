@@ -256,18 +256,19 @@ An empty record or an invalid key throws at `createProxyServer` (and at `startHt
 | Behaviour | Mesh mode |
 |---|---|
 | Routing | By the `<backendKey>__` prefix, resolved at the innermost `next`, so middleware can re-route deliberately. |
-| Un-namespaced or unknown prefix | Rejected with `MethodNotFound` and `BACKEND_UNROUTABLE`, thrown inside the pipeline so audit records it. There is no "resolve it if only one backend has that name" fallback. |
+| Un-namespaced or unknown prefix | Rejected with `MethodNotFound` (`InvalidRequest` for a resource) and `BACKEND_UNROUTABLE`, thrown inside the pipeline so audit records it. There is no "resolve it if only one backend has that name" fallback. |
 | Configuration | Global and matched against the **namespaced** name. `hiddenTools: ['crm__delete_account']` hides one tool on one upstream; a `HiddenToolPredicate` can hide a whole backend with `name.startsWith('crm__')`. |
-| One backend down | `tools/list` and `prompts/list` return the live backends' entries and report a `backend_degraded` telemetry event naming the key. A call routed to a down backend fails only that call. |
+| One backend down | `tools/list`, `prompts/list`, and `resources/list` return the live backends' entries and report a `backend_degraded` telemetry event naming the key. A call routed to a down backend fails only that call. |
 | Audit | One session and one pipeline span the mesh. Backend attribution comes from the namespaced `tool` field plus `ProxyContext.proxy`. |
 | Local tools | Not namespaced, because they belong to the proxy. A local tool named `crm__lookup` shadows the upstream tool exposed under that name. |
 | Capabilities | The union across backends, plus the `localTools` rule. `listChanged` is advertised when any backend advertises it, and every backend's notification is forwarded. |
 | Lists | Unpaginated: cursors are per-backend, so a mesh drains every backend and returns one complete page with no `nextCursor`. |
-| Resources | Not served. A resource is addressed by URI, and a URI cannot be namespaced without rewriting an identifier every party treats as opaque. A mesh advertises no `resources` capability. |
+| Resources | Exposed as `mcpose://<backendKey>/<uri>`, the upstream URI appended verbatim, so two backends serving the same URI never collide. `resources/read` accepts only that form, strips the prefix, and forwards the original URI; anything else is `BACKEND_UNROUTABLE`. `hiddenResources` and `passThroughResources` match the exposed URI ([ADR-0022](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0022-mesh-resources-under-the-mcpose-scheme.md)). |
 
 Degradation covers runtime failures, not startup: every backend in the record must already be connected, and `createProxyServer` throws and names the key of one that is not, exactly as it does for a single unconnected backend.
 Without an `onTelemetry` sink a degraded mesh is invisible, so wire one when you run a mesh.
-See [ADR-0013](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0013-multi-backend-composition.md); mesh resource composition is [#100](https://github.com/amir-gorji/mcpose/issues/100).
+Backend keys are identifiers (`[A-Za-z0-9][A-Za-z0-9._-]*`, never containing `__`), because a key is spliced into tool names and into the authority of a resource URI.
+See [ADR-0013](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0013-multi-backend-composition.md) and [ADR-0022](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0022-mesh-resources-under-the-mcpose-scheme.md).
 
 ### Proxy options (`ProxyOptions`)
 
@@ -335,7 +336,7 @@ interface LocalTool {
   See [ADR-0009](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0009-strip-result-meta.md).
 - `onTelemetry` receives a `TelemetryEvent`, a union discriminated on `type`.
   A `'tool_call'` event fires after every tool call with timing, outcome, tool name, and identity; results with `isError: true` are reported as outcome `'error'`.
-  A `'backend_degraded'` event fires when one backend of a mesh drops out of a list call, naming the backend key, the method, and the error.
+  A `'backend_degraded'` event fires when one backend of a mesh drops out of a list call (`tools/list`, `prompts/list`, or `resources/list`), naming the backend key, the method, and the error.
   Both variants carry an optional `proxy: ProxyIdentity`, the same frozen `{ name, version }` stamped on `ProxyContext` (ADR-0012), so a fleet of proxies feeding one telemetry sink can attribute events to an instance.
   A throwing sink is logged but never fails the call.
   [`@mcpose/otel`](https://github.com/amir-gorji/mcpose/blob/main/packages/otel/README.md) maps both variants onto OpenTelemetry spans if you do not want to write the sink yourself.
