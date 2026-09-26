@@ -20,5 +20,5 @@ export default {
   // Baseline on 2026-09-26: 96.15 (25 killed, 0 timeout, 1 survived, 0 no cov),
   // measured from a clean incremental report when the package joined the
   // lane (#160). floor(96.15) - 2 is 94.
-  thresholds: { high: 90, low: 94, break: 94 },
+  thresholds: { high: 98, low: 94, break: 94 },
 };
