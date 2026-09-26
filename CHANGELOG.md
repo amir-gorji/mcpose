@@ -5,9 +5,10 @@
 Merged on `main`, not yet published to npm. The current published releases are
 `mcpose@2.1.1`, `@mcpose/audit@2.0.3`, and `@mcpose/testing@2.0.3`.
 
-Note that `packages/audit` declares a peer dependency on `mcpose >= 2.2.0`, so
-this working tree is not installable against the registry until all three are
-released together.
+Note that every `@mcpose/*` package declares a peer dependency on
+`mcpose >=3.0.0 <4`, and `@mcpose/testing` additionally on `@mcpose/audit ^3.0.0`,
+so this working tree is not installable against the registry until all eight
+packages are released together.
 
 ### Changed
 
@@ -19,6 +20,33 @@ released together.
 ### Added
 
 - **`@mcpose/audit`** — `verifyAuditChain(events, signingKey)` and `verifyManifestSignature(manifest, signingKey)`, the keyed verifiers. Keyless assertions prove internal consistency; these prove authenticity.
+
+- **`@mcpose/policy` 1.0.0** — new package providing deny-by-default RBAC middleware. Evaluation is a pure, synchronous function of the rules, the resolved identity, and the request name, with no I/O in the call path. See ADR-0017.
+  - `createPolicyMiddleware(options)` — returns `{ middleware, promptMiddleware, evictSession }`. Both surfaces share one rule set and one budget counter, so a prompt fetch is gated exactly as a tool call is.
+  - `PolicyRule` — `{ id, effect: 'allow' | 'deny', roles, tools }`, where `roles` and `tools` are exact-name arrays or the bare wildcard `'*'`. An explicit `deny` beats every `allow`; no matching rule denies the call.
+  - `SensitivityRule` — `{ roles, deniedTiers }`, evaluated after the RBAC rules allow a call, so a tier rule can only subtract access. Tiers come from the `sensitivity` map; unknown names resolve to `'high'`.
+  - `budget.maxCallsPerSession` — a per-session call budget, released with `evictSession(sessionId)` from `onSessionClosed`.
+  - Construction throws on a rule set that would silently match less than its author meant: `'*'` as an array element, a `deniedTiers` entry that is not a tier, or an empty rule `id`.
+  - Refusals are structured rejections thrown inside the pipeline, so audit middleware composed outside records them.
+
+- **`@mcpose/consent` 1.0.0** — new package providing a fail-closed GDPR/CCPA consent gate. The host owns what consent means; this package is only the enforcement point. See ADR-0018.
+  - `createConsentMiddleware(options)` — returns `{ middleware, promptMiddleware }`, sharing one resolver so prompts are gated exactly as tool calls are.
+  - `resolveConsent(identity, toolName)` — host-provided, may be async, because a consent grant is looked up rather than compiled ahead of time. Only an unambiguous `true` lets the call through; `false`, any other value, a throw, or a rejected promise blocks it.
+  - `onResolverError` — called when the resolver throws or rejects, so a broken consent source is visible to operators instead of looking like a caller who has not consented. Defaults to `console.error`.
+  - Every refusal is a `CONSENT_MISSING` rejection thrown inside the pipeline, so audit middleware composed outside records it.
+
+- **`@mcpose/otel` 0.1.0** — new package providing an OpenTelemetry span adapter for the `onTelemetry` hook. `@opentelemetry/api` is a peer dependency; the host owns the SDK, exporter, and sampler.
+  - `createOtelTelemetry(tracer)` — returns a sink assignable to `ProxyOptions.onTelemetry` that writes one completed span per `TelemetryEvent`, with `mcpose.request.id`, `mcpose.session.id`, `mcpose.identity.sub`, and `mcpose.proxy.*` attributes.
+  - Spans are post-hoc and unparented: a `tool_call` span is created with a start time of `Date.now() - duration_ms` and ended immediately, a `backend_degraded` span is a zero-width marker at the current time, and nothing is pushed onto the active context. Correlate on the request and session id attributes.
+
+- **`@mcpose/store-redis` 0.1.0** — new package providing a Redis-backed `EventStore` and `SessionRegistry` for the Streamable HTTP transport, so SSE reconnect replay survives a proxy restart and works across instances behind a load balancer. `redis`, `mcpose`, and `@modelcontextprotocol/sdk` are peer dependencies. Requires Redis 6.2 or newer.
+  - `createRedisEventStore(client, options?)` — per-stream history in a Redis stream, bounded by time (`ttlMs`) rather than by the in-memory store's shared 1000-event cap, under a configurable `keyPrefix`.
+  - `createRedisSessionRegistry(client, options?)` — keeps the session record itself, so a reconnecting client is not rejected on its `mcp-session-id` before its events are consulted.
+  - Both take an already-connected client, never a connection string: connection lifecycle, TLS, and shutdown stay with the host.
+
+- **`@mcpose/store-postgres` 0.1.0** — new package providing a Postgres-backed `EventStore` and `SessionRegistry` with the same contract as `@mcpose/store-redis`. `pg`, `mcpose`, and `@modelcontextprotocol/sdk` are peer dependencies.
+  - `createPostgresEventStore(client, options?)` and `createPostgresSessionRegistry(client, options?)` — accept a `Pool`, `PoolClient`, or `Client`. Each exposes `init()` to create its table, and the table name is validated as an identifier before it is interpolated into SQL.
+  - History is bounded by time (`ttlMs`, defaulting to the proxy's 30 minute `sessionTtlMs`), so it outlives the session it belongs to. Postgres has no per-row expiry, so both adapters prune expired rows every `pruneEveryWrites` writes, report a failed prune through `onError`, and expose `pruneExpired()` for a host that prefers its own schedule.
 
 ### Fixed
 
