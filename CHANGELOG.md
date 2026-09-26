@@ -37,7 +37,7 @@ packages are released together.
 
 - **`@mcpose/otel` 0.1.0** — new package providing an OpenTelemetry span adapter for the `onTelemetry` hook. `@opentelemetry/api` is a peer dependency; the host owns the SDK, exporter, and sampler.
   - `createOtelTelemetry(tracer)` — returns a sink assignable to `ProxyOptions.onTelemetry` that writes one completed span per `TelemetryEvent`, with `mcpose.request.id`, `mcpose.session.id`, `mcpose.identity.sub`, and `mcpose.proxy.*` attributes.
-  - Spans are post-hoc and unparented: each is created with a start time of `Date.now() - duration_ms` and ended immediately, and nothing is pushed onto the active context. Correlate on the request and session id attributes.
+  - Spans are post-hoc and unparented: a `tool_call` span is created with a start time of `Date.now() - duration_ms` and ended immediately, a `backend_degraded` span is a zero-width marker at the current time, and nothing is pushed onto the active context. Correlate on the request and session id attributes.
 
 - **`@mcpose/store-redis` 0.1.0** — new package providing a Redis-backed `EventStore` and `SessionRegistry` for the Streamable HTTP transport, so SSE reconnect replay survives a proxy restart and works across instances behind a load balancer. `redis`, `mcpose`, and `@modelcontextprotocol/sdk` are peer dependencies. Requires Redis 6.2 or newer.
   - `createRedisEventStore(client, options?)` — per-stream history in a Redis stream, bounded by time (`ttlMs`) rather than by the in-memory store's shared 1000-event cap, under a configurable `keyPrefix`.
@@ -46,7 +46,7 @@ packages are released together.
 
 - **`@mcpose/store-postgres` 0.1.0** — new package providing a Postgres-backed `EventStore` and `SessionRegistry` with the same contract as `@mcpose/store-redis`. `pg`, `mcpose`, and `@modelcontextprotocol/sdk` are peer dependencies.
   - `createPostgresEventStore(client, options?)` and `createPostgresSessionRegistry(client, options?)` — accept a `Pool`, `PoolClient`, or `Client`. Each exposes `init()` to create its table, and the table name is validated as an identifier before it is interpolated into SQL.
-  - History is bounded by time (`ttlMs`, defaulting to the proxy's 30 minute `sessionTtlMs`), so it outlives the session it belongs to.
+  - History is bounded by time (`ttlMs`, defaulting to the proxy's 30 minute `sessionTtlMs`), so it outlives the session it belongs to. Postgres has no per-row expiry, so both adapters prune expired rows every `pruneEveryWrites` writes, report a failed prune through `onError`, and expose `pruneExpired()` for a host that prefers its own schedule.
 
 ### Fixed
 
