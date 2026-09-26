@@ -1,5 +1,7 @@
 /**
- * Redis-backed {@link EventStore} for mcpose's Streamable HTTP transport.
+ * Redis-backed {@link EventStore} and {@link SessionRegistry} for mcpose's
+ * Streamable HTTP transport: together they let a session resume after a
+ * proxy restart or on another instance.
  *
  * @module @mcpose/store-redis
  */
@@ -9,6 +11,7 @@ import type {
   StreamId,
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import type { SessionRecord, SessionRegistry } from 'mcpose';
 
 /**
  * The slice of a node-redis client this store actually calls. A live
@@ -92,10 +95,9 @@ function parseEventId(
  * replay durable, uncapped, per-stream history instead of the in-memory
  * store's 1000-event cap shared across every stream in the process.
  *
- * Note that this is the storage half of restart and fleet resumability, not
- * the whole of it: mcpose's session registry is still in memory, so a client
- * reconnecting to a restarted proxy is rejected on its `mcp-session-id`
- * before this store is consulted. See the package README.
+ * This is the storage half of restart and fleet resumability; pair it with
+ * {@link createRedisSessionRegistry} so the reconnecting client's
+ * `mcp-session-id` is known to the instance it lands on.
  *
  * The client must already be connected: connection lifecycle, pooling, TLS,
  * and reconnection stay with the host application, and this store only reads
@@ -175,6 +177,84 @@ export function createRedisEventStore(
         );
       }
       return parsed.streamId;
+    },
+  };
+}
+
+/**
+ * The slice of a node-redis client the session registry calls. A live
+ * `RedisClientType` satisfies it structurally, and so does a test double.
+ */
+export interface RedisSessionRegistryClient {
+  set(
+    key: string,
+    value: string,
+    options?: { expiration: { type: 'PXAT'; value: number } },
+  ): Promise<unknown>;
+  get(key: string): Promise<string | null>;
+  del(key: string): Promise<unknown>;
+}
+
+export interface RedisSessionRegistryOptions {
+  /**
+   * Prefix for every key this registry writes.
+   *
+   * @default 'mcpose:sessions:'
+   */
+  keyPrefix?: string;
+}
+
+/**
+ * Builds a {@link SessionRegistry} backed by one Redis string per session,
+ * expiring at the deadline mcpose fixed when the session was created.
+ *
+ * Give it the same client as {@link createRedisEventStore}: a resumed session
+ * needs both its record and its replay history.
+ *
+ * ```ts
+ * await startHttpProxy(backends, {}, {
+ *   eventStore: createRedisEventStore(client),
+ *   sessionRegistry: createRedisSessionRegistry(client),
+ * });
+ * ```
+ *
+ * Key layout: `<keyPrefix><sessionId>` (default `mcpose:sessions:<sessionId>`)
+ * holding the JSON record.
+ */
+export function createRedisSessionRegistry(
+  client: RedisSessionRegistryClient,
+  options: RedisSessionRegistryOptions = {},
+): SessionRegistry {
+  const keyPrefix = options.keyPrefix ?? 'mcpose:sessions:';
+  const keyFor = (sessionId: string): string => `${keyPrefix}${sessionId}`;
+
+  return {
+    async set(sessionId, record) {
+      // PXAT takes whole milliseconds; a deadline already in the past makes
+      // Redis drop the key at once, which is the right answer for it.
+      await client.set(
+        keyFor(sessionId),
+        JSON.stringify(record),
+        ...(record.expiresAt === undefined
+          ? []
+          : [
+              {
+                expiration: {
+                  type: 'PXAT' as const,
+                  value: Math.ceil(record.expiresAt),
+                },
+              },
+            ]),
+      );
+    },
+
+    async get(sessionId) {
+      const raw = await client.get(keyFor(sessionId));
+      return raw === null ? undefined : (JSON.parse(raw) as SessionRecord);
+    },
+
+    async delete(sessionId) {
+      await client.del(keyFor(sessionId));
     },
   };
 }

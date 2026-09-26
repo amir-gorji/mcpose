@@ -1,7 +1,7 @@
 {
   "name": "@mcpose/store-redis",
   "version": "0.1.0",
-  "description": "Redis-backed EventStore for mcpose: durable, uncapped SSE reconnect replay",
+  "description": "Redis-backed EventStore and SessionRegistry for mcpose: SSE reconnect replay that survives a restart",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,7 +27,8 @@
     "redis",
     "eventstore",
     "sse",
-    "resumability"
+    "resumability",
+    "session"
   ],
   "author": "Amir Gorji",
   "license": "MIT",
@@ -51,12 +52,14 @@
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
+    "mcpose": ">=3.0.0 <4",
     "redis": "^5.0.0 || ^6.0.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "@types/node": "^26.5.1",
     "@vitest/coverage-v8": "5.0.1",
+    "mcpose": "workspace:*",
     "redis": "^6.2.1",
     "typescript": "6.0.3",
     "vitest": "5.0.1"

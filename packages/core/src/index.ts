@@ -24,6 +24,8 @@ export type { Backends } from './mesh.js';
 export type { PersistentEventStore } from './eventStore.js';
 export { createInMemoryEventStore } from './eventStore.js';
 
+export type { SessionRecord, SessionRegistry } from './sessionRegistry.js';
+
 export type {
   DelegationWireEntry,
   DelegationWirePayload,

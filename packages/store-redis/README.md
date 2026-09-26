@@ -1,15 +1,14 @@
 # @mcpose/store-redis
 
-A Redis-backed `EventStore` for mcpose's Streamable HTTP transport, so SSE reconnect replay is durable rather than capped and process-local.
+A Redis-backed `EventStore` and `SessionRegistry` for mcpose's Streamable HTTP transport, so SSE reconnect replay is durable rather than capped and process-local, and survives a proxy restart.
 
 mcpose's default store is in-memory and capped at 1000 events across every stream in the process.
 A busy proxy therefore evicts a quiet session's replay history to make room for a loud one's, and a restart drops all of it.
 This package replaces that with per-stream history in Redis, bounded by time rather than by a shared count.
 
-> **Read this before you assume it survives a restart.**
-> A durable event store is the necessary half of restart and fleet resumability, not the whole of it.
-> mcpose keeps its session registry in memory, so after a restart the reconnecting client's `mcp-session-id` is unknown and the resume is rejected before the event store is ever consulted.
-> See [Limits](#limits).
+The `EventStore` is the storage half of that: it keeps the events.
+The `SessionRegistry` is the other half: it keeps the session itself, so a client reconnecting to a restarted proxy, or to another instance behind a load balancer, is not rejected on its `mcp-session-id` before the events are ever consulted.
+Use both, from the same Redis.
 
 ## Install
 
@@ -17,7 +16,7 @@ This package replaces that with per-stream history in Redis, bounded by time rat
 npm install @mcpose/store-redis redis
 ```
 
-`redis` (the official node-redis client) and `@modelcontextprotocol/sdk` are peer dependencies, so the version you already run is the version this adapter uses.
+`redis` (the official node-redis client), `mcpose`, and `@modelcontextprotocol/sdk` are peer dependencies, so the version you already run is the version this adapter uses.
 This package adds no runtime dependencies of its own.
 
 Requires Redis 6.2 or newer, for exclusive `XRANGE` bounds.
@@ -31,7 +30,10 @@ This adapter only reads and writes.
 ```ts
 import { createClient } from 'redis';
 import { startHttpProxy } from 'mcpose';
-import { createRedisEventStore } from '@mcpose/store-redis';
+import {
+  createRedisEventStore,
+  createRedisSessionRegistry,
+} from '@mcpose/store-redis';
 
 const redis = createClient({ url: process.env.REDIS_URL });
 await redis.connect();
@@ -39,11 +41,17 @@ await redis.connect();
 await startHttpProxy(
   { docs: { command: 'npx', args: ['-y', 'mcp-server-docs'] } },
   { name: 'my-proxy' },
-  { eventStore: createRedisEventStore(redis) },
+  {
+    eventStore: createRedisEventStore(redis),
+    sessionRegistry: createRedisSessionRegistry(redis),
+  },
 );
 ```
 
 ## Options
+
+The options below are `createRedisEventStore`'s.
+The registry's are under [Session registry](#session-registry).
 
 | Option | Default | What it does |
 |---|---|---|
@@ -72,9 +80,23 @@ If you raise `sessionTtlMs`, raise `ttlMs` to match.
 
 An unknown or already-expired `Last-Event-ID` replays nothing rather than the whole stream, which is what mcpose's in-memory store does.
 
+## Session registry
+
+`createRedisSessionRegistry` implements mcpose's `SessionRegistry` (the `sessionRegistry` option of `startHttpProxy`).
+It stores one `SessionRecord` per live session: the client's `initialize` params, the resolved `Identity`, and the deadline fixed at creation.
+The proxy writes the record before it answers the initialize, reads it only for a session id the instance does not hold, deletes it on client DELETE and TTL expiry, and keeps it across a shutdown.
+The semantics of a resumed session (what it negotiates, how long it lives, what `validateSession` sees) are the proxy's and are documented in the [`mcpose` README](../core/README.md#surviving-a-restart).
+
+| Option | Default | What it does |
+|---|---|---|
+| `keyPrefix` | `'mcpose:sessions:'` | Namespace for every record written. |
+
+One Redis string per session at `mcpose:sessions:<sessionId>`, holding the JSON `SessionRecord`, with `PXAT` set to the deadline mcpose fixed at creation (no expiry when `sessionTtlMs` is `Infinity`).
+Redis drops the key at the deadline on its own, so an expired session is unknown everywhere at the same moment.
+
 ## Limits
 
-- **A durable store does not on its own make a resume survive a proxy restart.** mcpose holds its sessions in an in-memory `Map`, and the MCP SDK's transport validates `mcp-session-id` before it looks at `Last-Event-ID`. So a client reconnecting to a restarted proxy, or to a different instance behind a load balancer, is rejected with a `400`/`404` before this store is consulted. What you get today is durable, per-stream, uncapped history within a live session, plus the storage half of restart and fleet resumability once mcpose grows a shared session registry.
+- **A resume needs both halves from the same backing store.** The event store alone keeps history a restarted proxy cannot reach, because the session id is rejected first; the registry alone brings a session back with no replay history. The registry also does not carry the audit chain, and a fleet without sticky routing can end up with two live copies of one session: see the [`mcpose` README](../core/README.md#surviving-a-restart).
 - **Retention is time-based only, never session-based.** The SDK's `EventStore` interface is given a stream id and a message, and nothing else: it never learns which MCP session a stream belongs to. So this adapter cannot drop a session's events when that session closes, and expiry is the only lever. Events therefore outlive their session by up to `ttlMs`.
 - **Stream ids are namespaced by session by mcpose, not by this store.** The SDK gives every session's standalone SSE stream the literal id `_GET_stream`; `startHttpProxy` prefixes each stream id with the session id before it reaches the store, so histories stay apart under one key prefix. Give each proxy *process* its own `keyPrefix` to keep proxies apart.
 - **No cap on events per stream.** `ttlMs` bounds history by age, not by count. A stream that emits continuously for `ttlMs` keeps every event in that window. Add `XTRIM MAXLEN` out of band if your notification volume makes that a problem.

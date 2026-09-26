@@ -197,6 +197,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: 5.0.1
         version: 5.0.1(vitest@5.0.1)
+      mcpose:
+        specifier: workspace:*
+        version: link:../core
       pg:
         specifier: ^8.23.0
         version: 8.23.0
@@ -221,6 +224,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: 5.0.1
         version: 5.0.1(vitest@5.0.1)
+      mcpose:
+        specifier: workspace:*
+        version: link:../core
       redis:
         specifier: ^6.2.1
         version: 6.2.1(@opentelemetry/api@1.9.1)

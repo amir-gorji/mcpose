@@ -58,6 +58,10 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **Session**: The audit boundary that produces one replay manifest on close. On HTTP, maps 1:1 to the `mcp-session-id` lifetime. On stdio, an audit-only concept — core has no session concept on stdio.
 
+**Session registry**: The `SessionRegistry` a host hands `startHttpProxy` so a session can be resumed after a restart or on another instance. Holds one **session record** per live id, written before the client learns the id and read only for an id the instance does not hold; client DELETE and TTL expiry delete it, shutdown keeps it (ADR-0021). `@mcpose/store-redis` and `@mcpose/store-postgres` implement it beside their event stores. _Avoid_: "session store", conflating with the **event store**
+
+**Session record**: The plain-JSON `SessionRecord` in the registry: the client's `initialize` params verbatim, the resolved **identity**, and the deadline fixed at creation. A resuming instance replays the params through the SDK's own initialize path and honours the remaining lifetime. _Avoid_: "session state", which suggests the audit chain travels with it (it does not)
+
 ### Audit
 
 **Audit event**: A tamper-evident record of a single tool call or prompt call, HMAC-chained and covered by a session-level Merkle proof. `AuditEvent` is a discriminated union on `sensitivityTier`. A prompt call is recorded with `kind: 'prompt'` and the prompt name in `tool`; an absent `kind` means a tool call (ADR-0014). _Avoid_: bare "event"
@@ -98,7 +102,7 @@ A composable middleware proxy for MCP servers, plus a suite of compliance packag
 
 **SSE event**: A server-sent event stored in `PersistentEventStore` for reconnect replay. Transport detail only. _Avoid_: bare "event"
 
-**SSE replay**: A reconnecting HTTP client replaying missed SSE events via `PersistentEventStore`. Transport concern, live in v1.2. _Avoid_: "session replay"
+**SSE replay**: A reconnecting HTTP client replaying missed SSE events via `PersistentEventStore`. Transport concern, live in v1.2. Survives a restart only together with a **session registry**. _Avoid_: "session replay"
 
 **Session replay**: Full re-execution of a session's tool calls from a replay manifest. v4 only. _Avoid_: conflating with SSE replay
 

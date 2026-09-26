@@ -61,6 +61,11 @@ import {
   readInboundDelegation,
 } from './delegation.js';
 import { createInMemoryEventStore, scopeEventStore } from './eventStore.js';
+import {
+  initializeParamsOf,
+  replayInitialize,
+  type SessionRegistry,
+} from './sessionRegistry.js';
 import type { EventStore } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { rejectionMcpError } from './rejection.js';
 import type { RejectionReason } from './rejection.js';
@@ -244,6 +249,24 @@ export interface HttpProxyOptions {
    * Set to `null` to disable reconnect replay entirely.
    */
   eventStore?: EventStore | null;
+  /**
+   * Shared record of live sessions, so a client can resume after a proxy
+   * restart or on another instance behind a load balancer. Without one,
+   * sessions live only in this process and a resume against a fresh process
+   * is a 404.
+   *
+   * A record is written before the initialize response goes out and read
+   * only for an `mcp-session-id` this instance does not hold; the resumed
+   * session negotiates what the original did, keeps its identity, and dies
+   * at the original deadline. Client DELETE and TTL expiry delete the
+   * record, server shutdown keeps it. Pair it with the matching
+   * {@link eventStore} adapter, or a resumed session has no replay history.
+   *
+   * @example
+   * sessionRegistry: createRedisSessionRegistry(redis),
+   * eventStore: createRedisEventStore(redis),
+   */
+  sessionRegistry?: SessionRegistry;
   /**
    * Called when a session is closed (client DELETE, TTL expiry, or server
    * shutdown). Wire {@link AuditMiddlewareHandle.closeSession} here to flush
@@ -1498,20 +1521,20 @@ export function startHttpProxy(
     httpOptions.eventStore === null
       ? undefined
       : (httpOptions.eventStore ?? createInMemoryEventStore());
+  const registry = httpOptions.sessionRegistry;
 
-  // session ID → { transport, proxyServer, identity, ttlTimer }
-  const sessions = new Map<
-    string,
-    {
-      transport: StreamableHTTPServerTransport;
-      proxyServer: Server;
-      identity?: Identity;
-      ttlTimer?: NodeJS.Timeout;
-    }
-  >();
+  interface Session {
+    transport: StreamableHTTPServerTransport;
+    proxyServer: Server;
+    identity?: Identity;
+    ttlTimer?: NodeJS.Timeout;
+  }
+  // session ID → live session held by this instance
+  const sessions = new Map<string, Session>();
 
-  // Sessions being initialized (identity resolution in flight) — counted so
-  // concurrent initializes cannot overshoot maxSessions.
+  // Sessions being initialized or resumed (identity resolution or registry
+  // lookup in flight) — counted so concurrent admissions cannot overshoot
+  // maxSessions.
   let pendingSessions = 0;
 
   const reportError = (err: unknown): void => {
@@ -1520,22 +1543,160 @@ export function startHttpProxy(
 
   /**
    * Single teardown path for every way a session can end: client DELETE,
-   * TTL expiry, and server shutdown. Clears the TTL timer, fires and awaits
-   * `onSessionClosed` (guarded — a throwing or rejecting hook must not break
-   * teardown), and closes the proxy server so it leaves the listChanged
+   * TTL expiry, and server shutdown. Clears the TTL timer, drops the shared
+   * record unless the session is meant to outlive this process, fires and
+   * awaits `onSessionClosed` (guarded — a throwing or rejecting hook must not
+   * break teardown), and closes the proxy server so it leaves the listChanged
    * fan-out bus. Idempotent: a second call for the same id is a no-op.
    */
-  const destroySession = async (id: string): Promise<void> => {
+  const destroySession = async (
+    id: string,
+    keepRecord = false,
+  ): Promise<void> => {
     const session = sessions.get(id);
     if (!session) return;
     sessions.delete(id);
     if (session.ttlTimer !== undefined) clearTimeout(session.ttlTimer);
+    if (registry && !keepRecord) await registry.delete(id).catch(reportError);
     try {
       await httpOptions.onSessionClosed?.(id);
     } catch (err) {
       reportError(err);
     }
     await session.proxyServer.close().catch(reportError);
+  };
+
+  /**
+   * Takes a session live on this instance. `expiresAt` is the session's
+   * deadline fixed at creation, so a resumed session gets the remaining
+   * lifetime rather than a fresh TTL; `undefined` means it never expires.
+   */
+  const admitSession = (
+    id: string,
+    transport: StreamableHTTPServerTransport,
+    proxyServer: Server,
+    identity: Identity | undefined,
+    expiresAt: number | undefined,
+  ): void => {
+    let ttlTimer: NodeJS.Timeout | undefined;
+    if (expiresAt !== undefined) {
+      // A record from a proxy with a longer TTL may still exceed Node's
+      // timer ceiling; clamping only makes that timer fire early and
+      // re-check nothing, since the session is then simply closed.
+      const remaining = Math.min(
+        Math.max(expiresAt - Date.now(), 0),
+        MAX_NODE_TIMER_DELAY_MS,
+      );
+      ttlTimer = setTimeout(() => {
+        void destroySession(id);
+      }, remaining);
+      ttlTimer.unref();
+    }
+    sessions.set(id, {
+      transport,
+      proxyServer,
+      ...(identity === undefined ? {} : { identity }),
+      ...(ttlTimer === undefined ? {} : { ttlTimer }),
+    });
+  };
+
+  const sessionLimitBody = JSON.stringify({
+    error: {
+      message: 'Session limit reached',
+      data: { rejectionReason: 'SESSION_LIMIT' },
+    },
+  });
+
+  // Builds the transport for one session. The id is fixed before the
+  // transport exists so the event store can be scoped to it: stream ids are
+  // namespaced per session (#154).
+  const createTransport = (
+    sessionId: string,
+    onsessioninitialized: (id: string) => void | Promise<void>,
+  ): StreamableHTTPServerTransport => {
+    // An explicit list is used verbatim; the derived loopback list only
+    // fills the gap so the default actually validates something.
+    const allowedHosts = httpOptions.allowedHosts ?? derivedAllowedHosts;
+    const allowedOrigins = httpOptions.allowedOrigins ?? derivedAllowedOrigins;
+    return new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => sessionId,
+      ...(eventStore
+        ? { eventStore: scopeEventStore(eventStore, sessionId) }
+        : {}),
+      ...(allowedHosts ? { allowedHosts } : {}),
+      ...(allowedOrigins ? { allowedOrigins } : {}),
+      enableDnsRebindingProtection: dnsRebindingProtection,
+      onsessioninitialized,
+      onsessionclosed: (id) => {
+        void destroySession(id);
+      },
+    });
+  };
+
+  // Resumes in flight, so concurrent requests for one unknown id build one
+  // session between them instead of one each.
+  const resuming = new Map<
+    string,
+    Promise<Session | { status: number; body: string } | undefined>
+  >();
+
+  /**
+   * Rebuilds a session this instance does not hold from its shared record:
+   * `undefined` when the registry has no live record for it, or the SDK's
+   * own rejection when the replayed initialize did not bring the transport
+   * up (a failed Host or Origin check, which the real request would fail
+   * identically).
+   */
+  const resumeSession = (
+    id: string,
+    sharedRegistry: SessionRegistry,
+    req: http.IncomingMessage,
+  ): Promise<Session | { status: number; body: string } | undefined> => {
+    const inflight = resuming.get(id);
+    if (inflight) return inflight;
+    pendingSessions += 1;
+    const attempt = (async () => {
+      const record = await sharedRegistry.get(id);
+      if (
+        record === undefined ||
+        (record.expiresAt !== undefined && record.expiresAt <= Date.now())
+      ) {
+        return undefined;
+      }
+      // The pending slot is already counted, so this instance can be full
+      // by exactly one.
+      if (sessions.size + pendingSessions > maxSessions) {
+        return { status: 503, body: sessionLimitBody };
+      }
+      const proxyServer = createProxyServer(backends, options);
+      const transport = createTransport(id, (sid) => {
+        admitSession(
+          sid,
+          transport,
+          proxyServer,
+          record.identity,
+          record.expiresAt,
+        );
+      });
+      await proxyServer.connect(transport as Transport);
+      const answer = await replayInitialize(transport, record.initialize, {
+        ...(req.headers.host === undefined ? {} : { host: req.headers.host }),
+        ...(req.headers.origin === undefined
+          ? {}
+          : { origin: req.headers.origin }),
+      });
+      const session = sessions.get(id);
+      if (session === undefined) {
+        void proxyServer.close().catch(reportError);
+        return answer;
+      }
+      return session;
+    })().finally(() => {
+      resuming.delete(id);
+      pendingSessions -= 1;
+    });
+    resuming.set(id, attempt);
+    return attempt;
   };
 
   const requestHandler = (
@@ -1578,10 +1739,22 @@ export function startHttpProxy(
       const headers = normalizeHeaders(req.headers);
 
       if (typeof sessionId === 'string') {
-        // Route to existing session — stamp its resolved identity into context
-        const session = sessions.get(sessionId);
+        // Route to an existing session, resuming it from the shared registry
+        // if another process created it — stamp its resolved identity into
+        // context.
+        const session =
+          sessions.get(sessionId) ??
+          (registry
+            ? await resumeSession(sessionId, registry, req)
+            : undefined);
         if (!session) {
           res.writeHead(404).end();
+          return;
+        }
+        if ('status' in session) {
+          res
+            .writeHead(session.status, { 'content-type': 'application/json' })
+            .end(session.body);
           return;
         }
         if (httpOptions.validateSession !== undefined) {
@@ -1634,17 +1807,32 @@ export function startHttpProxy(
         // Count this initialize as pending so concurrent initializes
         // cannot overshoot maxSessions while identity resolution awaits.
         if (sessions.size + pendingSessions >= maxSessions) {
-          res.writeHead(503, { 'content-type': 'application/json' }).end(
-            JSON.stringify({
-              error: {
-                message: 'Session limit reached',
-                data: { rejectionReason: 'SESSION_LIMIT' },
-              },
-            }),
-          );
+          res
+            .writeHead(503, { 'content-type': 'application/json' })
+            .end(sessionLimitBody);
           return;
         }
         pendingSessions += 1;
+
+        // The shared record carries the client's initialize params, and the
+        // SDK owns parsing the body, so tap the bytes as they arrive rather
+        // than reading the stream out from under it. The same seam the body
+        // limit uses.
+        const bodyChunks: Buffer[] = [];
+        if (registry) {
+          const push = req.push.bind(req);
+          (req as unknown as { push: typeof req.push }).push = (
+            chunk: Buffer | string | null,
+            enc?: BufferEncoding,
+          ): boolean => {
+            if (chunk !== null) {
+              bodyChunks.push(
+                typeof chunk === 'string' ? Buffer.from(chunk, enc) : chunk,
+              );
+            }
+            return push(chunk, enc);
+          };
+        }
 
         try {
           // Resolve identity once for the lifetime of this session
@@ -1659,41 +1847,34 @@ export function startHttpProxy(
           }
 
           const proxyServer = createProxyServer(backends, options);
-          // An explicit list is used verbatim; the derived loopback list
-          // only fills the gap so the default actually validates something.
-          const allowedHosts = httpOptions.allowedHosts ?? derivedAllowedHosts;
-          const allowedOrigins =
-            httpOptions.allowedOrigins ?? derivedAllowedOrigins;
-          // The id is fixed before the transport exists so the event store
-          // can be scoped to it: stream ids are namespaced per session (#154).
           const sessionId = randomUUID();
-          const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: () => sessionId,
-            ...(eventStore
-              ? { eventStore: scopeEventStore(eventStore, sessionId) }
-              : {}),
-            ...(allowedHosts ? { allowedHosts } : {}),
-            ...(allowedOrigins ? { allowedOrigins } : {}),
-            enableDnsRebindingProtection: dnsRebindingProtection,
-            onsessioninitialized: (id) => {
-              let ttlTimer: NodeJS.Timeout | undefined;
-              // Infinity opts out; setTimeout would clamp it to 1ms.
-              if (Number.isFinite(sessionTtlMs)) {
-                ttlTimer = setTimeout(() => {
-                  void destroySession(id);
-                }, sessionTtlMs);
-                ttlTimer.unref();
+          const transport = createTransport(sessionId, async (id) => {
+            // The deadline is fixed here and travels with the record, so a
+            // resume elsewhere inherits what is left of it. Infinity opts
+            // out; setTimeout would clamp it to 1ms.
+            const expiresAt = Number.isFinite(sessionTtlMs)
+              ? Date.now() + sessionTtlMs
+              : undefined;
+            // The SDK awaits this hook before it answers, so the record is
+            // durable before the client can present the id anywhere. A
+            // throw here becomes the SDK's 400 with the error text in the
+            // body, so the real cause goes to onError and the client gets a
+            // message that names nothing about the backing store.
+            if (registry) {
+              try {
+                await registry.set(id, {
+                  initialize: initializeParamsOf(
+                    Buffer.concat(bodyChunks).toString(),
+                  ),
+                  ...(identity === undefined ? {} : { identity }),
+                  ...(expiresAt === undefined ? {} : { expiresAt }),
+                });
+              } catch (err) {
+                reportError(err);
+                throw new Error('mcpose: session registry unavailable');
               }
-              sessions.set(id, {
-                transport,
-                proxyServer,
-                ...(identity === undefined ? {} : { identity }),
-                ...(ttlTimer === undefined ? {} : { ttlTimer }),
-              });
-            },
-            onsessionclosed: (id) => {
-              void destroySession(id);
-            },
+            }
+            admitSession(id, transport, proxyServer, identity, expiresAt);
           });
 
           const requestContext: Omit<ProxyContext, 'requestId'> = {
@@ -1710,10 +1891,11 @@ export function startHttpProxy(
               transport.handleRequest(req, res),
             );
           } finally {
-            // Non-initialize body: the transport rejected the request and
-            // no session was created — close the orphaned proxy server so
-            // it does not leak (memory + listChanged fan-out).
-            if (transport.sessionId === undefined) {
+            // No session came up — a non-initialize body the transport
+            // rejected, or a registry that refused the record — so close the
+            // orphaned proxy server before it leaks (memory + listChanged
+            // fan-out).
+            if (!sessions.has(sessionId)) {
               void proxyServer.close().catch(reportError);
             }
           }
@@ -1743,8 +1925,10 @@ export function startHttpProxy(
     // Tear down every session through the single teardown path (clears TTL
     // timers, fires and awaits onSessionClosed so audit manifests flush
     // before the close callback runs).
+    // Shared records are kept: the sessions are meant to resume on the next
+    // process, and their deadlines expire them on their own.
     void Promise.allSettled(
-      [...sessions.keys()].map((id) => destroySession(id)),
+      [...sessions.keys()].map((id) => destroySession(id, true)),
     ).finally(() => {
       rawClose(callback);
       // Idle keep-alive and lingering SSE sockets would otherwise keep the
