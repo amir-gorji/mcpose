@@ -188,7 +188,7 @@ function nextLayer(layer: string[]): string[] {
   for (let i = 0; i < layer.length; i += 2) {
     // `i < layer.length` guarantees `left`; a missing right sibling means an
     // odd layer, whose last node is duplicated (ADR-0004) — same padding as
-    // `computeMerkleProof`, which must stay identical.
+    // `computeMerkleProof` and `computeMerkleRootAndProofs`.
     const left = layer[i]!;
     const right = layer[i + 1] ?? left;
     next.push(nodeHash(left, right));
@@ -235,6 +235,42 @@ export function computeMerkleProof(
   }
 
   return { index, siblings, directions };
+}
+
+function proofFromLayers(index: number, layers: string[][]): MerkleProof {
+  const siblings: string[] = [];
+  const directions: ('left' | 'right')[] = [];
+  let idx = index;
+
+  for (let level = 0; level < layers.length - 1; level++) {
+    const layer = layers[level]!;
+    const siblingIdx = idx % 2 === 0 ? idx + 1 : idx - 1;
+    siblings.push(layer[siblingIdx] ?? layer[idx]!);
+    directions.push(idx % 2 === 0 ? 'right' : 'left');
+    idx = Math.floor(idx / 2);
+  }
+
+  return { index, siblings, directions };
+}
+
+/** Build a manifest root and every proof from the same set of tree layers. */
+export function computeMerkleRootAndProofs(hashes: string[]): {
+  merkleRoot: string;
+  merkleProofs: MerkleProof[];
+} {
+  if (hashes.length === 0) {
+    return { merkleRoot: sha256hex(''), merkleProofs: [] };
+  }
+
+  const layers = [hashes.map(leafHash)];
+  while (layers[layers.length - 1]!.length > 1) {
+    layers.push(nextLayer(layers[layers.length - 1]!));
+  }
+
+  return {
+    merkleRoot: layers[layers.length - 1]![0]!,
+    merkleProofs: hashes.map((_, index) => proofFromLayers(index, layers)),
+  };
 }
 
 /**

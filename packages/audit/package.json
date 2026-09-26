@@ -42,6 +42,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "benchmark:merkle": "node ./bench/merkle-proofs.mjs",
     "ts:ci": "tsc --noEmit",
     "test": "vitest run --coverage",
     "mutation": "stryker run",

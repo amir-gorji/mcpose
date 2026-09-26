@@ -10,8 +10,7 @@ import {
   canonicalJson,
   chainPreimageFields,
   computeChainHash,
-  computeMerkleProof,
-  computeMerkleRoot,
+  computeMerkleRootAndProofs,
   sha256hex,
   stableStringify,
 } from './chain.js';
@@ -462,8 +461,7 @@ export function createAuditMiddleware(
     if (session.events.length === 0) return undefined;
 
     const hashes = session.events.map((e) => e.chainHash);
-    const merkleRoot = computeMerkleRoot(hashes);
-    const merkleProofs = hashes.map((_, i) => computeMerkleProof(hashes, i));
+    const { merkleRoot, merkleProofs } = computeMerkleRootAndProofs(hashes);
 
     // The signature covers the ENTIRE manifest (domain-separated, canonical
     // serialization) — signing only the Merkle root would leave sessionId,
