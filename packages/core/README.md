@@ -120,6 +120,7 @@ Behavior worth knowing before you deploy it:
   See [ADR-0005](https://github.com/amir-gorji/mcpose/blob/main/docs/adr/0005-loopback-bind-by-default.md).
 - **Session creation is restricted.** Only an `initialize` POST can create a session; a session-less GET or DELETE returns 400.
 - **Sessions can be re-validated per request.** `validateSession(req, { sessionId, identity })` runs on every routed request; return `false` or throw for a 401.
+  A throw is reported through `onError` first, so a broken validator shows up as an error rather than as a wave of 401s: the same is true of `onRequest` and `resolveIdentity`.
   Use it to bind a session to its original credential, so a leaked `mcp-session-id` alone cannot take a session over.
 - **Credential headers never reach middleware.** `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, and `x-api-key` are stripped from `ProxyContext.headers`, and with that from anything middleware logs.
   `resolveIdentity` reads the raw `http.IncomingMessage`, so it still sees them.
@@ -320,9 +321,9 @@ interface HttpProxyOptions {
   maxBodyBytes?: number; // Default: 4 MB (4,194,304); excess returns 413
   maxSessions?: number;  // Default: 1000; excess requests return 503; Infinity opts out
   sessionTtlMs?: number; // Default: 30 minutes (1,800,000); max finite 2,147,483,647; Infinity opts out
-  /** Resolves caller identity once per session. Errors abort the session with 401. */
+  /** Resolves caller identity once per session. A throw reports through onError and aborts the session with 401. */
   resolveIdentity?: (req: http.IncomingMessage) => Identity | Promise<Identity>;
-  /** Re-validates an existing session on every routed request. Return false (or throw) for a 401. */
+  /** Re-validates an existing session on every routed request. Return false, or throw (reported through onError), for a 401. */
   validateSession?: (
     req: http.IncomingMessage,
     session: { sessionId: string; identity?: Identity },

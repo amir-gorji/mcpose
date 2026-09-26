@@ -372,46 +372,132 @@ describe('startHttpProxy()', () => {
   });
 
   describe('onError', () => {
-    it('calls onError instead of silently discarding errors', async () => {
+    const initializeBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '0.0.1' },
+      },
+    });
+
+    /** Every auth hook is expected to be contained *and* reported. */
+    const expectReported = (
+      errors: unknown[],
+      message: string,
+      status: number,
+    ): void => {
+      expect(status).toBe(401);
+      expect(errors).toHaveLength(1);
+      expect((errors[0] as Error).message).toBe(message);
+    };
+
+    it('reports an error thrown by onRequest instead of only discarding it', async () => {
       const errors: unknown[] = [];
-      const backend = makeMockBackend();
       const server = await startHttpProxy(
-        backend,
+        makeMockBackend(),
         { name: 'test-server' },
         {
           port: 0,
           path: '/mcp',
           onError: (err) => errors.push(err),
           onRequest: () => {
-            throw new Error('boom');
+            throw new Error('auth service unreachable');
           },
         },
       );
       const baseUrl = `http://localhost:${getPort(server)}`;
 
       try {
-        // onRequest throwing causes 401 path (no error propagated to catch)
-        // Use a different trigger: make onRequest return true but cause internal failure
-        // Actually test with a valid path to ensure error propagates if something throws internally
-        // The simplest test: verify onError is called when an async error occurs
-        // We can simulate by using onRequest that throws asynchronously after returning
-        await fetch(`${baseUrl}/mcp`, {
+        const res = await fetch(`${baseUrl}/mcp`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          body: initializeBody,
+        });
+        expectReported(errors, 'auth service unreachable', res.status);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it('reports an error thrown by resolveIdentity instead of only discarding it', async () => {
+      const errors: unknown[] = [];
+      const server = await startHttpProxy(
+        makeMockBackend(),
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          onError: (err) => errors.push(err),
+          resolveIdentity: () => {
+            throw new Error('jwks fetch failed');
+          },
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      try {
+        const res = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: initializeBody,
+        });
+        // The initialize POST itself never reaches the transport: the caller
+        // sees a bare 401 while the real cause stays in the proxy.
+        expectReported(errors, 'jwks fetch failed', res.status);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it('reports an error thrown by validateSession instead of only discarding it', async () => {
+      const errors: unknown[] = [];
+      const server = await startHttpProxy(
+        makeMockBackend(),
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          onError: (err) => errors.push(err),
+          validateSession: () => {
+            throw new Error('token store unreachable');
+          },
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      try {
+        const initRes = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            accept: 'application/json, text/event-stream',
+          },
+          body: initializeBody,
+        });
+        const sessionId = initRes.headers.get('mcp-session-id');
+        expect(sessionId).toBeTruthy();
+        // `initialize` itself does not re-validate: it has no session yet.
+        expect(errors).toHaveLength(0);
+
+        const res = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'mcp-session-id': sessionId!,
+          },
           body: JSON.stringify({
             jsonrpc: '2.0',
-            id: 1,
-            method: 'initialize',
+            id: 2,
+            method: 'tools/list',
             params: {},
           }),
         });
-        // The onRequest threw, which is caught internally — no onError call for that path
-        // Verify onError is defined and can be called
-        const onErrorSpy = vi.fn();
-        onErrorSpy(new Error('test'));
-        expect(onErrorSpy).toHaveBeenCalledWith(expect.any(Error));
+        expectReported(errors, 'token store unreachable', res.status);
       } finally {
-        await new Promise<void>((res) => server.close(() => res()));
+        await closeServer(server);
       }
     });
 

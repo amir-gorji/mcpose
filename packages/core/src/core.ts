@@ -182,12 +182,20 @@ export interface HttpProxyOptions {
   host?: string;
   /** Default: '/mcp' */
   path?: string;
-  /** Called for every incoming request before MCP handling. Return false to block (caller writes its own response). Throw to get a 401. */
+  /**
+   * Called for every incoming request before MCP handling. Return false to
+   * block (caller writes its own response). Throw to get a 401, with the error
+   * reported through {@link onError}.
+   */
   onRequest?: (
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ) => boolean | Promise<boolean>;
-  /** Called on unhandled errors instead of console.error. */
+  /**
+   * Called on unhandled errors instead of console.error, and on every auth
+   * hook that throws: the request still fails closed, and the operator still
+   * sees why.
+   */
   onError?: (err: unknown) => void;
   /** Maximum request body size in bytes. Default: 4 MB. */
   maxBodyBytes?: number;
@@ -213,7 +221,7 @@ export interface HttpProxyOptions {
    *
    * Supply a JWT extractor, mTLS cert reader, API-key lookup, or any async
    * function returning an {@link Identity}. Errors thrown here abort the
-   * session with a 401.
+   * session with a 401 and are reported through {@link onError}.
    *
    * @example
    * resolveIdentity: extractJwtIdentity({ jwksUri: '...' })
@@ -260,9 +268,10 @@ export interface HttpProxyOptions {
   onSessionClosed?: (sessionId: string) => unknown;
   /**
    * Re-validates an existing session on every routed request. Return `false`
-   * (or throw) to reject with 401. Use to bind sessions to their original
-   * credential — e.g. re-check the bearer token — so a leaked
-   * `mcp-session-id` alone cannot take over a session.
+   * (or throw, which is reported through {@link onError}) to reject with 401.
+   * Use to bind sessions to their original credential — e.g. re-check the
+   * bearer token — so a leaked `mcp-session-id` alone cannot take over a
+   * session.
    */
   validateSession?: (
     req: http.IncomingMessage,
@@ -1547,7 +1556,12 @@ export function startHttpProxy(
         let allowed: boolean;
         try {
           allowed = await httpOptions.onRequest(req, res);
-        } catch {
+        } catch (err) {
+          // Failing closed is the right answer for the caller; it is not an
+          // answer for the operator, whose only signal would otherwise be a
+          // stream of 401s. Same containment the session teardown path
+          // already uses for a throwing `onSessionClosed`.
+          reportError(err);
           if (!res.headersSent) res.writeHead(401).end();
           return;
         }
@@ -1593,7 +1607,8 @@ export function startHttpProxy(
                 ? {}
                 : { identity: session.identity }),
             });
-          } catch {
+          } catch (err) {
+            reportError(err);
             valid = false;
           }
           if (!valid) {
@@ -1652,7 +1667,8 @@ export function startHttpProxy(
           if (httpOptions.resolveIdentity !== undefined) {
             try {
               identity = await httpOptions.resolveIdentity(req);
-            } catch {
+            } catch (err) {
+              reportError(err);
               if (!res.headersSent) res.writeHead(401).end();
               return;
             }
