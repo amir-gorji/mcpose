@@ -1678,19 +1678,21 @@ export function startHttpProxy(
           record.expiresAt,
         );
       });
-      await proxyServer.connect(transport as Transport);
-      const answer = await replayInitialize(transport, record.initialize, {
-        ...(req.headers.host === undefined ? {} : { host: req.headers.host }),
-        ...(req.headers.origin === undefined
-          ? {}
-          : { origin: req.headers.origin }),
-      });
-      const session = sessions.get(id);
-      if (session === undefined) {
-        void proxyServer.close().catch(reportError);
-        return answer;
+      try {
+        await proxyServer.connect(transport as Transport);
+        const answer = await replayInitialize(transport, record.initialize, {
+          ...(req.headers.host === undefined ? {} : { host: req.headers.host }),
+          ...(req.headers.origin === undefined
+            ? {}
+            : { origin: req.headers.origin }),
+        });
+        return sessions.get(id) ?? answer;
+      } finally {
+        // Not admitted, whether the SDK refused the replay or threw: close
+        // the orphaned proxy server before it leaks (memory + listChanged
+        // fan-out), as the fresh-session path does.
+        if (!sessions.has(id)) void proxyServer.close().catch(reportError);
       }
-      return session;
     })().finally(() => {
       resuming.delete(id);
       pendingSessions -= 1;
