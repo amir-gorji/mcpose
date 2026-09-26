@@ -60,7 +60,7 @@ import {
   detectDelegationLoop,
   readInboundDelegation,
 } from './delegation.js';
-import { createInMemoryEventStore } from './eventStore.js';
+import { createInMemoryEventStore, scopeEventStore } from './eventStore.js';
 import type { EventStore } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { rejectionMcpError } from './rejection.js';
 import type { RejectionReason } from './rejection.js';
@@ -237,6 +237,9 @@ export interface HttpProxyOptions {
    * Event store for SSE reconnect replay. Defaults to an in-memory store
    * (suitable for single-instance deployments). For multi-instance / HA
    * deployments, supply a Redis or Postgres-backed implementation.
+   *
+   * Stream ids reach the store namespaced as `<sessionId>:<streamId>`, so
+   * one store serves every session without their replay histories mixing.
    *
    * Set to `null` to disable reconnect replay entirely.
    */
@@ -1661,9 +1664,14 @@ export function startHttpProxy(
           const allowedHosts = httpOptions.allowedHosts ?? derivedAllowedHosts;
           const allowedOrigins =
             httpOptions.allowedOrigins ?? derivedAllowedOrigins;
+          // The id is fixed before the transport exists so the event store
+          // can be scoped to it: stream ids are namespaced per session (#154).
+          const sessionId = randomUUID();
           const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: randomUUID,
-            ...(eventStore ? { eventStore } : {}),
+            sessionIdGenerator: () => sessionId,
+            ...(eventStore
+              ? { eventStore: scopeEventStore(eventStore, sessionId) }
+              : {}),
             ...(allowedHosts ? { allowedHosts } : {}),
             ...(allowedOrigins ? { allowedOrigins } : {}),
             enableDnsRebindingProtection: dnsRebindingProtection,

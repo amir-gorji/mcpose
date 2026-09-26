@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
-import { createInMemoryEventStore } from '../eventStore.js';
+import { createInMemoryEventStore, scopeEventStore } from '../eventStore.js';
 
 function msg(id: number): JSONRPCMessage {
   return { jsonrpc: '2.0', method: 'notifications/test', params: { id } };
@@ -84,5 +84,57 @@ describe('createInMemoryEventStore()', () => {
     expect(await store.getStreamIdForEventId?.(first)).toBeUndefined();
     expect(await store.getStreamIdForEventId?.(second)).toBe('stream-a');
     expect(await store.getStreamIdForEventId?.(third)).toBe('stream-a');
+  });
+});
+
+describe('scopeEventStore()', () => {
+  it('namespaces stream ids by session and strips the prefix on the way out', async () => {
+    const inner = createInMemoryEventStore();
+    const scoped = scopeEventStore(inner, 'session-a');
+    const id = await scoped.storeEvent('_GET_stream', msg(1));
+    const id2 = await scoped.storeEvent('_GET_stream', msg(2));
+
+    expect(await inner.getStreamIdForEventId?.(id)).toBe(
+      'session-a:_GET_stream',
+    );
+    expect(await scoped.getStreamIdForEventId?.(id)).toBe('_GET_stream');
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    expect(await scoped.replayEventsAfter(id, { send })).toBe('_GET_stream');
+    expect(send).toHaveBeenCalledWith(id2, msg(2));
+  });
+
+  it("treats another session's cursor as unknown and replays nothing (#154)", async () => {
+    const inner = createInMemoryEventStore();
+    const a = scopeEventStore(inner, 'session-a');
+    const b = scopeEventStore(inner, 'session-b');
+    const cursor = await a.storeEvent('_GET_stream', msg(1));
+    await a.storeEvent('_GET_stream', msg(2));
+
+    expect(await b.getStreamIdForEventId?.(cursor)).toBeUndefined();
+    const send = vi.fn().mockResolvedValue(undefined);
+    expect(await b.replayEventsAfter(cursor, { send })).toBe('');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('learns the owner by a silent replay when the store has no getStreamIdForEventId', async () => {
+    const inner = createInMemoryEventStore();
+    const bare = {
+      storeEvent: inner.storeEvent,
+      replayEventsAfter: inner.replayEventsAfter,
+    };
+    const a = scopeEventStore(bare, 'session-a');
+    const b = scopeEventStore(bare, 'session-b');
+    const cursor = await a.storeEvent('_GET_stream', msg(1));
+    const next = await a.storeEvent('_GET_stream', msg(2));
+
+    expect(await a.getStreamIdForEventId?.(cursor)).toBe('_GET_stream');
+    expect(await b.getStreamIdForEventId?.(cursor)).toBeUndefined();
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    expect(await b.replayEventsAfter(cursor, { send })).toBe('');
+    expect(send).not.toHaveBeenCalled();
+    expect(await a.replayEventsAfter(cursor, { send })).toBe('_GET_stream');
+    expect(send).toHaveBeenCalledWith(next, msg(2));
   });
 });
