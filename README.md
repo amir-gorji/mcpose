@@ -225,6 +225,7 @@ Three consequences worth knowing up front:
 Mesh mode adds no fifth path.
 Choosing which upstream a call goes to happens *inside* the innermost `next` of whichever path above applies, so a mesh call runs exactly the pipeline a 1:1 call runs, audit included.
 A name that resolves to no configured backend is rejected there too, with `BACKEND_UNROUTABLE`, so observing middleware records the attempt.
+Resources follow the same rule under the URI a mesh exposes, `mcpose://<backendKey>/<uri>` ([ADR-0022](./docs/adr/0022-mesh-resources-under-the-mcpose-scheme.md)).
 That holds for prompts as well: `prompts/get` runs `promptMiddleware`, and its unroutable-name rejection is thrown inside the pipeline, so audit sees prompt calls and prompt rejections ([ADR-0014](./docs/adr/0014-prompt-calls-run-a-pipeline-and-are-audited.md)).
 Prompt hiding and prompt pass-through do not exist yet, because `prompts/list` has no pipeline.
 

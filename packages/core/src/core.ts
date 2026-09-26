@@ -50,8 +50,11 @@ import type {
 } from './telemetry.js';
 import {
   listAcrossMesh,
+  namespaceName,
+  namespaceUri,
   normalizeBackends,
   routeNamespaced,
+  routeResourceUri,
   type Backends,
   type MeshEntry,
 } from './mesh.js';
@@ -404,7 +407,11 @@ export interface ProxyOptions {
    */
   passThroughTools?: ReadonlyArray<string>;
 
-  /** Resources that skip middleware — upstream response forwarded as-is. */
+  /**
+   * Resources that skip middleware — upstream response forwarded as-is.
+   * Matched against the URI the client sees, which in mesh mode is
+   * `mcpose://<backendKey>/<uri>` (ADR-0022).
+   */
   passThroughResources?: ReadonlyArray<string>;
 
   /**
@@ -422,7 +429,11 @@ export interface ProxyOptions {
    */
   hiddenTools?: ReadonlyArray<string> | HiddenToolPredicate;
 
-  /** Resources hidden from list_resources and rejected at runtime with InvalidRequest. */
+  /**
+   * Resources hidden from list_resources and rejected at runtime with
+   * InvalidRequest. Matched against the URI the client sees, which in mesh
+   * mode is `mcpose://<backendKey>/<uri>` (ADR-0022).
+   */
   hiddenResources?: ReadonlyArray<string>;
 
   /**
@@ -515,7 +526,7 @@ type ProxyRequestExtra = {
  * forwards every surface it has, and the fan-out filters per subscriber.
  */
 type ListChangedBus = {
-  servers: Map<Server, ServerCapabilities>;
+  servers: Set<Server>;
 };
 
 type ListChangedSurface = 'tools' | 'prompts' | 'resources';
@@ -528,15 +539,10 @@ const httpProxyContext = new AsyncLocalStorage<
 /**
  * Union of every backend's capabilities, plus the ADR-0007 rule that a
  * non-empty `localTools` advertises `tools` on its own.
- *
- * Mesh mode advertises no `resources`: a resource is addressed by URI, and a
- * URI cannot be namespaced without rewriting an identifier every party
- * treats as opaque (ADR-0013, deferred to #100).
  */
 function createProxyCapabilities(
   entries: ReadonlyArray<MeshEntry>,
   hasLocalTools: boolean,
-  mesh: boolean,
 ): ServerCapabilities {
   const upstreams = entries.map((entry) =>
     entry.client.getServerCapabilities(),
@@ -548,7 +554,7 @@ function createProxyCapabilities(
     ...(upstreams.some((u) => u?.tools) || hasLocalTools
       ? { tools: listChanged(upstreams.some((u) => u?.tools?.listChanged)) }
       : {}),
-    ...(!mesh && upstreams.some((u) => u?.resources)
+    ...(upstreams.some((u) => u?.resources)
       ? {
           resources: listChanged(
             upstreams.some((u) => u?.resources?.listChanged),
@@ -730,7 +736,7 @@ function buildLocalToolMap(
  */
 function surfaceBackends(
   entries: ReadonlyArray<MeshEntry>,
-  surface: 'tools' | 'prompts',
+  surface: 'tools' | 'prompts' | 'resources',
 ): {
   entries: ReadonlyArray<MeshEntry>;
   byKey: ReadonlyMap<string, BackendClient>;
@@ -768,9 +774,9 @@ function filterHiddenTools(
  * Subscribes `server` to every backend's list-changed notifications, so a
  * mesh fans them in through the same per-backend bus a 1:1 proxy uses.
  *
- * A notification reaches a subscriber only when that subscriber advertises
- * the surface: in mesh mode the proxy has no `resources` capability, and the
- * SDK rejects a notification for a surface the server never advertised.
+ * Every subscriber advertises the union of its backends' surfaces, so a
+ * notification a bus can emit is always one its subscribers accept, and the
+ * fan-out needs no per-surface filter.
  */
 function registerListChangedForwarders(
   entries: ReadonlyArray<MeshEntry>,
@@ -799,39 +805,29 @@ function registerListChangedForwarders(
     let bus = listChangedBuses.get(client);
 
     if (!bus) {
-      const servers = new Map<Server, ServerCapabilities>();
+      const servers = new Set<Server>();
       const fanOut = async (
-        surface: ListChangedSurface,
         notify: (proxyServer: Server) => Promise<void>,
       ): Promise<void> => {
-        await Promise.allSettled(
-          [...servers]
-            .filter(([, advertised]) => advertised[surface]?.listChanged)
-            .map(([proxyServer]) => notify(proxyServer)),
-        );
+        await Promise.allSettled([...servers].map(notify));
       };
 
       if (upstream.tools?.listChanged) {
         client.setNotificationHandler(ToolListChangedNotificationSchema, () =>
-          fanOut('tools', (proxyServer) => proxyServer.sendToolListChanged()),
+          fanOut((proxyServer) => proxyServer.sendToolListChanged()),
         );
       }
 
       if (upstream.prompts?.listChanged) {
         client.setNotificationHandler(PromptListChangedNotificationSchema, () =>
-          fanOut('prompts', (proxyServer) =>
-            proxyServer.sendPromptListChanged(),
-          ),
+          fanOut((proxyServer) => proxyServer.sendPromptListChanged()),
         );
       }
 
       if (upstream.resources?.listChanged) {
         client.setNotificationHandler(
           ResourceListChangedNotificationSchema,
-          () =>
-            fanOut('resources', (proxyServer) =>
-              proxyServer.sendResourceListChanged(),
-            ),
+          () => fanOut((proxyServer) => proxyServer.sendResourceListChanged()),
         );
       }
 
@@ -840,7 +836,7 @@ function registerListChangedForwarders(
     }
 
     const joined = bus;
-    joined.servers.set(server, capabilities);
+    joined.servers.add(server);
 
     let active = true;
     leaveBuses.push(() => {
@@ -903,13 +899,10 @@ export function createProxyServer(
   const localToolMap = buildLocalToolMap(options.localTools);
   const toolBackends = surfaceBackends(entries, 'tools');
   const promptBackends = surfaceBackends(entries, 'prompts');
+  const resourceBackends = surfaceBackends(entries, 'resources');
   const upstreamHasTools = toolBackends.entries.length > 0;
 
-  const capabilities = createProxyCapabilities(
-    entries,
-    localToolMap.size > 0,
-    mesh,
-  );
+  const capabilities = createProxyCapabilities(entries, localToolMap.size > 0);
   const toolPipeline = pipe(options.toolMiddleware ?? []);
   // Pass-through tools skip transforming middleware but are still seen by
   // observers (audit, telemetry) marked via markPassThroughObserver().
@@ -1026,6 +1019,7 @@ export function createProxyServer(
                   },
                   (key, error) =>
                     reportDegraded(context, key, 'tools/list', error),
+                  namespaceName,
                 ),
               }
             : upstreamHasTools
@@ -1205,12 +1199,36 @@ export function createProxyServer(
         // `resources/list` runs no pipeline, so there is no observer to
         // record the attempt: the rejection is thrown here instead.
         if (delegationError !== undefined) throw delegationError;
-        const result = stripResult(
-          await backend.listResources(
-            attachDelegationMeta(stripRequest(rawReq).params, context),
-            createRequestOptions(extra),
-          ),
-        );
+        const requestOptions = createRequestOptions(extra);
+        const result = mesh
+          ? {
+              // Each URI is exposed as `mcpose://<key>/<uri>` (ADR-0022), so
+              // two backends serving the same URI never collide.
+              resources: await listAcrossMesh(
+                resourceBackends.entries,
+                async (client, cursor) => {
+                  const page = stripResult(
+                    await client.listResources(
+                      attachDelegationMeta(
+                        cursor === undefined ? {} : { cursor },
+                        context,
+                      ),
+                      requestOptions,
+                    ),
+                  );
+                  return { items: page.resources, nextCursor: page.nextCursor };
+                },
+                (key, error) =>
+                  reportDegraded(context, key, 'resources/list', error),
+                namespaceUri,
+              ),
+            }
+          : stripResult(
+              await backend.listResources(
+                attachDelegationMeta(stripRequest(rawReq).params, context),
+                requestOptions,
+              ),
+            );
         if (!hiddenResourceSet.size) return result;
         return {
           ...result,
@@ -1236,30 +1254,41 @@ export function createProxyServer(
           `Resource not found: ${uri}`,
         );
       }
-      if (passThroughResourceSet.has(uri)) {
-        // A pass-through resource runs no pipeline at all, so as with
-        // `resources/list` the rejection is thrown here.
+      // In mesh mode the exposed URI is unwrapped to a backend and its own
+      // URI; an unwrappable one is rejected loudly, with no lookup of which
+      // backend listed it (ADR-0022). Resolved from the post-pipeline params
+      // so middleware can re-route a read deliberately.
+      const readUpstream = (
+        params: ReadResourceRequest['params'],
+      ): Promise<ReadResourceResult> => {
         if (delegationError !== undefined) throw delegationError;
-        return backend
+        if (!mesh) {
+          return backend
+            .readResource(attachDelegationMeta(params, context), requestOptions)
+            .then(stripResult);
+        }
+        const routed = routeResourceUri(params.uri, resourceBackends.byKey);
+        if (routed === undefined) {
+          throw rejectionMcpError(
+            'BACKEND_UNROUTABLE',
+            ErrorCode.InvalidRequest,
+            `Resource not found: ${params.uri} — a mesh exposes resources as "mcpose://<backendKey>/<uri>"`,
+          );
+        }
+        return routed.client
           .readResource(
-            attachDelegationMeta(req.params, context),
+            attachDelegationMeta({ ...params, uri: routed.uri }, context),
             requestOptions,
           )
           .then(stripResult);
+      };
+
+      if (passThroughResourceSet.has(uri)) {
+        // A pass-through resource runs no pipeline at all, so as with
+        // `resources/list` the rejection is thrown here.
+        return readUpstream(req.params);
       }
-      return resourcePipeline(
-        req,
-        (r) => {
-          if (delegationError !== undefined) throw delegationError;
-          return backend
-            .readResource(
-              attachDelegationMeta(r.params, context),
-              requestOptions,
-            )
-            .then(stripResult);
-        },
-        context,
-      );
+      return resourcePipeline(req, (r) => readUpstream(r.params), context);
     });
   }
 
@@ -1299,6 +1328,7 @@ export function createProxyServer(
               return { items: page.prompts, nextCursor: page.nextCursor };
             },
             (key, error) => reportDegraded(context, key, 'prompts/list', error),
+            namespaceName,
           ),
         };
       },

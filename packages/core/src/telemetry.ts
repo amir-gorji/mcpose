@@ -30,7 +30,7 @@ export interface BackendDegradedTelemetryEvent {
   /** The backend key whose entries are missing from the response. */
   backend: string;
   /** The list call that degraded. */
-  method: 'tools/list' | 'prompts/list';
+  method: 'tools/list' | 'prompts/list' | 'resources/list';
   /** Whatever the backend threw. */
   error: unknown;
   identity?: Identity;

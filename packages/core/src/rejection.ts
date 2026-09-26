@@ -13,7 +13,7 @@ import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 export type RejectionReason =
   | 'TOOL_HIDDEN' // tool exists but is hidden from this caller
   | 'RESOURCE_HIDDEN' // resource exists but is hidden from this caller
-  | 'BACKEND_UNROUTABLE' // mesh mode: name carries no `<backendKey>__` prefix naming a configured backend
+  | 'BACKEND_UNROUTABLE' // mesh mode: no `<backendKey>__` name prefix or `mcpose://<backendKey>/` URI prefix names a configured backend
   | 'POLICY_DENIED' // @mcpose/policy: a rule denied, or no rule allowed (ADR-0017)
   | 'IDENTITY_UNRESOLVED' // identity could not be established; @mcpose/policy is its first emitter (ADR-0017)
   | 'CONSENT_MISSING' // v3: GDPR/CCPA consent gate blocked the call
