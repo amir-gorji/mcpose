@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import type { RedisClientType } from 'redis';
 import {
@@ -148,15 +148,19 @@ describe('createRedisSessionRegistry()', () => {
   });
 
   it('expires the key at the deadline, rounded up to a whole millisecond', async () => {
-    const redis = new FakeRedis();
-    const registry = createRedisSessionRegistry(redis);
-    const expiresAt = Date.now() + 1000.4;
-    await registry.set('s1', { ...record, expiresAt });
-    expect(redis.ttlOf('mcpose:sessions:s1')).toBe(
-      Math.ceil(expiresAt) - Date.now(),
-    );
-    redis.offsetMs = 1001;
-    expect(await registry.get('s1')).toBeUndefined();
+    // Frozen clock: the TTL is read against the same instant it was written.
+    vi.useFakeTimers();
+    try {
+      const redis = new FakeRedis();
+      const registry = createRedisSessionRegistry(redis);
+      const expiresAt = Date.now() + 1000.4;
+      await registry.set('s1', { ...record, expiresAt });
+      expect(redis.ttlOf('mcpose:sessions:s1')).toBe(1001);
+      redis.offsetMs = 1001;
+      expect(await registry.get('s1')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('clears an earlier deadline when a record is rewritten without one', async () => {
