@@ -19,9 +19,9 @@
 # package therefore needs an NPM_TOKEN repository secret: a granular access
 # token with publish rights on the @mcpose scope and 2FA bypass. Set it,
 # push the tag, add the trusted publisher on npmjs.com, then delete the
-# secret. When the secret is absent, NODE_AUTH_TOKEN is empty, pnpm sends
-# no static credential, and a package without a trusted publisher fails
-# loudly at the publish step rather than silently doing nothing.
+# secret. When the secret is absent, no credential is written, pnpm sends
+# none, and a package without a trusted publisher fails loudly at the
+# publish step rather than silently doing nothing.
 name: release
 
 on:
@@ -63,6 +63,17 @@ jobs:
             exit 1
           fi
           echo "filter=$FILTER" >> "$GITHUB_OUTPUT"
-      - run: pnpm publish --access public --provenance --no-git-checks --filter ${{ steps.pkg.outputs.filter }}
+      - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          # setup-node writes its .npmrc to a path it hands to npm through
+          # NPM_CONFIG_USERCONFIG, which pnpm does not read. pnpm does read
+          # ~/.npmrc, so the token goes there, and only when one is set: an
+          # unset variable would otherwise leave the literal placeholder as
+          # the credential.
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' >> ~/.npmrc
+          fi
+          pnpm publish --access public --provenance --no-git-checks --filter '${{ steps.pkg.outputs.filter }}'
