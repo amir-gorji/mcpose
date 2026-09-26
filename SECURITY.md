@@ -27,7 +27,7 @@ Please include as much of the following as you can:
 - A description of the issue and its impact.
 - The exact version (or commit) you tested against.
 - Steps to reproduce, or a proof of concept.
-- Any affected package: `mcpose`, `@mcpose/audit`, or `@mcpose/testing`.
+- Any affected package: `mcpose`, `@mcpose/audit`, `@mcpose/testing`, `@mcpose/policy`, `@mcpose/consent`, `@mcpose/otel`, `@mcpose/store-redis`, or `@mcpose/store-postgres`.
 
 We will acknowledge your report within **3 business days** and aim to send an initial assessment within **7 days**.
 We will coordinate a fix and disclosure timeline with you before publishing any details.
@@ -39,6 +39,10 @@ In scope:
 - The proxy core, transports, and middleware pipeline (`mcpose`).
 - The audit chain, signing key derivation, encryption, and `ReplayManifest` (`@mcpose/audit`).
 - The compliance assertions (`@mcpose/testing`).
+- The deny-by-default policy engine (`@mcpose/policy`).
+- The fail-closed consent gate (`@mcpose/consent`).
+- The OpenTelemetry span adapter (`@mcpose/otel`).
+- The Redis and Postgres event stores and session registries (`@mcpose/store-redis`, `@mcpose/store-postgres`).
 
 Out of scope:
 
