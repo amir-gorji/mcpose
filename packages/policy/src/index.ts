@@ -180,7 +180,7 @@ function assertSensitivityRules(rules: ReadonlyArray<SensitivityRule>): void {
         throw new TypeError(
           `sensitivityRules[${i}]: deniedTiers[${j}] is ${JSON.stringify(
             tier,
-          )}, which is not one of 'low', 'medium', 'high'. It is compared against a resolved tier, so it matches nothing and the rule blocks less than its author meant. Fix the spelling or drop the entry.`,
+          )}, which is not one of ${[...TIERS].map((t) => `'${t}'`).join(', ')}. It is compared against a resolved tier, so it matches nothing and the rule blocks less than its author meant. Fix the spelling or drop the entry.`,
         );
       }
     }
