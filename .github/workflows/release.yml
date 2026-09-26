@@ -9,9 +9,10 @@
 # package.json, so a tag can never publish a build it does not describe.
 #
 # Authentication: npm trusted publishing (OIDC) through the id-token
-# permission below. pnpm 11.0.7 or newer prefers OIDC over a static token,
-# so once a package lists this repository and workflow as its trusted
-# publisher on npmjs.com, the token below is ignored for it.
+# permission below. pnpm 11.0.7 or newer prefers OIDC over a static token
+# (https://github.com/pnpm/pnpm/releases/tag/v11.0.7), so once a package
+# lists this repository and workflow as its trusted publisher on npmjs.com,
+# the token on the publish step is ignored for it.
 #
 # A trusted publisher is configured in a package's settings page, which only
 # exists once the package has been published. The first publish of a new
@@ -36,8 +37,6 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -65,3 +64,5 @@ jobs:
           fi
           echo "filter=$FILTER" >> "$GITHUB_OUTPUT"
       - run: pnpm publish --access public --provenance --no-git-checks --filter ${{ steps.pkg.outputs.filter }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
