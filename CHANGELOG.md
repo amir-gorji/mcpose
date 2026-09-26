@@ -1,14 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [3.0.0] - 2026-09-26
 
-Merged on `main`, not yet published to npm. The current published releases are
-`mcpose@2.1.1`, `@mcpose/audit@2.0.3`, and `@mcpose/testing@2.0.3`.
-
-Note that every `@mcpose/*` package declares a peer dependency on
-`mcpose >=3.0.0 <4`, and `@mcpose/testing` additionally on `@mcpose/audit ^3.0.0`,
-so this working tree is not installable against the registry until all eight
-packages are released together.
+All eight packages ship together in this release.
+Every `@mcpose/*` package declares a peer dependency on `mcpose >=3.0.0 <4`, and `@mcpose/testing` additionally on `@mcpose/audit ^3.0.0`, so the set is only installable once every package is on the registry.
 
 ### Changed
 
