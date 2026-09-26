@@ -207,6 +207,93 @@ describe('construction-time validation', () => {
     ).toThrow(/sensitivityRules\[0\]/);
   });
 
+  it('rejects a deniedTiers element that is not a sensitivity tier', () => {
+    // The same fail-open shape, one array over: `deniedTiers` is compared
+    // against whatever `resolveTier` returns, and that is only ever `'low'`,
+    // `'medium'` or `'high'`. A misspelled entry matches no tier, so a rule
+    // written to block high sensitivity blocks nothing. A host with an
+    // external policy source compiles its rule set ahead of time, which is
+    // where such an entry appears.
+    for (const bad of ['High', 'PHI', 'high ', '']) {
+      expect(() =>
+        createPolicyMiddleware({
+          rules: [{ id: 'all', effect: 'allow', roles: '*', tools: '*' }],
+          sensitivityRules: [{ roles: '*', deniedTiers: [bad as never] }],
+        }),
+      ).toThrow(TypeError);
+    }
+  });
+
+  it('names the offending sensitivity rule, element, and value', () => {
+    expect(() =>
+      createPolicyMiddleware({
+        rules: [{ id: 'all', effect: 'allow', roles: '*', tools: '*' }],
+        sensitivityRules: [
+          { roles: ['reader'], deniedTiers: ['low'] },
+          { roles: ['admin'], deniedTiers: ['medium', 'High' as never] },
+        ],
+      }),
+    ).toThrow(
+      /sensitivityRules\[1\]: deniedTiers\[1\] is "High".*not one of 'low', 'medium', 'high'/s,
+    );
+  });
+
+  it('rejects a mistyped tier at construction, before any call is gated', () => {
+    // The promise is about construction, not the first call: a rule set that
+    // cannot match what its author meant never becomes a middleware at all.
+    let handle: unknown;
+    expect(() => {
+      handle = createPolicyMiddleware({
+        rules: [{ id: 'all', effect: 'allow', roles: '*', tools: '*' }],
+        sensitivityRules: [{ roles: '*', deniedTiers: ['PHI'] as never }],
+      });
+    }).toThrow(/deniedTiers/);
+    expect(handle).toBeUndefined();
+  });
+
+  it('accepts the three known tiers and an empty deniedTiers', () => {
+    // The counterpart, so the check cannot be satisfied only by rejecting
+    // everything: an empty list is a rule that blocks no tier, which is
+    // meaningless but not a lie about matching.
+    for (const deniedTiers of [
+      [],
+      ['low'],
+      ['medium', 'high'],
+      ['low', 'medium', 'high'],
+    ] as const) {
+      expect(() =>
+        createPolicyMiddleware({
+          rules: [{ id: 'all', effect: 'allow', roles: '*', tools: '*' }],
+          sensitivityRules: [{ roles: '*', deniedTiers }],
+        }),
+      ).not.toThrow();
+    }
+  });
+
+  it('never admits the call a mistyped deniedTiers element was written to block', async () => {
+    // Behaviour rather than mechanism: whether the engine refuses to construct
+    // or blocks at the call, the upstream must never be reached. On an engine
+    // that checks neither, this call goes through, which is the fail-open.
+    const ctx = createProxyContext({ identity: identity(['reader']) });
+    const next = vi.fn().mockResolvedValue({ content: [] });
+
+    try {
+      const { middleware } = createPolicyMiddleware({
+        rules: [{ id: 'all', effect: 'allow', roles: '*', tools: '*' }],
+        sensitivityRules: [
+          { roles: ['reader'], deniedTiers: ['High'] as never },
+        ],
+        sensitivity: { ssn_lookup: 'high' },
+      });
+      await middleware(toolRequest('ssn_lookup'), next as never, ctx);
+    } catch {
+      // A construction throw or a rejection: both keep the call away from
+      // `next`, which is all the assertion below demands.
+    }
+
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it('rejects an empty or whitespace rule id', () => {
     for (const id of ['', '   ']) {
       expect(() =>
