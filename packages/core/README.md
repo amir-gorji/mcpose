@@ -128,7 +128,8 @@ Behavior worth knowing before you deploy it:
   A returned promise is awaited, and `server.close()` does not complete until every session's hook has settled, so `await` the close before exiting the process.
   A hook that throws or rejects is reported through `onError` and never breaks teardown.
 - **Limit breaches are structured.** 503 (session limit) and 413 (body limit) responses carry `error.data.rejectionReason` set to `SESSION_LIMIT` / `BODY_LIMIT`.
-- **SSE replay is scoped per stream.** The in-memory store replays only events from the reconnecting stream; an unknown or already-evicted `Last-Event-ID` replays nothing.
+- **SSE replay is scoped per stream and per session.** The in-memory store replays only events from the reconnecting stream; an unknown or already-evicted `Last-Event-ID` replays nothing.
+  Stream ids are namespaced as `<sessionId>:<streamId>` before they reach any `EventStore`, so one store shared by every session keeps their histories apart, and a `Last-Event-ID` presented from another session is rejected with a 400 rather than replayed.
 
 ## Core concepts
 

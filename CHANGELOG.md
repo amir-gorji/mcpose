@@ -22,6 +22,7 @@ released together.
 
 ### Fixed
 
+- **`mcpose`** — SSE reconnect replay is scoped per session. Stream ids reach the `EventStore` as `<sessionId>:<streamId>`, so every session's standalone stream no longer shares the SDK's literal `_GET_stream` id in a shared store, and a `Last-Event-ID` from another session is rejected with a 400 instead of replaying that session's events (#154).
 - **`mcpose`** — `HttpProxyOptions.onSessionClosed` may return a promise. The proxy awaits it on every session-end path, routes a rejection to `onError` instead of leaving an unhandled rejection, and holds `server.close()` open until every session's hook has settled, so a host exiting in the close callback no longer loses its final audit manifest (#176).
 
 ## [2.1.1] - 2026-07-16

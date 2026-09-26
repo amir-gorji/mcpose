@@ -58,7 +58,7 @@ One [Redis stream](https://redis.io/docs/latest/develop/data-types/streams/) per
 mcpose:events:<streamId>       # XADD entries, field `d` holding the JSON-RPC message
 ```
 
-`<streamId>` is whatever the MCP SDK assigns: `_GET_stream` for a session's standalone SSE stream, and a UUID per request stream.
+`<streamId>` is what mcpose hands the store: the MCP session id, a `:`, and the id the MCP SDK assigns (`_GET_stream` for the session's standalone SSE stream, a UUID per request stream).
 
 The event id handed back to the SDK, and echoed to the client as the SSE `id:` field, is `<percent-encoded streamId>:<redis entry id>`.
 Encoding the stream id into the event id is what makes `getStreamIdForEventId` a parse plus one existence check, instead of a second index that would need its own expiry.
@@ -76,7 +76,7 @@ An unknown or already-expired `Last-Event-ID` replays nothing rather than the wh
 
 - **A durable store does not on its own make a resume survive a proxy restart.** mcpose holds its sessions in an in-memory `Map`, and the MCP SDK's transport validates `mcp-session-id` before it looks at `Last-Event-ID`. So a client reconnecting to a restarted proxy, or to a different instance behind a load balancer, is rejected with a `400`/`404` before this store is consulted. What you get today is durable, per-stream, uncapped history within a live session, plus the storage half of restart and fleet resumability once mcpose grows a shared session registry.
 - **Retention is time-based only, never session-based.** The SDK's `EventStore` interface is given a stream id and a message, and nothing else: it never learns which MCP session a stream belongs to. So this adapter cannot drop a session's events when that session closes, and expiry is the only lever. Events therefore outlive their session by up to `ttlMs`.
-- **Stream ids are not namespaced by session, because the SDK does not namespace them.** Every session's standalone SSE stream uses the literal id `_GET_stream`, so one store shared by many sessions keeps their standalone-stream history under one key. Give each proxy *process* its own `keyPrefix` if you need those separated; separating them per session is not possible through this interface.
+- **Stream ids are namespaced by session by mcpose, not by this store.** The SDK gives every session's standalone SSE stream the literal id `_GET_stream`; `startHttpProxy` prefixes each stream id with the session id before it reaches the store, so histories stay apart under one key prefix. Give each proxy *process* its own `keyPrefix` to keep proxies apart.
 - **No cap on events per stream.** `ttlMs` bounds history by age, not by count. A stream that emits continuously for `ttlMs` keeps every event in that window. Add `XTRIM MAXLEN` out of band if your notification volume makes that a problem.
 - **At-most-once durability.** A `storeEvent` that fails is surfaced to the transport, not retried here, and Redis persistence is whatever your server is configured for. Replay is a convenience for reconnecting clients, not an audit trail: for that, use [`@mcpose/audit`](../audit/README.md).
 
