@@ -2,8 +2,11 @@
 #
 # Tag formats (matching existing repo history):
 #   vX.Y.Z                    -> publishes mcpose (core)
-#   @mcpose/audit@X.Y.Z       -> publishes @mcpose/audit
-#   @mcpose/testing@X.Y.Z     -> publishes @mcpose/testing
+#   @mcpose/<name>@X.Y.Z      -> publishes @mcpose/<name>, for any workspace
+#                                package under that scope
+#
+# The version in the tag must equal the version in that package's
+# package.json, so a tag can never publish a build it does not describe.
 #
 # Prerequisite (one-time, npmjs.com side): configure this repository as a
 # trusted publisher for each package (or add an NPM_TOKEN secret and switch
@@ -37,11 +40,17 @@ jobs:
       - name: Resolve package filter from tag
         id: pkg
         run: |
+          set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           case "$TAG" in
-            @mcpose/audit@*)   echo "filter=@mcpose/audit" >> "$GITHUB_OUTPUT" ;;
-            @mcpose/testing@*) echo "filter=@mcpose/testing" >> "$GITHUB_OUTPUT" ;;
-            v*)                echo "filter=mcpose" >> "$GITHUB_OUTPUT" ;;
+            @mcpose/*@*) FILTER="${TAG%@*}"; VERSION="${TAG##*@}" ;;
+            v*)          FILTER="mcpose";    VERSION="${TAG#v}" ;;
             *) echo "Unrecognized tag: $TAG" >&2; exit 1 ;;
           esac
+          ACTUAL="$(pnpm --filter "$FILTER" exec node -p 'require("./package.json").version')"
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "Tag $TAG names version $VERSION but $FILTER is at $ACTUAL" >&2
+            exit 1
+          fi
+          echo "filter=$FILTER" >> "$GITHUB_OUTPUT"
       - run: pnpm publish --access public --provenance --no-git-checks --filter ${{ steps.pkg.outputs.filter }}
