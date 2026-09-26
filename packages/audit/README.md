@@ -511,6 +511,10 @@ Verify chains and manifests in your test suite with [`@mcpose/testing`](https://
 Those assertions are deliberately keyless and prove internal consistency, not authenticity.
 Pair them with `verifyAuditChain` and `verifyManifestSignature` anywhere the secret *is* available.
 
+For a reproducible Merkle scaling comparison after building from the repository root, run `pnpm --filter @mcpose/audit benchmark:merkle`.
+The benchmark compares the legacy root-plus-per-proof path with the one-tree manifest path at 500, 1000, and 2000 events, and checks root and proof equality before reporting.
+Timings vary by runtime and hardware; use them to compare scaling, not to predict request latency.
+
 ## Documentation
 
 - [Project README](https://github.com/amir-gorji/mcpose#readme): concepts, comparison, and guides
