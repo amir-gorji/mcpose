@@ -9,6 +9,8 @@ on:
     paths:
       - 'packages/audit/**'
       - 'packages/core/**'
+      - 'packages/policy/**'
+      - 'packages/consent/**'
       - 'packages/*/stryker.config.mjs'
       - '.github/workflows/mutation.yml'
   workflow_dispatch:
@@ -46,9 +48,23 @@ jobs:
           path: packages/core/.stryker-tmp/incremental.json
           key: stryker-core-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
           restore-keys: stryker-core-${{ hashFiles('pnpm-lock.yaml') }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/policy/.stryker-tmp/incremental.json
+          key: stryker-policy-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: stryker-policy-${{ hashFiles('pnpm-lock.yaml') }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/consent/.stryker-tmp/incremental.json
+          key: stryker-consent-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: stryker-consent-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm --filter @mcpose/audit mutation
-      # Report both scores even when the first package breaks its threshold.
+      # Report every score even when an earlier package breaks its threshold.
       - if: ${{ !cancelled() }}
         run: pnpm --filter mcpose mutation
+      - if: ${{ !cancelled() }}
+        run: pnpm --filter @mcpose/policy mutation
+      - if: ${{ !cancelled() }}
+        run: pnpm --filter @mcpose/consent mutation

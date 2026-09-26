@@ -68,6 +68,28 @@ const allowReader: PolicyOptions = {
 };
 
 describe('RBAC rules', () => {
+  it('matches a rule when the caller holds any one of its several roles', async () => {
+    // A rule naming several roles is satisfied by any one of them: demanding
+    // all of them would deny a plain reader on a rule meant to widen access.
+    const { next, error } = await run(
+      {
+        rules: [
+          {
+            id: 'either',
+            effect: 'allow',
+            roles: ['auditor', 'reader'],
+            tools: ['get_balance'],
+          },
+        ],
+      },
+      'get_balance',
+      { identity: identity(['reader']) },
+    );
+
+    expect(error).toBeUndefined();
+    expect(next).toHaveBeenCalledOnce();
+  });
+
   it('allows a matching call and stamps a frozen allow decision', async () => {
     const { ctx, next, error } = await run(allowReader, 'get_balance', {
       identity: identity(['reader']),
@@ -292,6 +314,25 @@ describe('sensitivity tier rules', () => {
       reason: 'SENSITIVITY_BLOCKED',
     });
     expect(ctx.policy).not.toHaveProperty('ruleId');
+  });
+
+  it('blocks when any one of several tier rules matches the caller', async () => {
+    // Several tier rules, only the last of which names the caller's role and
+    // the tool's tier: one match must be enough to block.
+    const { error } = await run(
+      {
+        ...tierOptions,
+        sensitivityRules: [
+          { roles: ['admin'], deniedTiers: ['high'] },
+          { roles: ['reader'], deniedTiers: ['medium'] },
+          { roles: ['reader'], deniedTiers: ['high'] },
+        ],
+      },
+      'ssn_lookup',
+      { identity: identity(['reader']) },
+    );
+
+    expect(reasonOf(error)).toBe('SENSITIVITY_BLOCKED');
   });
 
   it('fails closed on an unmapped name, treating it as high', async () => {
