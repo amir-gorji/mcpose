@@ -8,9 +8,19 @@
 # The version in the tag must equal the version in that package's
 # package.json, so a tag can never publish a build it does not describe.
 #
-# Prerequisite (one-time, npmjs.com side): configure this repository as a
-# trusted publisher for each package (or add an NPM_TOKEN secret and switch
-# the auth step accordingly). Until that is done, tag pushes will fail
+# Authentication: npm trusted publishing (OIDC) through the id-token
+# permission below. pnpm 11.0.7 or newer prefers OIDC over a static token
+# (https://github.com/pnpm/pnpm/releases/tag/v11.0.7), so once a package
+# lists this repository and workflow as its trusted publisher on npmjs.com,
+# the token on the publish step is ignored for it.
+#
+# A trusted publisher is configured in a package's settings page, which only
+# exists once the package has been published. The first publish of a new
+# package therefore needs an NPM_TOKEN repository secret: a granular access
+# token with publish rights on the @mcpose scope and 2FA bypass. Set it,
+# push the tag, add the trusted publisher on npmjs.com, then delete the
+# secret. When the secret is absent, NODE_AUTH_TOKEN is empty, pnpm sends
+# no static credential, and a package without a trusted publisher fails
 # loudly at the publish step rather than silently doing nothing.
 name: release
 
@@ -54,3 +64,5 @@ jobs:
           fi
           echo "filter=$FILTER" >> "$GITHUB_OUTPUT"
       - run: pnpm publish --access public --provenance --no-git-checks --filter ${{ steps.pkg.outputs.filter }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
