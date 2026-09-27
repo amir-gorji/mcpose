@@ -56,7 +56,7 @@ The registry's are under [Session registry](#session-registry).
 | Option | Default | What it does |
 |---|---|---|
 | `keyPrefix` | `'mcpose:events:'` | Namespace for every key written. Give each proxy its own prefix to share one Redis database. |
-| `ttlMs` | `1_800_000` (30 minutes) | How long a stream's replay history is kept. `Infinity` keeps it forever. |
+| `ttlMs` | `1_800_000` (30 minutes) | How long a stream's replay history is kept. Fractional values round up to a whole millisecond; `Infinity` keeps it forever. |
 
 ## Key layout
 

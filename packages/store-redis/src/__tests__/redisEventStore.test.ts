@@ -59,6 +59,30 @@ describe('createRedisEventStore()', () => {
     expect(await store.getStreamIdForEventId?.(cursor)).toBe('s1');
   });
 
+  it('rounds fractional TTLs up to whole milliseconds', async () => {
+    vi.useFakeTimers();
+    try {
+      const redis = new FakeRedis();
+      const store = createRedisEventStore(redis, { ttlMs: 1000.4 });
+      const cursor = await store.storeEvent('s1', message);
+      expect(redis.ttlOf('mcpose:events:s1')).toBeCloseTo(1001, 3);
+      redis.offsetMs = 1001;
+      expect(await store.getStreamIdForEventId?.(cursor)).toBeUndefined();
+
+      const shortRedis = new FakeRedis();
+      const shortStore = createRedisEventStore(shortRedis, { ttlMs: 0.4 });
+      const shortCursor = await shortStore.storeEvent('s2', message);
+      expect(shortRedis.ttlOf('mcpose:events:s2')).toBeCloseTo(1, 3);
+      expect(await shortStore.getStreamIdForEventId?.(shortCursor)).toBe('s2');
+      shortRedis.offsetMs = 1;
+      expect(
+        await shortStore.getStreamIdForEventId?.(shortCursor),
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps history forever when ttlMs is Infinity', async () => {
     const redis = new FakeRedis();
     const store = createRedisEventStore(redis, { ttlMs: Infinity });
@@ -200,6 +224,15 @@ describe.skipIf(!redisUrl)(
         ttlMs: 60_000,
       }),
     );
+
+    it('accepts a fractional TTL with Redis millisecond expiry', async () => {
+      const store = createRedisEventStore(client, {
+        keyPrefix: `mcpose-test:${String(process.pid)}:fractional:`,
+        ttlMs: 1000.4,
+      });
+      const cursor = await store.storeEvent('s1', message);
+      expect(await store.getStreamIdForEventId?.(cursor)).toBe('s1');
+    });
 
     describeSessionRegistryContract('redis (live server)', async () =>
       createRedisSessionRegistry(

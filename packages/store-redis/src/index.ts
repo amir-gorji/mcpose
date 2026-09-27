@@ -44,6 +44,7 @@ export interface RedisEventStoreOptions {
   /**
    * How long a stream's replay history is kept, in milliseconds. Refreshed on
    * every write, so a stream is dropped `ttlMs` after its *last* event.
+   * Fractional values are rounded up to the next whole millisecond.
    *
    * Defaults to 30 minutes, which is `startHttpProxy`'s `sessionTtlMs`
    * default: history therefore outlives the session it belongs to, and is
@@ -140,7 +141,7 @@ export function createRedisEventStore(
       const entryId = await client.xAdd(key, '*', {
         d: JSON.stringify(message),
       });
-      if (Number.isFinite(ttlMs)) await client.pExpire(key, ttlMs);
+      if (Number.isFinite(ttlMs)) await client.pExpire(key, Math.ceil(ttlMs));
       return eventIdFor(streamId, String(entryId));
     },
 
