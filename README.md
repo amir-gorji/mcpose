@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="mcpose logo" width="500" />
+  <img src="assets/logo.svg" alt="mcpose logo" width="160" />
 </p>
 
 # mcpose
