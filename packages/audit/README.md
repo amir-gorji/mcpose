@@ -446,7 +446,10 @@ interface AuditEventBase {
   tool: string;                  // the tool name, or the prompt name when kind is 'prompt'
   duration_ms: number;
   outcome: 'success' | 'rejected' | 'error';
-  /** Present when outcome is 'rejected' (from the MCP error's data field). */
+  /**
+   * Present when outcome is 'rejected': a member of the `RejectionReason` union read from the
+   * MCP error's data field. An unrecognized value is recorded as outcome 'error' instead.
+   */
   rejectionReason?: RejectionReason;
   /** Present when outcome is 'error': what the upstream call threw. */
   error?: { name: string; message: string };

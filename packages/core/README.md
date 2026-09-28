@@ -519,6 +519,7 @@ Every blocked call embeds a `RejectionReason` in the MCP error `data` field.
 The top-level error code is unchanged, so clients that only inspect the code are unaffected, while audit middleware and agents can branch on `error.data.rejectionReason`.
 
 Use `rejectionMcpError(reason, code, message)` to reject from your own middleware in the same structured shape the proxy uses.
+A `data.rejectionReason` outside the union is not a rejection: `onTelemetry` and the audit middleware both report that call as an ordinary `error`.
 
 <details>
 <summary>Show the <code>RejectionReason</code> union</summary>
@@ -527,6 +528,7 @@ Use `rejectionMcpError(reason, code, message)` to reject from your own middlewar
 type RejectionReason =
   | 'TOOL_HIDDEN'           // tool exists but is hidden from this caller
   | 'RESOURCE_HIDDEN'       // resource exists but is hidden from this caller
+  | 'BACKEND_UNROUTABLE'    // mesh mode: the name or URI prefix names no configured backend
   | 'POLICY_DENIED'         // @mcpose/policy: a rule denied, or no rule allowed
   | 'IDENTITY_UNRESOLVED'   // identity could not be established
   | 'CONSENT_MISSING'       // v3: GDPR/CCPA consent gate blocked the call

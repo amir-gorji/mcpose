@@ -70,7 +70,7 @@ import {
   type SessionRegistry,
 } from './sessionRegistry.js';
 import type { EventStore } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { rejectionMcpError } from './rejection.js';
+import { isRejectionReason, rejectionMcpError } from './rejection.js';
 import type { RejectionReason } from './rejection.js';
 import { VERSION } from './version.js';
 
@@ -658,10 +658,10 @@ function getMiddlewareContext(
 }
 
 function getRejectionReason(err: unknown): RejectionReason | undefined {
-  const data = (err as { data?: { rejectionReason?: unknown } } | null)?.data;
-  return typeof data?.rejectionReason === 'string'
-    ? (data.rejectionReason as RejectionReason)
-    : undefined;
+  const reason = (err as { data?: { rejectionReason?: unknown } } | null)?.data
+    ?.rejectionReason;
+  // A reason outside the union is an ordinary failure, not a rejection (#238).
+  return isRejectionReason(reason) ? reason : undefined;
 }
 
 /**

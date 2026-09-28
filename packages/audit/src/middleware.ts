@@ -144,10 +144,51 @@ function anonymousIdentity(): Identity {
   };
 }
 
+/**
+ * Every member of the closed `RejectionReason` union, as an own-key
+ * membership table.
+ *
+ * The union is a type, so it is erased at runtime and `err.data.rejectionReason`
+ * arrives as an unchecked string. The `Record` annotation is the drift guard in
+ * both directions: a member added to the union without a matching key here is a
+ * compile error, and so is a key that is not a member of the union.
+ *
+ * Core keeps its own copy for telemetry. This one is not imported from there
+ * because the `mcpose` peer range admits 3.0.0, which exports no runtime guard.
+ */
+const REJECTION_REASONS: Record<RejectionReason, true> = {
+  TOOL_HIDDEN: true,
+  RESOURCE_HIDDEN: true,
+  BACKEND_UNROUTABLE: true,
+  POLICY_DENIED: true,
+  IDENTITY_UNRESOLVED: true,
+  CONSENT_MISSING: true,
+  SENSITIVITY_BLOCKED: true,
+  DELEGATION_INVALID: true,
+  BUDGET_EXCEEDED: true,
+  SESSION_LIMIT: true,
+  BODY_LIMIT: true,
+};
+
+/**
+ * The rejection reason this error carries, or `undefined` when it carries
+ * none.
+ *
+ * Fail CLOSED, like the sensitivity tier: a `rejectionReason` outside the
+ * union is not a governance rejection, so the call is recorded as an ordinary
+ * `error` that keeps the real name and message. Casting the string through
+ * instead would record a failure as a rejection with no `error` field, and
+ * chain the unvalidated value as a covered field, which is the identity-less
+ * `outputHash` weakness the structured `error` field exists to close
+ * (ADR-0004). Mirrors `createSensitivityResolver`.
+ */
 function getRejectionReason(err: unknown): RejectionReason | undefined {
   const data = (err as { data?: { rejectionReason?: unknown } } | null)?.data;
-  return typeof data?.rejectionReason === 'string'
-    ? (data.rejectionReason as RejectionReason)
+  const reason = data?.rejectionReason;
+  // `Object.hasOwn`, not `in`: the reason is upstream-controlled, so a value
+  // like `constructor` must not pass as a member off the prototype.
+  return typeof reason === 'string' && Object.hasOwn(REJECTION_REASONS, reason)
+    ? (reason as RejectionReason)
     : undefined;
 }
 
