@@ -23,6 +23,31 @@ export type RejectionReason =
   | 'SESSION_LIMIT' // max concurrent sessions reached (HTTP 503)
   | 'BODY_LIMIT'; // request body exceeded maxBodyBytes (HTTP 413)
 
+// The `Record` annotation keeps this table and the union from drifting apart:
+// a missing or extra key is a compile error.
+const REJECTION_REASONS: Record<RejectionReason, true> = {
+  TOOL_HIDDEN: true,
+  RESOURCE_HIDDEN: true,
+  BACKEND_UNROUTABLE: true,
+  POLICY_DENIED: true,
+  IDENTITY_UNRESOLVED: true,
+  CONSENT_MISSING: true,
+  SENSITIVITY_BLOCKED: true,
+  DELEGATION_INVALID: true,
+  BUDGET_EXCEEDED: true,
+  SESSION_LIMIT: true,
+  BODY_LIMIT: true,
+};
+
+/**
+ * Narrows an untrusted value to `RejectionReason`.
+ * `Object.hasOwn`, not `in`: the value can come from an upstream error, so a
+ * prototype key like `constructor` must not pass as a member.
+ */
+export function isRejectionReason(value: unknown): value is RejectionReason {
+  return typeof value === 'string' && Object.hasOwn(REJECTION_REASONS, value);
+}
+
 /**
  * Creates an `McpError` with the rejection reason embedded in `error.data`.
  * The top-level `code` is unchanged so clients that only inspect the code

@@ -152,6 +152,9 @@ function anonymousIdentity(): Identity {
  * arrives as an unchecked string. The `Record` annotation is the drift guard in
  * both directions: a member added to the union without a matching key here is a
  * compile error, and so is a key that is not a member of the union.
+ *
+ * Core keeps its own copy for telemetry. This one is not imported from there
+ * because the `mcpose` peer range admits 3.0.0, which exports no runtime guard.
  */
 const REJECTION_REASONS: Record<RejectionReason, true> = {
   TOOL_HIDDEN: true,

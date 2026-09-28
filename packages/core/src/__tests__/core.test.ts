@@ -721,6 +721,33 @@ describe('createProxyServer() — onTelemetry', () => {
       outcome: 'error',
     });
   });
+
+  it.each(['LEDGER_POOL_RESET', 'constructor'])(
+    'emits an error event, not a rejection, when the upstream throws with the unknown reason %s (#238)',
+    async (reason) => {
+      const backend = makeMockBackend();
+      vi.mocked(backend.callTool).mockRejectedValueOnce(
+        Object.assign(new Error('upstream failure'), {
+          data: { rejectionReason: reason },
+        }),
+      );
+      const events: ToolCallTelemetryEvent[] = [];
+      const server = createProxyServer(backend, {
+        onTelemetry: (e) => {
+          if (e.type === 'tool_call') events.push(e);
+        },
+        name: 'test-server',
+      });
+
+      await expect(
+        invokeHandler(server, 'tools/call', { name: 'echo', arguments: {} }),
+      ).rejects.toBeDefined();
+
+      expect(events).toHaveLength(1);
+      expect(events[0]?.outcome).toBe('error');
+      expect(Object.hasOwn(events[0]!, 'rejectionReason')).toBe(false);
+    },
+  );
 });
 
 describe('createProxyServer() — server identity', () => {
