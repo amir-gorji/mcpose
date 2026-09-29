@@ -494,12 +494,40 @@ export interface ProxyOptions {
    * Called after every tool call with timing and outcome data. Wire to any
    * custom telemetry sink, or to `createOtelTelemetry` from `@mcpose/otel`
    * for OpenTelemetry spans.
-   * A throwing sink is logged and never fails the tool call.
+   * A sink that throws, or whose returned promise rejects, is logged and never
+   * fails the tool call. The sink is not awaited, so a slow one does not delay
+   * the call either.
    */
-  onTelemetry?: (event: TelemetryEvent) => void;
+  onTelemetry?: (event: TelemetryEvent) => unknown;
 }
 
 type ProgressToken = string | number;
+
+/**
+ * Hands one event to the telemetry sink. A sink that throws, or whose returned
+ * promise rejects, is logged here and nowhere else: the caller is already past
+ * the point where the tool call could fail, and a rejection that nobody observes
+ * ends the process on Node's default `--unhandled-rejections=throw`.
+ *
+ * The sink is called, not awaited, so a slow exporter cannot delay a tool call.
+ *
+ * `Promise.resolve` rather than an `instanceof Promise` test: a sink loaded from
+ * another realm (`node:vm`), or one handing back a non-native thenable, would
+ * fail the latter and leave its rejection unobserved all the same.
+ */
+function callTelemetrySink(
+  sink: ((event: TelemetryEvent) => unknown) | undefined,
+  event: TelemetryEvent,
+): void {
+  try {
+    Promise.resolve(sink?.(event)).catch((err: unknown) => {
+      console.error(err);
+    });
+  } catch (err) {
+    console.error(err);
+  }
+}
+
 type BackendRequestOptions = Parameters<BackendClient['listTools']>[1];
 // Structural mirror of the SDK's `RequestHandlerExtra`. The SDK declares its
 // optional members as `?: T | undefined`, so this type has to as well to stay
@@ -957,24 +985,18 @@ export function createProxyServer(
     method: BackendDegradedTelemetryEvent['method'],
     error: unknown,
   ): void => {
-    try {
-      options.onTelemetry?.({
-        type: 'backend_degraded',
-        requestId: context.requestId,
-        ...(context.sessionId === undefined
-          ? {}
-          : { sessionId: context.sessionId }),
-        backend: backendKey,
-        method,
-        error,
-        ...(context.identity === undefined
-          ? {}
-          : { identity: context.identity }),
-        ...(context.proxy === undefined ? {} : { proxy: context.proxy }),
-      });
-    } catch (err) {
-      console.error(err);
-    }
+    callTelemetrySink(options.onTelemetry, {
+      type: 'backend_degraded',
+      requestId: context.requestId,
+      ...(context.sessionId === undefined
+        ? {}
+        : { sessionId: context.sessionId }),
+      backend: backendKey,
+      method,
+      error,
+      ...(context.identity === undefined ? {} : { identity: context.identity }),
+      ...(context.proxy === undefined ? {} : { proxy: context.proxy }),
+    });
   };
 
   // ── Tool handlers ──────────────────────────────────────────────────────────
@@ -1062,26 +1084,21 @@ export function createProxyServer(
         outcome: ToolCallTelemetryEvent['outcome'],
         rejectionReason?: RejectionReason,
       ) => {
-        try {
-          options.onTelemetry?.({
-            type: 'tool_call',
-            requestId: context.requestId,
-            ...(context.sessionId === undefined
-              ? {}
-              : { sessionId: context.sessionId }),
-            tool: name,
-            duration_ms: Math.round(performance.now() - start),
-            outcome,
-            ...(rejectionReason === undefined ? {} : { rejectionReason }),
-            ...(context.identity === undefined
-              ? {}
-              : { identity: context.identity }),
-            ...(context.proxy === undefined ? {} : { proxy: context.proxy }),
-          });
-        } catch (err) {
-          // A throwing telemetry sink must never fail the tool call.
-          console.error(err);
-        }
+        callTelemetrySink(options.onTelemetry, {
+          type: 'tool_call',
+          requestId: context.requestId,
+          ...(context.sessionId === undefined
+            ? {}
+            : { sessionId: context.sessionId }),
+          tool: name,
+          duration_ms: Math.round(performance.now() - start),
+          outcome,
+          ...(rejectionReason === undefined ? {} : { rejectionReason }),
+          ...(context.identity === undefined
+            ? {}
+            : { identity: context.identity }),
+          ...(context.proxy === undefined ? {} : { proxy: context.proxy }),
+        });
       };
 
       // Hidden beats pass-through. The rejection is thrown by the innermost
