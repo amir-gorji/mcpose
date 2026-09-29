@@ -341,11 +341,23 @@ export function createAuditMiddleware(
         // A call can fail without throwing: an MCP tool reports failure
         // in-band with `isError: true` (#171). The caller supplies the
         // predicate, so only tool calls pass one and prompts never match.
-        const inBandError = !threw && isInBandError?.(result as Res) === true;
+        //
+        // A nullish result is decided here, BEFORE the predicate narrows it,
+        // because narrowing reads `.content` and a nullish value has none: a
+        // local tool handler with a missing `return` made the predicate throw,
+        // and that throw reached the `catch` below, which reports and moves on
+        // — so `buildEvent` never ran and the governed call reached the client
+        // as a failure and the trail not at all. The manifest that counted it
+        // still verified, a valid chain under a valid signature, one event
+        // short of the calls it claims to cover.
+        const noToolResult =
+          !threw && (result === null || result === undefined);
+        const inBandError =
+          !threw && !noToolResult && isInBandError?.(result as Res) === true;
         const outcome: AuditEvent['outcome'] =
           rejectionReason !== undefined
             ? 'rejected'
-            : threw || inBandError
+            : threw || inBandError || noToolResult
               ? 'error'
               : 'success';
 
@@ -389,10 +401,16 @@ export function createAuditMiddleware(
                     }
                   : // A fixed message: `error` is never encrypted, so copying the
                     // tool's own text here would leak a high-tier payload.
-                    {
-                      name: 'ToolError',
-                      message: 'Tool result returned isError: true',
-                    },
+                    noToolResult
+                    ? {
+                        name: 'InvalidToolResult',
+                        message:
+                          'Tool call resolved to a value that is not a CallToolResult',
+                      }
+                    : {
+                        name: 'ToolError',
+                        message: 'Tool result returned isError: true',
+                      },
             position,
             prevChainHash: session?.prevChainHash ?? '',
             tier,
