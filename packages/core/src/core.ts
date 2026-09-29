@@ -1577,7 +1577,18 @@ export function startHttpProxy(
   let pendingSessions = 0;
 
   const reportError = (err: unknown): void => {
-    (httpOptions.onError ?? console.error)(err);
+    // `onError` is observability, so its own failure must change nothing, the
+    // same containment `onAuditError` applies to `@mcpose/audit`'s reporter
+    // (#172) and `createConsentMiddleware` applies to its resolver hook. Left
+    // unguarded, a throwing reporter replaced the 401 this file documents for
+    // a failed auth hook with a 500, aborted `destroySession` before it closed
+    // the proxy server, and threw out of the `server.on('error')` handler
+    // that exists precisely so a post-listen error does not crash the process.
+    try {
+      (httpOptions.onError ?? console.error)(err);
+    } catch {
+      // Nothing left to report it to.
+    }
   };
 
   /**
@@ -1955,7 +1966,7 @@ export function startHttpProxy(
 
     handle().catch((err) => {
       if (!res.headersSent) res.writeHead(500).end();
-      (httpOptions.onError ?? console.error)(err);
+      reportError(err);
     });
   };
 
