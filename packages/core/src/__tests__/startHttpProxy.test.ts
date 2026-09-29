@@ -452,6 +452,38 @@ describe('startHttpProxy()', () => {
       }
     });
 
+    it('still answers 401 when onError itself throws (#238 sibling)', async () => {
+      // `onError` is observability, so its own failure must change nothing.
+      // Unguarded it replaces the 401 documented for a throwing
+      // `resolveIdentity` with a 500, and rejects out of the request handler.
+      const server = await startHttpProxy(
+        makeMockBackend(),
+        { name: 'test-server' },
+        {
+          port: 0,
+          path: '/mcp',
+          onError: () => {
+            throw new Error('logging backend down');
+          },
+          resolveIdentity: () => {
+            throw new Error('jwks fetch failed');
+          },
+        },
+      );
+      const baseUrl = `http://localhost:${getPort(server)}`;
+
+      try {
+        const res = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: initializeBody,
+        });
+        expect(res.status).toBe(401);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
     it('reports an error thrown by validateSession instead of only discarding it', async () => {
       const errors: unknown[] = [];
       const server = await startHttpProxy(
