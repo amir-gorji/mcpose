@@ -37,13 +37,15 @@ export interface ConsentOptions {
    * Called when `resolveConsent` throws or rejects, with the thrown value and
    * the call it was blocking. The call is refused either way; this exists so
    * a broken consent source is visible to operators instead of being
-   * indistinguishable from a caller who simply has not consented.
+   * indistinguishable from a caller who simply has not consented. If this
+   * hook itself throws or returns a rejected promise, the failure is
+   * contained and never reaches the caller either.
    * @default console.error
    */
   readonly onResolverError?: (
     err: unknown,
     info: { readonly subject: string; readonly name: string },
-  ) => void;
+  ) => unknown;
 }
 
 export interface ConsentMiddlewareHandle {
@@ -117,9 +119,18 @@ export function createConsentMiddleware(
       // Left unguarded, a throwing hook replaced the structured rejection
       // below with its own raw error: the client lost the CONSENT_MISSING
       // that audit records, and the resolver detail this comment promises to
-      // withhold could travel out in the hook's message.
+      // withhold could travel out in the hook's message. A hook that returns
+      // a rejected promise fails the same way one tick later (#245): nobody
+      // observes the rejection, and Node's default --unhandled-rejections=throw
+      // ends the process around the refusal, so the returned promise is
+      // adopted here too.
       try {
-        onResolverError(err, { subject: identity.sub, name });
+        Promise.resolve(
+          onResolverError(err, { subject: identity.sub, name }),
+        ).catch(() => {
+          // Swallowed on purpose. There is nowhere left to report a reporting
+          // failure, and the refusal below is what matters.
+        });
       } catch {
         // Swallowed on purpose. There is nowhere left to report a reporting
         // failure, and the refusal below is what matters.

@@ -484,6 +484,54 @@ describe('startHttpProxy()', () => {
       }
     });
 
+    it('still answers 401 when onError rejects asynchronously (#245)', async () => {
+      // `onError` is observability, so its own failure must change nothing.
+      // An async reporter that rejects after its first await escapes the
+      // synchronous guard: nothing observes the rejection, so Node's default
+      // --unhandled-rejections=throw ends the process.
+      const rejections: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        rejections.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+
+      try {
+        const server = await startHttpProxy(
+          makeMockBackend(),
+          { name: 'test-server' },
+          {
+            port: 0,
+            path: '/mcp',
+            onError: async () => {
+              await new Promise((resolve) => setTimeout(resolve, 1));
+              throw new Error('logging backend down');
+            },
+            resolveIdentity: () => {
+              throw new Error('jwks fetch failed');
+            },
+          },
+        );
+        const baseUrl = `http://localhost:${getPort(server)}`;
+
+        try {
+          const res = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: initializeBody,
+          });
+          expect(res.status).toBe(401);
+          // One macrotask turn, so a rejection nobody adopted has surfaced as
+          // an unhandledRejection event by the time this asserts.
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          expect(rejections).toHaveLength(0);
+        } finally {
+          await closeServer(server);
+        }
+      } finally {
+        process.removeListener('unhandledRejection', onUnhandled);
+      }
+    });
+
     it('reports an error thrown by validateSession instead of only discarding it', async () => {
       const errors: unknown[] = [];
       const server = await startHttpProxy(
