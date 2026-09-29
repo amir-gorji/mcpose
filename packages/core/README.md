@@ -290,7 +290,7 @@ interface ProxyOptions {
   localTools?:           ReadonlyArray<LocalTool>;
   stripRequestMeta?:     boolean;  // Default: true
   stripResultMeta?:      boolean;  // Default: true
-  onTelemetry?:          (event: TelemetryEvent) => void;
+  onTelemetry?:          (event: TelemetryEvent) => unknown;
 }
 
 interface LocalTool {
@@ -338,7 +338,7 @@ interface LocalTool {
   A `'tool_call'` event fires after every tool call with timing, outcome, tool name, and identity; results with `isError: true` are reported as outcome `'error'`.
   A `'backend_degraded'` event fires when one backend of a mesh drops out of a list call (`tools/list`, `prompts/list`, or `resources/list`), naming the backend key, the method, and the error.
   Both variants carry an optional `proxy: ProxyIdentity`, the same frozen `{ name, version }` stamped on `ProxyContext` (ADR-0012), so a fleet of proxies feeding one telemetry sink can attribute events to an instance.
-  A throwing sink is logged but never fails the call.
+  A sink that throws, or whose returned promise rejects, is logged but never fails the call; the sink is not awaited, so a slow one does not delay it either.
   [`@mcpose/otel`](https://github.com/amir-gorji/mcpose/blob/main/packages/otel/README.md) maps both variants onto OpenTelemetry spans if you do not want to write the sink yourself.
 
 ### HTTP options (`HttpProxyOptions`)

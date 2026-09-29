@@ -956,6 +956,35 @@ describe('createProxyServer() — telemetry outcomes', () => {
     expect(consoleSpy).toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
+
+  it('does not fail the call when an async onTelemetry rejects', async () => {
+    const backend = makeMockBackend();
+    const consoleSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const rejection = new Error('exporter down');
+    const server = createProxyServer(backend, {
+      onTelemetry: async () => {
+        await Promise.resolve();
+        throw rejection;
+      },
+      name: 'test-server',
+    });
+
+    const result = await invokeHandler(server, 'tools/call', {
+      name: 'normal_tool',
+      arguments: {},
+    });
+    expect(result).toMatchObject({
+      content: [{ type: 'text', text: 'raw upstream response' }],
+    });
+    // A rejection nobody observes would surface as an unhandled rejection and
+    // fail the run, so reaching here at all is part of the assertion; the spy
+    // pins that it was also logged rather than dropped.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(consoleSpy).toHaveBeenCalledWith(rejection);
+    consoleSpy.mockRestore();
+  });
 });
 
 describe('createProxyServer() — promptMiddleware', () => {

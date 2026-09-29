@@ -40,7 +40,7 @@ Correlate on `mcpose.request.id` and `mcpose.session.id` instead.
 Real parent and child spans need instrumentation inside the pipeline, which is middleware work rather than sink work, and is not in this package.
 
 **It does not swallow exporter failures.**
-`createProxyServer` already logs a throwing `onTelemetry` sink and never fails the tool call for it, so an exporter outage stays visible in the proxy's own logs rather than disappearing here.
+`createProxyServer` already logs an `onTelemetry` sink that throws or rejects and never fails the tool call for it, so an exporter outage stays visible in the proxy's own logs rather than disappearing here.
 Adding a second guard would only hide it.
 
 ## When to reach for it
