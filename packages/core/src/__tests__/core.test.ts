@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import {
   createProxyServer,
   type ListToolsMiddleware,
@@ -981,6 +982,35 @@ describe('createProxyServer() — telemetry outcomes', () => {
     // A rejection nobody observes would surface as an unhandled rejection and
     // fail the run, so reaching here at all is part of the assertion; the spy
     // pins that it was also logged rather than dropped.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(consoleSpy).toHaveBeenCalledWith(rejection);
+    consoleSpy.mockRestore();
+  });
+
+  it('does not fail the call when onTelemetry returns a cross-realm promise that rejects', async () => {
+    const backend = makeMockBackend();
+    const consoleSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const rejection = new Error('exporter down');
+    // A sink loaded from a `node:vm` sandbox hands back a promise built by that
+    // realm's `Promise`, so it is not `instanceof Promise` here; the guard has
+    // to adopt it rather than test its constructor.
+    const rejectFromOtherRealm = runInNewContext(
+      '(reason) => Promise.reject(reason)',
+    ) as (reason: unknown) => unknown;
+    const server = createProxyServer(backend, {
+      onTelemetry: () => rejectFromOtherRealm(rejection),
+      name: 'test-server',
+    });
+
+    const result = await invokeHandler(server, 'tools/call', {
+      name: 'normal_tool',
+      arguments: {},
+    });
+    expect(result).toMatchObject({
+      content: [{ type: 'text', text: 'raw upstream response' }],
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(consoleSpy).toHaveBeenCalledWith(rejection);
     consoleSpy.mockRestore();

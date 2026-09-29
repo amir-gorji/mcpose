@@ -510,22 +510,24 @@ type ProgressToken = string | number;
  * ends the process on Node's default `--unhandled-rejections=throw`.
  *
  * The sink is called, not awaited, so a slow exporter cannot delay a tool call.
+ *
+ * `Promise.resolve` rather than an `instanceof Promise` test: a sink loaded from
+ * another realm (`node:vm`), or one handing back a non-native thenable, would
+ * fail the latter and leave its rejection unobserved all the same.
  */
 function callTelemetrySink(
   sink: ((event: TelemetryEvent) => unknown) | undefined,
   event: TelemetryEvent,
 ): void {
   try {
-    const result = sink?.(event);
-    if (result instanceof Promise) {
-      result.catch((err: unknown) => {
-        console.error(err);
-      });
-    }
+    Promise.resolve(sink?.(event)).catch((err: unknown) => {
+      console.error(err);
+    });
   } catch (err) {
     console.error(err);
   }
 }
+
 type BackendRequestOptions = Parameters<BackendClient['listTools']>[1];
 // Structural mirror of the SDK's `RequestHandlerExtra`. The SDK declares its
 // optional members as `?: T | undefined`, so this type has to as well to stay
