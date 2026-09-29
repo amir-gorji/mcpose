@@ -80,6 +80,26 @@ describe('a pipeline that resolves without a tool result', () => {
     });
   }
 
+  it('names the shape a prompt fetch was expected to return', async () => {
+    const events: AuditEvent[] = [];
+    const { promptMiddleware } = createAuditMiddleware(makeOptions(events));
+
+    await promptMiddleware(
+      { method: 'prompts/get' as const, params: { name: 'greet' } },
+      async () => undefined as never,
+      makeCtx('sess-prompt'),
+    );
+
+    expect(events).toHaveLength(1);
+    const event = events[0]!;
+    expect(event.kind).toBe('prompt');
+    expect(event.outcome).toBe('error');
+    expect(event.error).toEqual({
+      name: 'InvalidToolResult',
+      message: 'Prompt fetch resolved to a value that is not a GetPromptResult',
+    });
+  });
+
   it('keeps the chain and the manifest honest across a dropped result', async () => {
     const events: AuditEvent[] = [];
     const onAuditError = vi.fn();

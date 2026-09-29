@@ -404,8 +404,13 @@ export function createAuditMiddleware(
                     noToolResult
                     ? {
                         name: 'InvalidToolResult',
+                        // `kind` decides the shape that was expected, and the
+                        // message is plaintext, so it has to name the one that
+                        // was actually missing.
                         message:
-                          'Tool call resolved to a value that is not a CallToolResult',
+                          kind === 'prompt'
+                            ? 'Prompt fetch resolved to a value that is not a GetPromptResult'
+                            : 'Tool call resolved to a value that is not a CallToolResult',
                       }
                     : {
                         name: 'ToolError',
