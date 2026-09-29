@@ -48,7 +48,7 @@ export interface SessionRecord {
 export interface SessionRegistry {
   /**
    * Persists a record. Awaited before the client learns its session id, so a
-   * rejection fails the initialize with a 500 rather than handing out an id
+   * rejection fails the initialize with a 400 rather than handing out an id
    * that no other instance could honour.
    */
   set(sessionId: string, record: SessionRecord): Promise<void>;
