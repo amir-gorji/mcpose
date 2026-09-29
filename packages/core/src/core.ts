@@ -115,11 +115,24 @@ export type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
  * This guard narrows `CompatibilityCallToolResult` to `CallToolResult`
  * (has `.content` array). Both union members carry `[x: string]: unknown`,
  * so this avoids unsafe casts.
+ *
+ * A guard, not an assertion: the union's two members are both objects, but a
+ * pipeline result is not the union. The legacy shape has no `.content`, and a
+ * handler that produced nothing at all (a local tool with a missing `return`,
+ * or a middleware that dropped the result) produces a nullish one, which has
+ * none either. Both answer `false` here. Throwing instead replaced whatever
+ * the pipeline produced with `TypeError: Cannot read properties of undefined
+ * (reading 'content')` — inside `mapToolResult`, and inside the `tools/call`
+ * handler's telemetry read of `result.isError`.
  */
 export function hasToolContent(
   r: CompatibilityCallToolResult,
 ): r is CallToolResult {
-  return Array.isArray(r.content);
+  return (
+    r !== null &&
+    typeof r === 'object' &&
+    Array.isArray((r as { content?: unknown }).content)
+  );
 }
 
 /**
