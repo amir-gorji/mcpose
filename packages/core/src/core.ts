@@ -1198,10 +1198,17 @@ export function createProxyServer(
           context,
         );
         // MCP signals tool-level failures in-band via isError, not by throwing.
+        // A pipeline that resolved to nothing at all is not a success either:
+        // `hasToolContent` answers false for it rather than throwing, so the
+        // `&&` would otherwise short-circuit to 'success' and report a call
+        // whose result never reached the client as a clean one. Only a value
+        // that is a tool result can be judged by `isError`.
         emitTelemetry(
-          hasToolContent(result) && result.isError === true
-            ? 'error'
-            : 'success',
+          hasToolContent(result)
+            ? result.isError === true
+              ? 'error'
+              : 'success'
+            : 'error',
         );
         return result;
       } catch (err) {
