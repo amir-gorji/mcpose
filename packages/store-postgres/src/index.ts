@@ -54,9 +54,10 @@ export interface PostgresEventStoreOptions {
    */
   pruneEveryWrites?: number;
   /**
-   * Called when an opportunistic background prune fails. Defaults to
-   * `console.error`. A failed prune is never fatal: it only delays reclaiming
-   * space, since expiry itself is enforced on read.
+   * Called when the write-triggered background prune fails. Defaults to
+   * `console.error`. A prune you schedule yourself is yours to catch. A failed
+   * prune is never fatal: it only delays reclaiming space, since expiry itself
+   * is enforced on read. A reporter that throws or rejects is contained.
    */
   onError?: (err: unknown) => void;
 }
@@ -85,6 +86,24 @@ const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
 
 /** Largest value `bigserial` can hold; anything above it fails the cast. */
 const MAX_BIGINT = 9223372036854775807n;
+
+/**
+ * Wraps a caller-supplied prune reporter so it can never escape as an
+ * unhandled rejection: a synchronous throw is caught, and an `async` reporter's
+ * rejection is adopted. The prune is fire-and-forget, so there is nowhere
+ * left to report a reporting failure.
+ */
+const containReporter =
+  (onError: (err: unknown) => void) =>
+  (err: unknown): void => {
+    try {
+      Promise.resolve(onError(err)).catch(() => {
+        // Nothing left to report it to.
+      });
+    } catch {
+      // Nothing left to report it to.
+    }
+  };
 
 /**
  * Builds an {@link EventStore} backed by a single Postgres table, giving SSE
@@ -128,7 +147,7 @@ export function createPostgresEventStore(
     );
   }
   const pruneEveryWrites = options.pruneEveryWrites ?? 1000;
-  const onError = options.onError ?? console.error;
+  const onError = containReporter(options.onError ?? console.error);
   const indexBase = table.replace('.', '_');
 
   // Infinity would be an invalid Date; the epoch keeps every row live.
@@ -247,7 +266,11 @@ export interface PostgresSessionRegistryOptions {
    * @default 1000
    */
   pruneEveryWrites?: number;
-  /** Called when an opportunistic background prune fails. Defaults to `console.error`. */
+  /**
+   * Called when the write-triggered background prune fails. Defaults to
+   * `console.error`. A prune you schedule yourself is yours to catch. A
+   * reporter that throws or rejects is contained.
+   */
   onError?: (err: unknown) => void;
 }
 
@@ -286,7 +309,7 @@ export function createPostgresSessionRegistry(
     );
   }
   const pruneEveryWrites = options.pruneEveryWrites ?? 1000;
-  const onError = options.onError ?? console.error;
+  const onError = containReporter(options.onError ?? console.error);
   const indexBase = table.replace('.', '_');
 
   let writes = 0;
