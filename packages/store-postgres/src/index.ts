@@ -107,7 +107,7 @@ const MAX_BIGINT = 9223372036854775807n;
  * const pool = new Pool({ connectionString: process.env.DATABASE_URL });
  * const eventStore = createPostgresEventStore(pool);
  * await eventStore.init();
- * setInterval(() => void eventStore.pruneExpired(), 60_000).unref();
+ * setInterval(() => void eventStore.pruneExpired().catch(console.error), 60_000).unref();
  * await startHttpProxy(backends, {}, { eventStore });
  * ```
  */
