@@ -202,9 +202,10 @@ export interface HttpProxyOptions {
   /**
    * Called on unhandled errors instead of console.error, and on every auth
    * hook that throws: the request still fails closed, and the operator still
-   * sees why.
+   * sees why. If this hook itself throws or returns a rejected promise, the
+   * failure is contained and changes nothing the caller sees.
    */
-  onError?: (err: unknown) => void;
+  onError?: (err: unknown) => unknown;
   /** Maximum request body size in bytes. Default: 4 MB. */
   maxBodyBytes?: number;
   /**
@@ -1601,8 +1602,14 @@ export function startHttpProxy(
     // a failed auth hook with a 500, aborted `destroySession` before it closed
     // the proxy server, and threw out of the `server.on('error')` handler
     // that exists precisely so a post-listen error does not crash the process.
+    // An async reporter that rejects after its first await escapes the same
+    // guard one tick later (#245): nobody observes the rejection, and Node's
+    // default --unhandled-rejections=throw ends the process, so the returned
+    // promise is adopted here too.
     try {
-      (httpOptions.onError ?? console.error)(err);
+      Promise.resolve((httpOptions.onError ?? console.error)(err)).catch(() => {
+        // Nothing left to report it to.
+      });
     } catch {
       // Nothing left to report it to.
     }

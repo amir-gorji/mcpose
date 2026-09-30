@@ -202,14 +202,18 @@ export function createAuditMiddleware(
   const closeDrainTimeoutMs = options.closeDrainTimeoutMs ?? 30_000;
   const reportAuditError: NonNullable<AuditOptions['onAuditError']> =
     options.onAuditError ?? ((err) => console.error(err));
-  // A throwing reporter is outside the audited call path too (#172): it must
-  // not replace a tool result, mask an upstream error, or abort a drain.
+  // A throwing or rejecting reporter is outside the audited call path too
+  // (#172, #245): it must not replace a tool result, mask an upstream error,
+  // abort a drain, or leave an unobserved rejection that Node's default
+  // --unhandled-rejections=throw turns into a dead process.
   const onAuditError: NonNullable<AuditOptions['onAuditError']> = (
     err,
     info,
   ) => {
     try {
-      reportAuditError(err, info);
+      Promise.resolve(reportAuditError(err, info)).catch(() => {
+        // Nothing left to report it to.
+      });
     } catch {
       // Nothing left to report it to.
     }

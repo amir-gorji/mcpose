@@ -221,6 +221,53 @@ describe('createAuditMiddleware — never blocks the call path', () => {
     expect(events[0]!.sensitivityTier).toBe('high');
   });
 
+  it('an async onAuditError reporter that rejects does not fail a successful call (#245)', async () => {
+    // The reporter is observability (#172). An async reporter that rejects
+    // after its first await escapes the synchronous guard: nothing observes
+    // the rejection, so Node's default --unhandled-rejections=throw ends the
+    // process around the tool call it must not touch.
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      // A plain async function, not a vi.fn spy: a spy attaches its own
+      // handler to the promise it returns to track settledResults, which
+      // would swallow the very rejection this test observes.
+      let reporterCalls = 0;
+      const onAuditError = async (): Promise<void> => {
+        reporterCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        throw new Error('reporter down');
+      };
+      const { middleware } = createAuditMiddleware(
+        makeOptions({
+          onEvent: () => {
+            throw new Error('sink down');
+          },
+          onAuditError,
+        }),
+      );
+
+      await expect(
+        middleware(
+          makeReq('search'),
+          async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+          makeCtx('s1'),
+        ),
+      ).resolves.toEqual({ content: [{ type: 'text', text: 'ok' }] });
+      expect(reporterCalls).toBe(1);
+      // One macrotask turn, so a rejection nobody adopted has surfaced as an
+      // unhandledRejection event by the time this asserts.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(rejections).toHaveLength(0);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('circular and BigInt arguments still produce an event', async () => {
     const events: AuditEvent[] = [];
     const { middleware } = createAuditMiddleware(

@@ -352,7 +352,7 @@ interface HttpProxyOptions {
   host?: string;         // Default: '127.0.0.1' (loopback); non-loopback is a deliberate opt-in
   path?: string;         // Default: '/mcp'
   onRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>;
-  onError?: (err: unknown) => void;
+  onError?: (err: unknown) => unknown;
   maxBodyBytes?: number; // Default: 4 MB (4,194,304); excess returns 413
   maxSessions?: number;  // Default: 1000; excess requests return 503; Infinity opts out
   sessionTtlMs?: number; // Default: 30 minutes (1,800,000); max finite 2,147,483,647; Infinity opts out

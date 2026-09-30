@@ -165,6 +165,48 @@ describe('createConsentMiddleware — fails closed', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  it('still refuses with the structured error when the error hook rejects asynchronously (#245)', async () => {
+    // The hook is observability. An async hook that rejects after its first
+    // await escapes the synchronous guard: nothing observes the rejection, so
+    // Node's default --unhandled-rejections=throw ends the process around the
+    // still-pending refusal.
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      const { middleware } = createConsentMiddleware({
+        resolveConsent: () => {
+          throw new Error('consent database unreachable');
+        },
+        onResolverError: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          throw new Error('logger exploded');
+        },
+      });
+      const next = vi.fn(async () => ({ content: [] }));
+
+      const err = await middleware(toolReq, next, makeCtx()).catch(
+        (e: unknown) => e,
+      );
+
+      expect(reasonOf(err)).toBe('CONSENT_MISSING');
+      expect(String(err)).toContain(
+        'Consent for read_records could not be established',
+      );
+      expect(String(err)).not.toContain('logger exploded');
+      expect(next).not.toHaveBeenCalled();
+      // One macrotask turn, so a rejection nobody adopted has surfaced as an
+      // unhandledRejection event by the time this asserts.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(rejections).toHaveLength(0);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('rejects when the resolver rejects', async () => {
     const { middleware } = createConsentMiddleware({
       resolveConsent: () => Promise.reject(new Error('timeout')),
