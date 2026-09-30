@@ -311,3 +311,92 @@ describe.skipIf(!postgresUrl)(
     });
   },
 );
+
+describe('a background prune reporter that itself fails', () => {
+  const failingPrune = () => {
+    const deletes: number[] = [];
+    const query = vi.fn(async (text: string) => {
+      if (text.startsWith('DELETE')) {
+        deletes.push(1);
+        throw new Error('prune failed');
+      }
+      return { rows: [{ event_id: 1 }] };
+    });
+    return { query, deletes };
+  };
+
+  const reporters: [string, (err: unknown) => void][] = [
+    [
+      'throws',
+      () => {
+        throw new Error('reporter threw');
+      },
+    ],
+    [
+      'rejects',
+      async () => {
+        throw new Error('reporter rejected');
+      },
+    ],
+  ];
+
+  const writers: [
+    string,
+    (
+      client: PostgresClient,
+      onError: (err: unknown) => void,
+    ) => Promise<unknown>,
+  ][] = [
+    [
+      'event store',
+      (client, onError) =>
+        createPostgresEventStore(client, {
+          pruneEveryWrites: 1,
+          onError,
+        }).storeEvent('s1', message),
+    ],
+    [
+      'session registry',
+      (client, onError) =>
+        createPostgresSessionRegistry(client, {
+          pruneEveryWrites: 1,
+          onError,
+        }).set('s1', {
+          initialize: {
+            protocolVersion: '2025-11-25',
+            capabilities: {},
+            clientInfo: { name: 'c', version: '1' },
+          },
+        }),
+    ],
+  ];
+
+  it.each(
+    writers.flatMap(([store, write]) =>
+      reporters.map(
+        ([how, reporter]) => [store, how, write, reporter] as const,
+      ),
+    ),
+  )(
+    '%s: a reporter that %s never becomes an unhandled rejection',
+    async (_store, _how, write, reporter) => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        const { query, deletes } = failingPrune();
+        const onError = vi.fn(reporter);
+        await write({ query }, onError);
+        await vi.waitFor(() => {
+          expect(onError).toHaveBeenCalledWith(expect.any(Error));
+        });
+        // Give an escaped rejection time to surface as an unhandled one.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(deletes).toHaveLength(1);
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    },
+  );
+});
