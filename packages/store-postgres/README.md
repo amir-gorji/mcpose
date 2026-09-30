@@ -40,8 +40,8 @@ const sessionRegistry = createPostgresSessionRegistry(pool);
 await eventStore.init();
 await sessionRegistry.init();
 setInterval(() => {
-  void eventStore.pruneExpired();
-  void sessionRegistry.pruneExpired();
+  void eventStore.pruneExpired().catch(console.error);
+  void sessionRegistry.pruneExpired().catch(console.error);
 }, 60_000).unref();
 
 await startHttpProxy(
@@ -61,7 +61,7 @@ The registry's are under [Session registry](#session-registry).
 | `table` | `'mcpose_events'` | Table holding the events, optionally schema-qualified. Validated as a plain SQL identifier and rejected otherwise, because it is interpolated into SQL. |
 | `ttlMs` | `1_800_000` (30 minutes) | How long an event stays replayable. `Infinity` keeps history forever. |
 | `pruneEveryWrites` | `1000` | Run `pruneExpired()` in the background once every this many writes. `0` disables it. |
-| `onError` | `console.error` | Called when a background prune fails. |
+| `onError` | `console.error` | Called when the write-triggered background prune fails. A prune you schedule yourself is yours to catch. |
 
 ## Schema
 
@@ -106,7 +106,7 @@ The semantics of a resumed session (what it negotiates, how long it lives, what 
 |---|---|---|
 | `table` | `'mcpose_sessions'` | Table holding the records, validated as a plain SQL identifier. |
 | `pruneEveryWrites` | `1000` | Run `pruneExpired()` in the background once every this many writes. `0` disables it. |
-| `onError` | `console.error` | Called when a background prune fails. |
+| `onError` | `console.error` | Called when the write-triggered background prune fails. A prune you schedule yourself is yours to catch. |
 
 `init()` runs exactly this, and never runs implicitly on a write:
 
