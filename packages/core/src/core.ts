@@ -1198,17 +1198,29 @@ export function createProxyServer(
           context,
         );
         // MCP signals tool-level failures in-band via isError, not by throwing.
-        // A pipeline that resolved to nothing at all is not a success either:
-        // `hasToolContent` answers false for it rather than throwing, so the
-        // `&&` would otherwise short-circuit to 'success' and report a call
-        // whose result never reached the client as a clean one. Only a value
-        // that is a tool result can be judged by `isError`.
+        // Three shapes reach here, and `hasToolContent` alone cannot tell them
+        // apart because it answers false for two of them:
+        //
+        //   - a CallToolResult: judge it by `isError`;
+        //   - the legacy `{ toolResult }` shape (protocol 2024-10-07): a valid
+        //     result with no `.content`, so `mapToolResult` passes it through —
+        //     a success;
+        //   - nothing at all, from a local tool with a missing `return` or a
+        //     middleware that dropped the result: the call produced no result,
+        //     so it is not a success.
+        //
+        // A result-less call used to reach the `catch` as a TypeError from
+        // `hasToolContent` and be recorded as an error; now that the guard
+        // answers false instead of throwing, the shape has to be distinguished
+        // here or a `&&` would report it as a clean one.
+        const isResultless =
+          result === null || result === undefined || typeof result !== 'object';
         emitTelemetry(
-          hasToolContent(result)
-            ? result.isError === true
+          isResultless
+            ? 'error'
+            : hasToolContent(result) && result.isError === true
               ? 'error'
-              : 'success'
-            : 'error',
+              : 'success',
         );
         return result;
       } catch (err) {

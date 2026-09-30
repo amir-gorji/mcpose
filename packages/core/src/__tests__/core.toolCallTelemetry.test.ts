@@ -123,3 +123,35 @@ describe('tools/call telemetry — a result that is not a tool result', () => {
     ]);
   });
 });
+
+/**
+ * The legacy `{ toolResult }` shape (protocol 2024-10-07) is a valid, documented
+ * result — `mapToolResult` returns it untouched and the guard answers `false` for
+ * it because it has no `.content`. It is not a failure, so it must not be
+ * telemetered as one.
+ */
+describe('tools/call telemetry — the legacy { toolResult } shape', () => {
+  it('reports success for a legacy-shape result', async () => {
+    const events: TelemetryEvent[] = [];
+    const backend = makeBackend();
+    backend.callTool = vi.fn().mockResolvedValue({
+      toolResult: { raw: true },
+    }) as BackendClient['callTool'];
+
+    const server = createProxyServer(
+      { crm: backend },
+      { name: 'test-server', onTelemetry: (e) => events.push(e) },
+    );
+
+    await invokeHandler(server, 'tools/call', {
+      name: 'crm__legacy_tool',
+      arguments: {},
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'tool_call',
+      outcome: 'success',
+    });
+  });
+});
