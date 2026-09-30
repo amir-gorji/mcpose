@@ -115,11 +115,24 @@ export type ListToolsMiddleware = Middleware<ListToolsRequest, ListToolsResult>;
  * This guard narrows `CompatibilityCallToolResult` to `CallToolResult`
  * (has `.content` array). Both union members carry `[x: string]: unknown`,
  * so this avoids unsafe casts.
+ *
+ * A guard, not an assertion: the union's two members are both objects, but a
+ * pipeline result is not the union. The legacy shape has no `.content`, and a
+ * handler that produced nothing at all (a local tool with a missing `return`,
+ * or a middleware that dropped the result) produces a nullish one, which has
+ * none either. Both answer `false` here. Throwing instead replaced whatever
+ * the pipeline produced with `TypeError: Cannot read properties of undefined
+ * (reading 'content')` — inside `mapToolResult`, and inside the `tools/call`
+ * handler's telemetry read of `result.isError`.
  */
 export function hasToolContent(
   r: CompatibilityCallToolResult,
 ): r is CallToolResult {
-  return Array.isArray(r.content);
+  return (
+    r !== null &&
+    typeof r === 'object' &&
+    Array.isArray((r as { content?: unknown }).content)
+  );
 }
 
 /**
@@ -1186,10 +1199,29 @@ export function createProxyServer(
           context,
         );
         // MCP signals tool-level failures in-band via isError, not by throwing.
+        // Three shapes reach here, and `hasToolContent` alone cannot tell them
+        // apart because it answers false for two of them:
+        //
+        //   - a CallToolResult: judge it by `isError`;
+        //   - the legacy `{ toolResult }` shape (protocol 2024-10-07): a valid
+        //     result with no `.content`, so `mapToolResult` passes it through —
+        //     a success;
+        //   - nothing at all, from a local tool with a missing `return` or a
+        //     middleware that dropped the result: the call produced no result,
+        //     so it is not a success.
+        //
+        // A result-less call used to reach the `catch` as a TypeError from
+        // `hasToolContent` and be recorded as an error; now that the guard
+        // answers false instead of throwing, the shape has to be distinguished
+        // here or a `&&` would report it as a clean one.
+        const isResultless =
+          result === null || result === undefined || typeof result !== 'object';
         emitTelemetry(
-          hasToolContent(result) && result.isError === true
+          isResultless
             ? 'error'
-            : 'success',
+            : hasToolContent(result) && result.isError === true
+              ? 'error'
+              : 'success',
         );
         return result;
       } catch (err) {
