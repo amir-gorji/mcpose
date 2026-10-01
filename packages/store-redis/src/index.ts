@@ -74,7 +74,24 @@ const DEFAULT_TTL_MS = 30 * 60 * 1000;
  * cursor deserves. An unparseable cursor is reported as unknown, exactly as
  * the in-memory store's failed Map lookup is.
  */
-const ENTRY_ID = /^\d{1,20}-\d{1,20}$/;
+const ENTRY_ID = /^\d{1,19}-\d{1,19}$/;
+
+/** Largest value Redis parses in one half of a stream id; above it, `XRANGE` errors. */
+const MAX_STREAM_ID = 9223372036854775807n;
+
+/**
+ * Whether `entryId` is a stream id Redis will accept as an `XRANGE` bound.
+ *
+ * The digit count alone is not enough: Redis parses each half as a signed
+ * 64-bit integer, so a 19-digit value above `2^63 - 1` fails the parse just as
+ * a 20-digit one does, and the command answers `-ERR Invalid stream ID
+ * specified as stream command argument`. `ENTRY_ID` already guarantees two
+ * all-digit halves, so `BigInt` cannot throw here.
+ */
+function isStreamId(entryId: string): boolean {
+  if (!ENTRY_ID.test(entryId)) return false;
+  return entryId.split('-').every((part) => BigInt(part) <= MAX_STREAM_ID);
+}
 
 function parseEventId(
   eventId: EventId,
@@ -82,7 +99,7 @@ function parseEventId(
   const sep = eventId.lastIndexOf(':');
   if (sep <= 0) return undefined;
   const entryId = eventId.slice(sep + 1);
-  if (!ENTRY_ID.test(entryId)) return undefined;
+  if (!isStreamId(entryId)) return undefined;
   try {
     return { streamId: decodeURIComponent(eventId.slice(0, sep)), entryId };
   } catch {
