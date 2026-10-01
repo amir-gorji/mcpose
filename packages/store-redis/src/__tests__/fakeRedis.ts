@@ -18,6 +18,22 @@ function compare(a: string, b: string): number {
   return Number(aMs) - Number(bMs) || Number(aSeq) - Number(bSeq);
 }
 
+/** Largest value Redis parses in one half of a stream id. */
+const MAX_STREAM_ID = 9223372036854775807n;
+
+/**
+ * Whether `bound` is something Redis can read as a stream id. `-` and `+` are
+ * the open bounds. Redis parses each half as a signed 64-bit integer, so a
+ * 19-digit value above `2^63 - 1` is rejected the same way a 20-digit one is.
+ */
+function isParsableBound(bound: string): boolean {
+  if (bound === '-' || bound === '+') return true;
+  const [ms, seq, ...rest] = bound.split('-');
+  if (rest.length > 0 || ms === undefined || seq === undefined) return false;
+  if (!/^\d{1,19}$/.test(ms) || !/^\d{1,19}$/.test(seq)) return false;
+  return BigInt(ms) <= MAX_STREAM_ID && BigInt(seq) <= MAX_STREAM_ID;
+}
+
 export class FakeRedis
   implements RedisEventStoreClient, RedisSessionRegistryClient
 {
@@ -73,9 +89,18 @@ export class FakeRedis
   }
 
   async xRange(key: string, start: string, end: string): Promise<Entry[]> {
-    const entries = this.live(key) ?? [];
     const exclusive = start.startsWith('(');
     const lo = exclusive ? start.slice(1) : start;
+    if (!isParsableBound(lo) || !isParsableBound(end)) {
+      // Redis parses the bounds before it looks the key up, and answers
+      // `-ERR Invalid stream ID specified as stream command argument` for one
+      // it cannot read. Raise the same way, so an adapter that hands the
+      // client a bound Redis would reject fails here too.
+      throw new Error(
+        'ERR Invalid stream ID specified as stream command argument',
+      );
+    }
+    const entries = this.live(key) ?? [];
     return entries.filter((e) => {
       if (lo !== '-') {
         const d = compare(e.id, lo);

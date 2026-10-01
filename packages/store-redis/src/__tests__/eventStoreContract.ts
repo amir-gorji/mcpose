@@ -39,6 +39,11 @@ const HOSTILE_CURSORS = [
   `${GET_STREAM}:`,
   ':',
   ':1-1',
+  // Right shape, wrong magnitude: each half of a Redis stream id is a signed
+  // 64-bit integer, and 19 digits can overflow it just as 20 can.
+  `${GET_STREAM}:99999999999999999999-0`,
+  `${GET_STREAM}:0-99999999999999999999`,
+  `${GET_STREAM}:9223372036854775808-0`, // 2^63, one past the largest
 ];
 
 const notification = (n: number): JSONRPCMessage => ({
