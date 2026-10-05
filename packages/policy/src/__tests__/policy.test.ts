@@ -198,6 +198,65 @@ describe('construction-time validation', () => {
     ).toThrow(/tools array is a literal name/);
   });
 
+  it('rejects a bare string in roles or tools', () => {
+    // The fail-open case: a string has `.includes`, so it survives the
+    // wildcard check and is then matched by substring. An allow rule for
+    // `wire_funds` would also admit `wire` and `funds`, and a role rule
+    // would stop being a role check at all.
+    for (const field of ['roles', 'tools'] as const) {
+      expect(() =>
+        createPolicyMiddleware({
+          rules: [
+            {
+              id: 'wire',
+              effect: 'allow',
+              roles: '*',
+              tools: '*',
+              [field]: 'wire_funds',
+            },
+          ],
+        }),
+      ).toThrow(new RegExp(`${field} must be the wildcard`));
+    }
+  });
+
+  it('never widens an allow rule to names it did not list', async () => {
+    // Behaviour rather than mechanism: the bare string is the only rule that
+    // can allow, so on an engine that accepts it, `wire` and `funds` reach
+    // the upstream as substrings of `wire_funds`. Only construction may
+    // throw: an error from the call loop must fail the test, not pass it.
+    const upstream = vi.fn().mockResolvedValue({ content: [] });
+    const admitted: string[] = [];
+
+    let handle: ReturnType<typeof createPolicyMiddleware>;
+    try {
+      handle = createPolicyMiddleware({
+        rules: [
+          {
+            id: 'wire',
+            effect: 'allow',
+            roles: '*',
+            tools: 'wire_funds' as never,
+          },
+        ],
+      });
+    } catch {
+      // A construction throw keeps every call away from the upstream.
+      return;
+    }
+    for (const name of ['wire', 'funds']) {
+      upstream.mockClear();
+      await handle.middleware(
+        toolRequest(name),
+        upstream as never,
+        createProxyContext({ identity: identity(['treasury']) }),
+      );
+      if (upstream.mock.calls.length > 0) admitted.push(name);
+    }
+
+    expect(admitted).toEqual([]);
+  });
+
   it("rejects '*' as an element of a sensitivity rule's roles array", () => {
     expect(() =>
       createPolicyMiddleware({
@@ -205,6 +264,17 @@ describe('construction-time validation', () => {
         sensitivityRules: [{ roles: ['*'], deniedTiers: ['high'] }],
       }),
     ).toThrow(/sensitivityRules\[0\]/);
+  });
+
+  it("rejects a bare string in a sensitivity rule's roles", () => {
+    // Without the shape check this constructs, then throws a raw TypeError
+    // on every call it gates instead of stamping a decision.
+    expect(() =>
+      createPolicyMiddleware({
+        rules: [{ id: 'all', effect: 'allow', roles: '*', tools: '*' }],
+        sensitivityRules: [{ roles: 'intern' as never, deniedTiers: ['high'] }],
+      }),
+    ).toThrow(/sensitivityRules\[0\]: roles must be the wildcard/);
   });
 
   it('rejects a deniedTiers element that is not a sensitivity tier', () => {

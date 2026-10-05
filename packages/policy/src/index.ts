@@ -164,6 +164,15 @@ function assertRules(rules: ReadonlyArray<PolicyRule>): void {
     }
     for (const field of ['roles', 'tools'] as const) {
       const value = rule[field];
+      if (value !== '*' && !Array.isArray(value)) {
+        // A bare string has `.includes`, so the wildcard check below passes it
+        // through, and `namesMatch` then asks the string whether it contains
+        // the name: an allow rule for `wire_funds` would also admit `wire` and
+        // `funds`. Reject the shape before it can widen a rule.
+        throw new TypeError(
+          `${where} (id ${rule.id}): ${field} must be the wildcard '*' or an array of names, got ${JSON.stringify(value)}. A bare string is matched by substring, so it grants access to names you did not list.`,
+        );
+      }
       if (value !== '*' && value.includes('*')) {
         throw new TypeError(
           `${where} (id ${rule.id}): '*' inside the ${field} array is a literal name, not a wildcard, and matches nothing. Write ${field}: '*' instead.`,
@@ -182,6 +191,13 @@ function assertRules(rules: ReadonlyArray<PolicyRule>): void {
  */
 function assertSensitivityRules(rules: ReadonlyArray<SensitivityRule>): void {
   for (const [i, rule] of rules.entries()) {
+    if (rule.roles !== '*' && !Array.isArray(rule.roles)) {
+      // Same shape check as `assertRules`: a bare string survives the
+      // wildcard check below and then throws on every call it gates.
+      throw new TypeError(
+        `sensitivityRules[${i}]: roles must be the wildcard '*' or an array of role names, got ${JSON.stringify(rule.roles)}.`,
+      );
+    }
     if (rule.roles !== '*' && rule.roles.includes('*')) {
       throw new TypeError(
         `sensitivityRules[${i}]: '*' inside the roles array is a literal role name, not a wildcard, and matches nothing. Write roles: '*' instead.`,
