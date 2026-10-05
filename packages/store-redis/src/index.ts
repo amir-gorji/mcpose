@@ -18,6 +18,8 @@ import type { SessionRecord, SessionRegistry } from 'mcpose';
  * `RedisClientType` satisfies it structurally, and so does a test double.
  *
  * Exclusive `XRANGE` bounds (`(<id>`) need Redis 6.2 or newer.
+ * node-redis 6.3 types an `XRANGE` reply as nullable, so an absent range is
+ * read as an empty one.
  */
 export interface RedisEventStoreClient {
   xAdd(
@@ -29,7 +31,7 @@ export interface RedisEventStoreClient {
     key: string,
     start: string,
     end: string,
-  ): Promise<{ id: string; message: Record<string, string> }[]>;
+  ): Promise<{ id: string; message: Record<string, string> }[] | null>;
   pExpire(key: string, ms: number): Promise<unknown>;
 }
 
@@ -165,11 +167,12 @@ export function createRedisEventStore(
     async getStreamIdForEventId(eventId) {
       const parsed = parseEventId(eventId);
       if (!parsed) return undefined;
-      const found = await client.xRange(
-        keyFor(parsed.streamId),
-        parsed.entryId,
-        parsed.entryId,
-      );
+      const found =
+        (await client.xRange(
+          keyFor(parsed.streamId),
+          parsed.entryId,
+          parsed.entryId,
+        )) ?? [];
       return found.length > 0 ? parsed.streamId : undefined;
     },
 
@@ -178,11 +181,9 @@ export function createRedisEventStore(
       if (!parsed) return '';
       // Inclusive range, so the first entry doubles as the existence check:
       // one round trip instead of two.
-      const entries = await client.xRange(
-        keyFor(parsed.streamId),
-        parsed.entryId,
-        '+',
-      );
+      const entries =
+        (await client.xRange(keyFor(parsed.streamId), parsed.entryId, '+')) ??
+        [];
       // Unknown or already-expired cursor: replay nothing rather than the
       // whole stream, matching mcpose's in-memory store.
       if (entries[0]?.id !== parsed.entryId) return '';

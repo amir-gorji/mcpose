@@ -136,6 +136,18 @@ describe('createRedisEventStore()', () => {
     expect(streamId).toBe('s1');
     expect(sent).toEqual([]);
   });
+
+  it('reads a null XRANGE reply as an empty range', async () => {
+    // node-redis 6.3 types the reply as nullable.
+    const redis = new FakeRedis();
+    vi.spyOn(redis, 'xRange').mockResolvedValue(null as never);
+    const store = createRedisEventStore(redis);
+    expect(await store.getStreamIdForEventId?.('s1:1-0')).toBeUndefined();
+    const streamId = await store.replayEventsAfter('s1:1-0', {
+      send: async () => {},
+    });
+    expect(streamId).toBe('');
+  });
 });
 
 describeSessionRegistryContract('redis (fake client)', async () =>
