@@ -141,6 +141,13 @@ function namesMatch(
  * call falls through to whatever allow rule the author believed they had
  * overridden. A misconfigured deny rule is the one way this engine fails
  * open, so it fails to construct instead.
+ *
+ * An `effect` outside the union fails the same way and for the same reason.
+ * The gates compare it by equality, so a rule written `effect: 'DENY'` or
+ * `effect: 'deny '` matches neither one: it is not the deny rule it reads as,
+ * and it is not an allow rule either. The call then reaches whatever allow
+ * rule does cover it, and the stamped decision names that allow rule, so an
+ * audit record positively reports the rule its author wrote to stop it.
  */
 function assertRules(rules: ReadonlyArray<PolicyRule>): void {
   for (const [i, rule] of rules.entries()) {
@@ -148,6 +155,11 @@ function assertRules(rules: ReadonlyArray<PolicyRule>): void {
     if (typeof rule.id !== 'string' || rule.id.trim() === '') {
       throw new TypeError(
         `${where}: a policy rule needs a non-empty id. It is what a stamped decision and an audit record name.`,
+      );
+    }
+    if (rule.effect !== 'allow' && rule.effect !== 'deny') {
+      throw new TypeError(
+        `${where} (id ${rule.id}): effect is ${JSON.stringify(rule.effect)}, which is not 'allow' or 'deny'. Rules are matched by effect, so this one is neither the deny rule it reads as nor an allow rule: the call falls through to whatever allow rule does cover it, and the audit record names that allow rule.`,
       );
     }
     for (const field of ['roles', 'tools'] as const) {

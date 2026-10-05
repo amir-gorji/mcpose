@@ -304,6 +304,79 @@ describe('construction-time validation', () => {
     }
   });
 
+  it("rejects an effect outside 'allow' and 'deny'", () => {
+    // A host compiling an external policy source is where these come from: a
+    // capital, a trailing space, or a synonym that reads the same to a person.
+    // The casts stand in for that untyped input, which is what the runtime
+    // check exists for; `as never` is how the mistyped `deniedTiers` case
+    // above is written too.
+    const effects: readonly unknown[] = [
+      'DENY',
+      'deny ',
+      'block',
+      undefined,
+      null,
+    ];
+    for (const effect of effects) {
+      expect(() =>
+        createPolicyMiddleware({
+          rules: [
+            { id: 'freeze', effect: effect as never, roles: '*', tools: '*' },
+          ],
+        }),
+      ).toThrow(/effect is .*not 'allow' or 'deny'/s);
+    }
+  });
+
+  it('never admits the call a mistyped effect was written to block', async () => {
+    // Behaviour rather than mechanism: whether the engine refuses to construct
+    // or blocks at the call, the upstream must never be reached. On an engine
+    // that checks neither, this call goes through, which is the fail-open.
+    const ctx = createProxyContext({ identity: identity(['treasury']) });
+    const next = vi.fn().mockResolvedValue({ content: [] });
+
+    try {
+      const { middleware } = createPolicyMiddleware({
+        rules: [
+          {
+            id: 'wire',
+            effect: 'allow',
+            roles: ['treasury'],
+            tools: ['wire_funds'],
+          },
+          {
+            id: 'freeze',
+            effect: 'DENY' as never,
+            roles: '*',
+            tools: ['wire_funds'],
+          },
+        ],
+      });
+      await middleware(toolRequest('wire_funds'), next as never, ctx);
+    } catch {
+      // A construction throw or a rejection: both keep the call away from
+      // `next`, which is all the assertion below demands.
+    }
+
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('names the offending effect, and does not blame the rule that allows', async () => {
+    expect(() =>
+      createPolicyMiddleware({
+        rules: [
+          { id: 'wire', effect: 'allow', roles: ['treasury'], tools: '*' },
+          {
+            id: 'freeze',
+            effect: 'DENY' as never,
+            roles: '*',
+            tools: ['wire_funds'],
+          },
+        ],
+      }),
+    ).toThrow(/rules\[1\] \(id freeze\): effect is "DENY"/);
+  });
+
   it('names the offending rule by index and id', () => {
     expect(() =>
       createPolicyMiddleware({
