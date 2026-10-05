@@ -221,17 +221,17 @@ describe('construction-time validation', () => {
   });
 
   it('never widens an allow rule to names it did not list', async () => {
-    // Behaviour rather than mechanism: on an engine that accepts the string,
-    // these three calls all reach the upstream. `wire` and `funds` are
-    // substrings of `wire_funds`; `other` is not, and pins that the fix is a
-    // shape check rather than a widened matcher.
+    // Behaviour rather than mechanism: the bare string is the only rule that
+    // can allow, so on an engine that accepts it, `wire` and `funds` reach
+    // the upstream as substrings of `wire_funds`. Only construction may
+    // throw: an error from the call loop must fail the test, not pass it.
     const upstream = vi.fn().mockResolvedValue({ content: [] });
     const admitted: string[] = [];
 
+    let handle: ReturnType<typeof createPolicyMiddleware>;
     try {
-      const handle = createPolicyMiddleware({
+      handle = createPolicyMiddleware({
         rules: [
-          { id: 'all', effect: 'allow', roles: '*', tools: '*' },
           {
             id: 'wire',
             effect: 'allow',
@@ -240,17 +240,18 @@ describe('construction-time validation', () => {
           },
         ],
       });
-      for (const name of ['wire_funds', 'wire', 'funds', 'other']) {
-        upstream.mockClear();
-        await handle.middleware(
-          toolRequest(name),
-          upstream as never,
-          createProxyContext({ identity: identity(['treasury']) }),
-        );
-        if (upstream.mock.calls.length > 0) admitted.push(name);
-      }
     } catch {
-      // A construction throw: also keeps every call away from the upstream.
+      // A construction throw keeps every call away from the upstream.
+      return;
+    }
+    for (const name of ['wire', 'funds']) {
+      upstream.mockClear();
+      await handle.middleware(
+        toolRequest(name),
+        upstream as never,
+        createProxyContext({ identity: identity(['treasury']) }),
+      );
+      if (upstream.mock.calls.length > 0) admitted.push(name);
     }
 
     expect(admitted).toEqual([]);
