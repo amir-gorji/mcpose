@@ -520,6 +520,46 @@ describe('per-session budget', () => {
     expect(await call(handle, 's1')).toBe('BUDGET_EXCEEDED');
   });
 
+  it('rejects a non-finite maxCallsPerSession at construction', () => {
+    // What `Number(process.env.MAX_CALLS)` returns for an unset key. Left
+    // unchecked it compares false against every count, so the budget gates
+    // nothing and the counter grows for the life of the process.
+    for (const max of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        createPolicyMiddleware({
+          ...budgeted,
+          budget: { maxCallsPerSession: max },
+        }),
+      ).toThrow(/maxCallsPerSession is .*not a finite number/s);
+    }
+  });
+
+  it('never lets a non-finite budget admit a call it was written to bound', async () => {
+    // Behaviour rather than mechanism: whether the engine refuses to construct
+    // or blocks at the call, the upstream must never be reached. On an engine
+    // that checks neither, this call goes through, which is the inert budget.
+    const next = vi.fn().mockResolvedValue({ content: [] });
+
+    try {
+      const handle = createPolicyMiddleware({
+        ...budgeted,
+        budget: { maxCallsPerSession: Number.NaN },
+      });
+      for (let i = 0; i < 5; i++) {
+        await handle.middleware(
+          toolRequest('ping'),
+          next as never,
+          createProxyContext({ sessionId: 's1' }),
+        );
+      }
+    } catch {
+      // A construction throw or a rejection: both keep the calls away from
+      // `next`, which is all the assertion below demands.
+    }
+
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it('counts each session separately', async () => {
     const handle = createPolicyMiddleware(budgeted);
 

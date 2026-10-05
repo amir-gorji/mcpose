@@ -187,6 +187,23 @@ function assertSensitivityRules(rules: ReadonlyArray<SensitivityRule>): void {
   }
 }
 
+/**
+ * A `maxCallsPerSession` that is not a finite number compares false against
+ * every count, so `used >= max` is never true and the budget gates nothing
+ * while its counter still grows. `NaN` is not a hostile input here: it is what
+ * `Number(process.env.MAX_CALLS)` or `parseInt(cfg.max, 10)` returns when the
+ * key is unset or misspelled, which is the ordinary way a host wires an
+ * operator-supplied limit in. `0` stays valid and still denies everything.
+ */
+function assertBudget(budget: PolicyOptions['budget']): void {
+  if (budget === undefined) return;
+  if (!Number.isFinite(budget.maxCallsPerSession)) {
+    throw new TypeError(
+      `budget.maxCallsPerSession is ${String(budget.maxCallsPerSession)}, which is not a finite number. It is compared against a call count, so a non-finite value never blocks a call and the counter still grows; use a non-negative integer, or omit budget to leave the engine unbounded.`,
+    );
+  }
+}
+
 /** A denial: the reason the caller sees and the rule that produced it, if any. */
 interface Denial {
   readonly reason: RejectionReason;
@@ -235,6 +252,7 @@ export function createPolicyMiddleware(
   assertRules(options.rules);
   if (options.sensitivityRules)
     assertSensitivityRules(options.sensitivityRules);
+  assertBudget(options.budget);
 
   // Per-instance, per-session call counts, keyed by ctx.sessionId. Two
   // middleware instances never share a budget, and nothing evicts an entry

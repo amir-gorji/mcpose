@@ -232,6 +232,10 @@ interface SensitivityRule {
 | `sensitivity` | no | Every name resolves to `'high'`, which matters only if you passed tier rules. |
 | `budget` | no | Calls are uncounted and unlimited. |
 
+`budget.maxCallsPerSession` must be a finite number; construction throws otherwise.
+A non-finite value compares false against every call count, so it would gate nothing while its counter still grew.
+`0` is valid and denies every call.
+
 `middleware` is a `ToolMiddleware` and `promptMiddleware` is a `PromptMiddleware`, both from `mcpose`.
 `evictSession(sessionId)` drops that session's budget counter; wire it to `onSessionClosed`, as [above](#releasing-budget-counters).
 
