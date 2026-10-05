@@ -198,6 +198,64 @@ describe('construction-time validation', () => {
     ).toThrow(/tools array is a literal name/);
   });
 
+  it('rejects a bare string in roles or tools', () => {
+    // The fail-open case: a string has `.includes`, so it survives the
+    // wildcard check and is then matched by substring. An allow rule for
+    // `wire_funds` would also admit `wire` and `funds`, and a role rule
+    // would stop being a role check at all.
+    for (const field of ['roles', 'tools'] as const) {
+      expect(() =>
+        createPolicyMiddleware({
+          rules: [
+            {
+              id: 'wire',
+              effect: 'allow',
+              roles: '*',
+              tools: '*',
+              [field]: 'wire_funds',
+            },
+          ],
+        }),
+      ).toThrow(new RegExp(`${field} must be the wildcard`));
+    }
+  });
+
+  it('never widens an allow rule to names it did not list', async () => {
+    // Behaviour rather than mechanism: on an engine that accepts the string,
+    // these three calls all reach the upstream. `wire` and `funds` are
+    // substrings of `wire_funds`; `other` is not, and pins that the fix is a
+    // shape check rather than a widened matcher.
+    const upstream = vi.fn().mockResolvedValue({ content: [] });
+    const admitted: string[] = [];
+
+    try {
+      const handle = createPolicyMiddleware({
+        rules: [
+          { id: 'all', effect: 'allow', roles: '*', tools: '*' },
+          {
+            id: 'wire',
+            effect: 'allow',
+            roles: '*',
+            tools: 'wire_funds' as never,
+          },
+        ],
+      });
+      for (const name of ['wire_funds', 'wire', 'funds', 'other']) {
+        upstream.mockClear();
+        await handle.middleware(
+          toolRequest(name),
+          upstream as never,
+          createProxyContext({ identity: identity(['treasury']) }),
+        );
+        if (upstream.mock.calls.length > 0) admitted.push(name);
+      }
+    } catch {
+      // A construction throw: also keeps every call away from the upstream.
+    }
+
+    expect(admitted).toEqual([]);
+  });
+
   it("rejects '*' as an element of a sensitivity rule's roles array", () => {
     expect(() =>
       createPolicyMiddleware({

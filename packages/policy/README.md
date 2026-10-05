@@ -196,6 +196,7 @@ The two middleware surfaces share one implementation, one rule set, and one budg
 It **throws at construction** on a rule set that would silently match less than its author meant, rather than failing open on the first call:
 
 - `'*'` appearing as an *element* of a `roles` or `tools` array, in a policy rule or a sensitivity rule. Written that way it is a literal name that matches nothing. The wildcard is the bare string `roles: '*'`.
+- A `roles` or `tools` that is neither the wildcard nor an array. A bare string is matched by substring, so `{ tools: 'wire_funds' }` would also admit `wire` and `funds`.
 - A `deniedTiers` element that is not one of `'low'`, `'medium'`, or `'high'`.
   It is compared against the tier a name resolves to, so a misspelled entry matches no call at all and the rule blocks less than its author meant.
   A host with an external policy source compiles its rule set ahead of time, which is where such an entry appears.
