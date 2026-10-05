@@ -200,9 +200,13 @@ It **throws at construction** on a rule set that would silently match less than 
   It is compared against the tier a name resolves to, so a misspelled entry matches no call at all and the rule blocks less than its author meant.
   A host with an external policy source compiles its rule set ahead of time, which is where such an entry appears.
 - An empty or whitespace-only rule `id`, which is what a stamped decision and an audit record name.
+- An `effect` that is neither `'allow'` nor `'deny'`.
+  Rules are matched by effect, so a rule written `effect: 'DENY'` is neither the deny rule it reads as nor an allow rule.
+  The call then reaches whatever allow rule does cover it, and the stamped decision names that allow rule.
 
 The first two are the places deny-by-default does not save you: `{ effect: 'deny', roles: ['*'], tools: ['wire_funds'] }` reads as "deny everyone", matches nobody, and lets the call through on an allow rule its author believed overridden.
 A tier rule whose `deniedTiers` can never match does the same.
+A mistyped `effect` does too, and additionally leaves the audit record naming the allow rule that permitted the call.
 
 ```ts
 interface PolicyOptions {
