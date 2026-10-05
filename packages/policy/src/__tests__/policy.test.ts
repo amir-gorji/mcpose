@@ -265,6 +265,17 @@ describe('construction-time validation', () => {
     ).toThrow(/sensitivityRules\[0\]/);
   });
 
+  it("rejects a bare string in a sensitivity rule's roles", () => {
+    // Without the shape check this constructs, then throws a raw TypeError
+    // on every call it gates instead of stamping a decision.
+    expect(() =>
+      createPolicyMiddleware({
+        rules: [{ id: 'all', effect: 'allow', roles: '*', tools: '*' }],
+        sensitivityRules: [{ roles: 'intern' as never, deniedTiers: ['high'] }],
+      }),
+    ).toThrow(/sensitivityRules\[0\]: roles must be the wildcard/);
+  });
+
   it('rejects a deniedTiers element that is not a sensitivity tier', () => {
     // The same fail-open shape, one array over: `deniedTiers` is compared
     // against whatever `resolveTier` returns, and that is only ever `'low'`,
