@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SpanStatusCode } from '@opentelemetry/api';
+import {
+  ROOT_CONTEXT,
+  SpanStatusCode,
+  TraceFlags,
+  isSpanContextValid,
+  trace,
+} from '@opentelemetry/api';
 import type {
   Attributes,
+  Context,
+  SpanContext,
   SpanOptions,
   SpanStatus,
   Tracer,
@@ -17,6 +25,8 @@ interface RecordedSpan {
   status: SpanStatus | undefined;
   exceptions: unknown[];
   endTime: number | undefined;
+  /** The span id of the parent the created span ended up with, if any. */
+  parentSpanId: string | undefined;
 }
 
 /**
@@ -25,11 +35,24 @@ interface RecordedSpan {
  * the full `Tracer` and `Span` interfaces is the point of the fake: pulling in
  * an SDK to record four calls would make the assertions depend on the SDK's
  * own sampling and export behaviour.
+ *
+ * Parent resolution is the one part of the SDK's behaviour the fake has to
+ * carry, because it is what the adapter decides: `startSpan` takes its parent
+ * from the `context` argument and, when that argument is left out, from the
+ * context that is active on the host (`@opentelemetry/api`:
+ * "@param [context] Context to use to extract parent", and `ROOT_CONTEXT` is
+ * documented as "the default parent context when there is no active context").
+ * `activeContext` therefore stands in for whatever ambient instrumentation has
+ * set active when the sink runs.
  */
-function fakeTracer(): { tracer: Tracer; spans: RecordedSpan[] } {
+function fakeTracer(activeContext: Context = ROOT_CONTEXT): {
+  tracer: Tracer;
+  spans: RecordedSpan[];
+} {
   const spans: RecordedSpan[] = [];
   const tracer = {
-    startSpan(name: string, options?: SpanOptions) {
+    startSpan(name: string, options?: SpanOptions, context?: Context) {
+      const parent = trace.getSpanContext(context ?? activeContext);
       const recorded: RecordedSpan = {
         name,
         startTime: options?.startTime as number | undefined,
@@ -37,6 +60,10 @@ function fakeTracer(): { tracer: Tracer; spans: RecordedSpan[] } {
         status: undefined,
         exceptions: [],
         endTime: undefined,
+        parentSpanId:
+          parent !== undefined && isSpanContextValid(parent)
+            ? parent.spanId
+            : undefined,
       };
       spans.push(recorded);
       return {
@@ -68,9 +95,25 @@ const identity: Identity = {
 
 const proxy: ProxyIdentity = { name: 'edge-proxy', version: '3.0.0' };
 
+/**
+ * An unrelated span of the host's own work: what ambient instrumentation
+ * (an instrumented HTTP server, an agent framework tracing the turn) leaves
+ * active while the proxy is handling a request.
+ */
+const hostSpanContext: SpanContext = {
+  traceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+  spanId: '1234567890abcdef',
+  traceFlags: TraceFlags.SAMPLED,
+};
+
+const hostActiveContext = trace.setSpanContext(ROOT_CONTEXT, hostSpanContext);
+
 /** The single span the adapter produced for `event`. */
-function spanFor(event: TelemetryEvent): RecordedSpan {
-  const { tracer, spans } = fakeTracer();
+function spanFor(
+  event: TelemetryEvent,
+  activeContext: Context = ROOT_CONTEXT,
+): RecordedSpan {
+  const { tracer, spans } = fakeTracer(activeContext);
   createOtelTelemetry(tracer)(event);
   expect(spans).toHaveLength(1);
   return spans[0]!;
@@ -120,6 +163,10 @@ describe('createOtelTelemetry() — tool_call', () => {
 
   it('leaves a successful call unset rather than marking it OK', () => {
     expect(spanFor(successful).status).toBeUndefined();
+  });
+
+  it('stays a root span while the host has an active span of its own', () => {
+    expect(spanFor(successful, hostActiveContext).parentSpanId).toBeUndefined();
   });
 
   it('omits the attributes whose fields the event does not carry', () => {
@@ -214,6 +261,12 @@ describe('createOtelTelemetry() — backend_degraded', () => {
       code: SpanStatusCode.ERROR,
       message: 'upstream refused the connection',
     });
+  });
+
+  it('stays a root span while the host has an active span of its own', () => {
+    expect(
+      spanFor(degraded(new Error('timed out')), hostActiveContext).parentSpanId,
+    ).toBeUndefined();
   });
 
   it('stringifies a thrown non-Error, because the sink takes whatever the backend threw', () => {
