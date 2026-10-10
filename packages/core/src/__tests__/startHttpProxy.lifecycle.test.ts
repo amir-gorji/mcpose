@@ -221,6 +221,8 @@ describe('startHttpProxy() session lifecycle', () => {
         ['sessionTtlMs', 0],
         ['sessionTtlMs', -1],
         ['sessionTtlMs', Number.NaN],
+        ['maxBodyBytes', Number.NaN],
+        ['maxBodyBytes', -1],
       ])('rejects %s: %s at startup', (option, value) => {
         expect(() =>
           startHttpProxy(
@@ -266,6 +268,41 @@ describe('startHttpProxy() session lifecycle', () => {
         const baseUrl = `http://localhost:${getPort(server)}`;
         try {
           await initSession(baseUrl);
+        } finally {
+          await closeServer(server);
+        }
+      });
+
+      it('accepts maxBodyBytes: Infinity as the opt-out from the cap', async () => {
+        const server = await startHttpProxy(
+          makeMockBackend(),
+          { name: 'test-server' },
+          { port: 0, path: '/mcp', maxBodyBytes: Infinity },
+        );
+        const baseUrl = `http://localhost:${getPort(server)}`;
+        try {
+          await initSession(baseUrl);
+        } finally {
+          await closeServer(server);
+        }
+      });
+
+      it('keeps maxBodyBytes: 0 a cap that rejects every POST body', async () => {
+        // `0` is not the opt-out and not a typo to be forgiven: like
+        // `maxSessions: 0`, it keeps its literal meaning.
+        const server = await startHttpProxy(
+          makeMockBackend(),
+          { name: 'test-server' },
+          { port: 0, path: '/mcp', maxBodyBytes: 0 },
+        );
+        const baseUrl = `http://localhost:${getPort(server)}`;
+        try {
+          const res = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: MCP_HEADERS,
+            body: INIT_BODY,
+          });
+          expect(res.status).toBe(413);
         } finally {
           await closeServer(server);
         }
