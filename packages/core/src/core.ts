@@ -219,7 +219,16 @@ export interface HttpProxyOptions {
    * failure is contained and changes nothing the caller sees.
    */
   onError?: (err: unknown) => unknown;
-  /** Maximum request body size in bytes. Default: 4 MB. */
+  /**
+   * Maximum request body size in bytes. Excess POST bodies return 413.
+   * Default: 4 MB. Set to `Infinity` to opt out of the cap.
+   *
+   * `0` is a valid value and means "reject every POST body", so it is not the
+   * opt-out. The two shapes that are mistakes rather than choices throw at
+   * startup: a negative number returns 413 for every POST, and `NaN`, which is
+   * what `Number(process.env.MAX_BODY_BYTES)` returns for an unset key,
+   * compares false against every body size and so gates nothing at all.
+   */
   maxBodyBytes?: number;
   /**
    * Maximum number of concurrent MCP sessions. Excess requests return 503.
@@ -1600,6 +1609,21 @@ export function startHttpProxy(
       `mcpose: sessionTtlMs must be <= ${MAX_NODE_TIMER_DELAY_MS} or Infinity, got ${String(httpOptions.sessionTtlMs)}`,
     );
   }
+  // Resolved once, like the two limits above, so a bad value fails at startup
+  // instead of quietly gating nothing. A `NaN` cap compares false against both
+  // the declared `Content-Length` and the running byte count, so a body far
+  // larger than the configured limit passes this layer untouched.
+  // `Number(process.env.MAX_BODY_BYTES)` is the ordinary way a host wires an
+  // operator-supplied limit in, and it is NaN when the key is unset or
+  // misspelled; #264 rejected a non-finite `budget.maxCallsPerSession` for
+  // exactly this reason. `Infinity` opts out, and `0`, like `maxSessions: 0`,
+  // keeps its literal meaning instead of doubling as one.
+  const maxBodyBytes = httpOptions.maxBodyBytes ?? 4 * 1024 * 1024;
+  if (!(maxBodyBytes >= 0)) {
+    throw new Error(
+      `mcpose: maxBodyBytes must be >= 0 or Infinity, got ${String(httpOptions.maxBodyBytes)}`,
+    );
+  }
   // Filled in once the server is listening (the real port is only known
   // then); sessions are only created after that. The SDK transport
   // validates Host/Origin only against a non-empty list, so an enabled flag
@@ -1840,11 +1864,7 @@ export function startHttpProxy(
       }
 
       if (method === 'POST') {
-        const rejected = applyBodySizeLimit(
-          req,
-          res,
-          httpOptions.maxBodyBytes ?? 4 * 1024 * 1024,
-        );
+        const rejected = applyBodySizeLimit(req, res, maxBodyBytes);
         if (rejected) return;
       }
 
