@@ -2,7 +2,7 @@
  * OpenTelemetry span adapter for the mcpose `onTelemetry` hook.
  * @module @mcpose/otel
  */
-import { SpanStatusCode } from '@opentelemetry/api';
+import { ROOT_CONTEXT, SpanStatusCode } from '@opentelemetry/api';
 import type { Attributes, Tracer } from '@opentelemetry/api';
 import type { TelemetryEvent } from 'mcpose';
 
@@ -36,9 +36,11 @@ function describeError(error: unknown): string {
  *
  * Telemetry events arrive after the work they describe has finished, so every
  * span is created with an explicit start time derived from the event and ended
- * immediately. Nothing is pushed onto the active context, so these spans are
- * roots rather than children of the caller's trace: the hook carries no span
- * context to continue. See the package README.
+ * immediately. Each one is created against `ROOT_CONTEXT` rather than the
+ * ambient context, so it stays a root whatever the host has active: the hook
+ * carries no span context to continue, and a parent taken from the active
+ * context would file these spans under a trace they never took part in and
+ * hand their sampling decision to unrelated work. See the package README.
  *
  * The sink does not swallow exporter failures. `createProxyServer` already
  * logs a throwing `onTelemetry` sink and never fails the tool call for it, so
@@ -56,18 +58,22 @@ export function createOtelTelemetry(
     const endTime = Date.now();
 
     if (event.type === 'tool_call') {
-      const span = tracer.startSpan(`execute_tool ${event.tool}`, {
-        startTime: endTime - event.duration_ms,
-        attributes: {
-          ...commonAttributes(event),
-          'mcpose.tool.name': event.tool,
-          'mcpose.tool.outcome': event.outcome,
-          'mcpose.tool.duration_ms': event.duration_ms,
-          ...(event.rejectionReason === undefined
-            ? {}
-            : { 'mcpose.tool.rejection_reason': event.rejectionReason }),
+      const span = tracer.startSpan(
+        `execute_tool ${event.tool}`,
+        {
+          startTime: endTime - event.duration_ms,
+          attributes: {
+            ...commonAttributes(event),
+            'mcpose.tool.name': event.tool,
+            'mcpose.tool.outcome': event.outcome,
+            'mcpose.tool.duration_ms': event.duration_ms,
+            ...(event.rejectionReason === undefined
+              ? {}
+              : { 'mcpose.tool.rejection_reason': event.rejectionReason }),
+          },
         },
-      });
+        ROOT_CONTEXT,
+      );
       if (event.outcome !== 'success') {
         span.setStatus({
           code: SpanStatusCode.ERROR,
@@ -80,14 +86,18 @@ export function createOtelTelemetry(
 
     // A degraded backend has no duration of its own, so the span is a
     // zero-width marker at the moment the mesh reported the gap.
-    const span = tracer.startSpan('mcpose.backend_degraded', {
-      startTime: endTime,
-      attributes: {
-        ...commonAttributes(event),
-        'mcpose.backend': event.backend,
-        'mcpose.method': event.method,
+    const span = tracer.startSpan(
+      'mcpose.backend_degraded',
+      {
+        startTime: endTime,
+        attributes: {
+          ...commonAttributes(event),
+          'mcpose.backend': event.backend,
+          'mcpose.method': event.method,
+        },
       },
-    });
+      ROOT_CONTEXT,
+    );
     span.recordException(
       event.error instanceof Error ? event.error : describeError(event.error),
     );
