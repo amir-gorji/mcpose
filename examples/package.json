@@ -11,11 +11,11 @@
   },
   "dependencies": {
     "@mcpose/audit": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "mcpose": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.4",
     "tsx": "^4.23.13",
     "typescript": "6.0.3"
   }
