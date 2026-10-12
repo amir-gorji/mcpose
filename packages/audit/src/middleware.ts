@@ -200,6 +200,17 @@ export function createAuditMiddleware(
   const sealed = new Map<string, SealedSession>();
   const includeRejections = options.includeRejections ?? true;
   const closeDrainTimeoutMs = options.closeDrainTimeoutMs ?? 30_000;
+  // `!(x >= 0)` rejects NaN too, which the `??` default above lets through:
+  // a NaN deadline never fires, so the drain this option exists to bound would
+  // wait for a call that never settles and leave the recorded events unsigned
+  // with nothing reported. Same form as `maxSessions` in core (#277).
+  if (!(closeDrainTimeoutMs >= 0)) {
+    throw new Error(
+      `mcpose/audit: closeDrainTimeoutMs must be >= 0 or Infinity, got ${String(
+        options.closeDrainTimeoutMs,
+      )}`,
+    );
+  }
   const reportAuditError: NonNullable<AuditOptions['onAuditError']> =
     options.onAuditError ?? ((err) => console.error(err));
   // A throwing or rejecting reporter is outside the audited call path too
