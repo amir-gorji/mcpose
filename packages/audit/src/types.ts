@@ -238,7 +238,9 @@ export interface AuditOptions {
    * to append and persist their events before it seals the manifest. Past
    * the deadline the manifest covers what has landed, and each straggler is
    * reported through `onAuditError` with its tool and requestId. `Infinity`
-   * waits without bound.
+   * waits without bound. Any other value (NaN, a negative number) is
+   * rejected at construction, because it would leave the drain with no
+   * deadline at all.
    * @default 30_000
    */
   closeDrainTimeoutMs?: number;
