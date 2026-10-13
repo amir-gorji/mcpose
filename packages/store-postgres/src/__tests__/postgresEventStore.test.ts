@@ -82,6 +82,18 @@ describe('createPostgresSessionRegistry()', () => {
     ).toThrow(/plain SQL identifier/);
   });
 
+  it('rejects a pruneEveryWrites that would never schedule a prune', () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    for (const value of [NaN, -1]) {
+      expect(() =>
+        createPostgresSessionRegistry({ query }, { pruneEveryWrites: value }),
+      ).toThrow(/pruneEveryWrites must be >= 0/);
+    }
+    expect(() =>
+      createPostgresSessionRegistry({ query }, { pruneEveryWrites: 0 }),
+    ).not.toThrow();
+  });
+
   it('prunes only records past their deadline', async () => {
     const registry = await memRegistry();
     await registry.set('gone', { ...record, expiresAt: Date.now() - 1 });
@@ -178,6 +190,19 @@ describe('createPostgresEventStore()', () => {
     expect(() => createPostgresEventStore({ query }, { ttlMs: NaN })).toThrow(
       /ttlMs must be > 0/,
     );
+  });
+
+  it('rejects a pruneEveryWrites that would never schedule a prune', () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    for (const value of [NaN, -1]) {
+      expect(() =>
+        createPostgresEventStore({ query }, { pruneEveryWrites: value }),
+      ).toThrow(/pruneEveryWrites must be >= 0/);
+    }
+    // 0 is the documented way to turn the backstop off, so it stays legal.
+    expect(() =>
+      createPostgresEventStore({ query }, { pruneEveryWrites: 0 }),
+    ).not.toThrow();
   });
 
   it('stops replaying an event once it is older than ttlMs', async () => {

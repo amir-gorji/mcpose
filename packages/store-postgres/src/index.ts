@@ -49,6 +49,8 @@ export interface PostgresEventStoreOptions {
    * Run {@link PostgresEventStore.pruneExpired} in the background once every
    * this many writes, so a host that forgets to schedule pruning still does
    * not grow without bound. `0` disables it.
+   * Validated at construction: a negative number or NaN would make the
+   * comparison never fire, which disables the backstop silently.
    *
    * @default 1000
    */
@@ -147,6 +149,11 @@ export function createPostgresEventStore(
     );
   }
   const pruneEveryWrites = options.pruneEveryWrites ?? 1000;
+  if (!(pruneEveryWrites >= 0)) {
+    throw new Error(
+      `@mcpose/store-postgres: pruneEveryWrites must be >= 0 or Infinity, got ${String(options.pruneEveryWrites)}`,
+    );
+  }
   const onError = containReporter(options.onError ?? console.error);
   const indexBase = table.replace('.', '_');
 
@@ -262,6 +269,8 @@ export interface PostgresSessionRegistryOptions {
   /**
    * Run {@link PostgresSessionRegistry.pruneExpired} in the background once
    * every this many writes. `0` disables it.
+   * Validated at construction: a negative number or NaN would make the
+   * comparison never fire, which disables the backstop silently.
    *
    * @default 1000
    */
@@ -309,6 +318,11 @@ export function createPostgresSessionRegistry(
     );
   }
   const pruneEveryWrites = options.pruneEveryWrites ?? 1000;
+  if (!(pruneEveryWrites >= 0)) {
+    throw new Error(
+      `@mcpose/store-postgres: pruneEveryWrites must be >= 0 or Infinity, got ${String(options.pruneEveryWrites)}`,
+    );
+  }
   const onError = containReporter(options.onError ?? console.error);
   const indexBase = table.replace('.', '_');
 
