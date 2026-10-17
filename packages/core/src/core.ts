@@ -1213,9 +1213,14 @@ export function createProxyServer(
         // A result-less call used to reach the `catch` as a TypeError from
         // `hasToolContent` and be recorded as an error; now that the guard
         // answers false instead of throwing, the shape has to be distinguished
-        // here or a `&&` would report it as a clean one.
+        // here or a `&&` would report it as a clean one. An array is the same
+        // case: it is an object with no `.content`, and the SDK rejects it as
+        // `-32602 Invalid tools/call result`, so it is not a success either.
         const isResultless =
-          result === null || result === undefined || typeof result !== 'object';
+          result === null ||
+          result === undefined ||
+          typeof result !== 'object' ||
+          Array.isArray(result);
         emitTelemetry(
           isResultless
             ? 'error'

@@ -346,14 +346,15 @@ export function createAuditMiddleware(
         // in-band with `isError: true` (#171). The caller supplies the
         // predicate, so only tool calls pass one and prompts never match.
         //
-        // A result that is not an object is decided here too, and for the same
-        // reason: the predicate below narrows to a `CallToolResult` and a
-        // primitive has no `.content` to narrow on. A local tool handler that
-        // resolves to a string reaches the client as `-32602 Invalid
-        // tools/call result`, so recording it as a success would put a clean
-        // outcome, and no `error` field, in a signed chain covering a call the
-        // client saw fail. `isResultless` in core's telemetry draws the same
-        // line, so both record what the caller observed.
+        // A result that is not an object is decided here too, and so is an
+        // array; for the same reason: the predicate below narrows to a
+        // `CallToolResult` and neither has a `.content` to narrow on. A local
+        // tool handler that resolves to a string reaches the client as
+        // `-32602 Invalid tools/call result`, so recording it as a success
+        // would put a clean outcome, and no `error` field, in a signed chain
+        // covering a call the client saw fail. `isResultless` in core's
+        // telemetry draws the same line, so both record what the caller
+        // observed.
         //
         // A nullish result is decided here, BEFORE the predicate narrows it,
         // because narrowing reads `.content` and a nullish value has none: a
@@ -367,7 +368,8 @@ export function createAuditMiddleware(
           !threw &&
           (result === null ||
             result === undefined ||
-            typeof result !== 'object');
+            typeof result !== 'object' ||
+            Array.isArray(result));
         const inBandError =
           !threw && !noToolResult && isInBandError?.(result as Res) === true;
         const outcome: AuditEvent['outcome'] =
