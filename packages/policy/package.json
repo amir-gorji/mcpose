@@ -1,6 +1,6 @@
 {
   "name": "@mcpose/policy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Deny-by-default RBAC policy middleware for mcpose — role rules, sensitivity tiers, per-session budgets",
   "type": "module",
   "main": "./dist/index.js",
