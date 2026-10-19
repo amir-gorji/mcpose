@@ -147,6 +147,27 @@ describe('sanitizeToolDescriptions()', () => {
     expect(result.tools[0]?.description).toBe('see  for details');
   });
 
+  it.each([
+    ['uppercase', 'HTTPS'],
+    ['mixed case', 'HtTp'],
+    ['mixed-case with s', 'HTtpS'],
+  ])(
+    'strips a %s scheme, which RFC 3986 treats as case-insensitive',
+    async (_label, scheme) => {
+      const upstream: ListToolsResult = {
+        tools: [
+          {
+            name: 't',
+            description: `see ${scheme}://internal.host/a for details`,
+            inputSchema: { type: 'object' },
+          },
+        ],
+      };
+      const result = await run(sanitizeToolDescriptions(), upstream);
+      expect(result.tools[0]?.description).toBe('see  for details');
+    },
+  );
+
   it('accepts a pattern that already carries the global flag', async () => {
     const upstream: ListToolsResult = {
       tools: [
