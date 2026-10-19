@@ -12,10 +12,26 @@ const DOMAIN_CHAIN = Buffer.from('mcpose/v2/chain');
 export type ChainVerification =
   { valid: true } | { valid: false; index: number; reason: string };
 
-function hexEqual(aHex: string, bHex: string): boolean {
-  const a = Buffer.from(aHex, 'hex');
-  const b = Buffer.from(bHex, 'hex');
-  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
+/**
+ * Canonical hex: lowercase, even length, hex digits only, non-empty. This
+ * is what the producer writes (`digest('hex')`), and the exact string a
+ * third-party verifier compares.
+ */
+const CANONICAL_HEX = /^(?:[0-9a-f]{2})+$/;
+
+/**
+ * Compares a stored hex string against the recomputed value in constant
+ * time. The stored string must be canonical first: Node's hex decoder drops
+ * a trailing odd nibble and stops at the first non-hex character, so
+ * `sig + '0'`, `sig + 'z'` and `SIG` all decode to the stored bytes and would
+ * otherwise verify. The verifiers authenticate the stored string itself, not
+ * just its decoding, so two implementations agree on one artifact (#281).
+ */
+function hexEqual(storedHex: string, expectedHex: string): boolean {
+  if (!CANONICAL_HEX.test(storedHex)) return false;
+  const a = Buffer.from(storedHex, 'hex');
+  const b = Buffer.from(expectedHex, 'hex');
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 /**

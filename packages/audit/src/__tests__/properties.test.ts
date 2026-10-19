@@ -688,6 +688,33 @@ describe('verifyManifestSignature (properties)', () => {
       }),
     );
   });
+
+  it('rejects any respelling of the signature that is not the exact string', async () => {
+    // `anyLengthHex` only emits canonical hex, so it cannot reach the
+    // decoder's leniency: an odd nibble, a non-hex tail, or uppercase all
+    // decode to the same bytes and used to verify (#281). Start from the
+    // real signature and respell it: uppercase any subset of its characters
+    // and append a short tail.
+    const respelling = fc
+      .tuple(
+        fc.array(fc.boolean(), { minLength: 64, maxLength: 64 }),
+        fc.array(fc.constantFrom(...'0123456789abcdefz'), { maxLength: 3 }),
+      )
+      .map(
+        ([upper, tail]) =>
+          [...manifest.signature]
+            .map((c, i) => (upper[i] ? c.toUpperCase() : c))
+            .join('') + tail.join(''),
+      );
+    await fc.assert(
+      fc.asyncProperty(respelling, async (signature) => {
+        fc.pre(signature !== manifest.signature);
+        expect(
+          await verifyManifestSignature({ ...manifest, signature }, signingKey),
+        ).toBe(false);
+      }),
+    );
+  });
 });
 
 // ── Signing key derivation ────────────────────────────────────────────────────
