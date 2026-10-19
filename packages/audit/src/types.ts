@@ -188,7 +188,8 @@ export interface ReplayManifest {
   /**
    * HMAC over the canonical serialization of the ENTIRE manifest (every
    * field above, domain-separated) — not just the Merkle root. Verify with
-   * `verifyManifestSignature`.
+   * `verifyManifestSignature`, which accepts only this exact lowercase hex
+   * string: a respelling (uppercase, an appended character) does not verify.
    */
   signature: string;
 }

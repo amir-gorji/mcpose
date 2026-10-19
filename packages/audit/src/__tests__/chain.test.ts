@@ -241,6 +241,25 @@ describe('verifyAuditChain (keyed)', () => {
     const result = await verifyAuditChain(events, otherKey);
     expect(result.valid).toBe(false);
   });
+
+  // Node's hex decoder drops a trailing odd nibble and stops at the first
+  // non-hex character, so these respellings decode to the stored bytes. The
+  // verifier authenticates the stored string, not just its decoding (#281).
+  it.each([
+    ['an appended nibble', (h: string) => h + '0'],
+    ['an appended non-hex character', (h: string) => h + 'z'],
+    ['an uppercase respelling', (h: string) => h.toUpperCase()],
+  ])('rejects a chainHash with %s', async (_label, respell) => {
+    const { events, signingKey } = await produceSession('s-respell', 3);
+    const respelled = events.map((e, i) =>
+      i === 1 ? { ...e, chainHash: respell(e.chainHash) } : e,
+    );
+    expect(await verifyAuditChain(respelled, signingKey)).toEqual({
+      valid: false,
+      index: 1,
+      reason: 'chainHash mismatch',
+    });
+  });
 });
 
 describe('sensitivityTier is covered by the chain (ADR-0015)', () => {
@@ -327,6 +346,21 @@ describe('verifyManifestSignature', () => {
     const { manifest } = await produceSession('m-wrongkey', 3);
     const otherKey = createDefaultSigningKeyProvider('other-secret');
     expect(await verifyManifestSignature(manifest, otherKey)).toBe(false);
+  });
+
+  // Same decoder leniency as above: a respelled signature must not verify,
+  // or a tool that indexes by the stored string disagrees with this one (#281).
+  it.each([
+    ['an appended nibble', (h: string) => h + '0'],
+    ['an appended non-hex character', (h: string) => h + 'z'],
+    ['two appended non-hex characters', (h: string) => h + 'zz'],
+    ['an uppercase respelling', (h: string) => h.toUpperCase()],
+  ])('rejects a signature with %s', async (_label, respell) => {
+    const { manifest, signingKey } = await produceSession('m-respell', 3);
+    const respelled = { ...manifest, signature: respell(manifest.signature) };
+    expect(await verifyManifestSignature(respelled, signingKey)).toBe(false);
+    // Positive control: the untouched manifest still verifies.
+    expect(await verifyManifestSignature(manifest, signingKey)).toBe(true);
   });
 });
 

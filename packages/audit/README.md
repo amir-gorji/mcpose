@@ -291,8 +291,8 @@ Only the root the key comes from changes.
 | `createSensitivityResolver(map, override?)` | Build a `SensitivityResolverFn`. Unknown or invalid tiers resolve to `high`. |
 | `createDefaultSigningKeyProvider(secret)` | In-process HMAC-SHA256 `SigningKeyProvider`. |
 | `createInMemorySubjectKeyStore()` | Reference `SubjectKeyStore` for [erasable mode](#erasable-mode-cryptographic-erasure). **Not durable**: development and tests only. |
-| `verifyAuditChain(events, signingKey)` | **Keyed** chain verification: recomputes every `chainHash` and reports the first tampered index. An empty event list is invalid. |
-| `verifyManifestSignature(manifest, signingKey)` | **Keyed** check of the full-manifest signature, in constant time. |
+| `verifyAuditChain(events, signingKey)` | **Keyed** chain verification: recomputes every `chainHash` and reports the first tampered index. An empty event list is invalid. A stored `chainHash` must be the exact lowercase hex string; a respelling is a mismatch. |
+| `verifyManifestSignature(manifest, signingKey)` | **Keyed** check of the full-manifest signature, in constant time. The stored `signature` must be the exact lowercase hex string; a respelling (uppercase, an appended character) does not verify, so an independent verifier that compares strings agrees with this one. |
 | `computeMerkleRoot` · `computeMerkleProof` · `verifyMerkleProof` | Low-level Merkle helpers for independent verification. |
 | `canonicalJson` · `stableStringify` | The canonical serializations the format is defined over, exported so third parties can write their own verifier. |
 
