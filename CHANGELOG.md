@@ -1,5 +1,41 @@
 # Changelog
 
+## [3.1.0] - 2026-10-19
+
+Seven packages ship in this release: `mcpose` 3.1.0, `@mcpose/audit` 3.1.0, `@mcpose/policy` 1.0.1, `@mcpose/consent` 1.0.1, `@mcpose/otel` 0.1.1, `@mcpose/store-redis` 0.1.1 and `@mcpose/store-postgres` 0.1.1.
+`@mcpose/testing` is unchanged and stays at 3.0.0.
+Peer dependency ranges are unchanged, so every package in this set installs against any `mcpose` 3.x.
+
+### Changed
+
+- **`mcpose`**: `startHttpProxy` rejects a `maxBodyBytes` that is negative or `NaN` at startup, as it already does for `maxSessions` and `sessionTtlMs`.
+  A `NaN` cap, which is what `Number(process.env.X)` yields for an unset key, compared false against every body size and gated nothing.
+  `Infinity` opts out and `0` keeps its literal meaning (#272).
+- **`mcpose`**: `onError` and `onTelemetry` are declared as returning `unknown`, so a host may pass an `async` reporter or sink.
+  A returned promise that rejects is logged instead of ending the process as an unhandled rejection (#242, #245).
+- **`@mcpose/audit`**: `createAuditMiddleware` rejects a `closeDrainTimeoutMs` that is negative or `NaN` at construction, because such a value removed the drain deadline and let `closeSession` wait forever on a call that never settles.
+  `0` and `Infinity` keep their documented meaning (#277).
+- **`@mcpose/audit`**: `verifyAuditChain` and `verifyManifestSignature` accept only the exact canonical hex string for a stored `chainHash` or `signature`.
+  Node's hex decoder let an appended character or an uppercase respelling decode to the same bytes and verify, so an independent verifier that compares strings disagreed with this package about the same artifact.
+  Nothing the producer writes changes, so existing archives still verify (#281).
+- **`@mcpose/audit`**: `onAuditError` is declared as returning `unknown`, and a rejected promise from it is contained (#245).
+- **`@mcpose/policy`**: `createPolicyMiddleware` refuses to construct a rule set it would misread: an `effect` that is neither `allow` nor `deny` (#262), a `roles` or `tools` that is a bare string rather than the wildcard or an array, which was matched by substring so an allow rule for `wire_funds` also admitted `wire` (#265), and a non-finite `budget.maxCallsPerSession`, which never rejected a call (#264).
+- **`@mcpose/consent`**: `onResolverError` is declared as returning `unknown`, and a rejected promise from it is contained (#245).
+- **`@mcpose/store-postgres`**: both factories reject a `pruneEveryWrites` that is negative or `NaN` at construction, since the background prune could never fire with one.
+  `0` still disables it (#279).
+
+### Fixed
+
+- **`mcpose`**: an upstream tool description can no longer keep a URL in model context by capitalizing the scheme: `sanitizeToolDescriptions` strips `HTTPS://` the same as `https://`, as ADR-0010 states (#269).
+- **`mcpose`**: `hasToolContent` answers `false` for a nullish or non-object tool result instead of throwing, so a local tool with a missing `return` is reported as what it is rather than as an internal error (#249).
+- **`mcpose`**: a throwing `onError` in `startHttpProxy` is contained, so a reporter failure no longer turns a documented 401 into a 500 (#244).
+- **`@mcpose/audit`**: a governed call whose result is nullish, a primitive, or otherwise not a `CallToolResult` is recorded as an audit error, instead of producing no event or a success event under a manifest that still verified (#247, #259).
+- **`@mcpose/audit`**: `err.data.rejectionReason` is validated against the `RejectionReason` union, so an ordinary failure carrying an unknown reason is recorded as an `error` with its real message rather than as a governance rejection (#238).
+- **`@mcpose/otel`**: both spans are created against `ROOT_CONTEXT`, so an instrumented host no longer reparents them under its own trace or drops them through its sampling decision (#271).
+- **`@mcpose/store-redis`**: a `Last-Event-ID` cursor whose stream-id halves overflow 64 bits is reported as an unknown cursor instead of reaching `XRANGE` and surfacing as a 500 (#255).
+- **`@mcpose/store-redis`**: a fractional `ttlMs` is rounded up to whole milliseconds before `PEXPIRE`, which rejects a non-integer (#232).
+- **`@mcpose/store-postgres`**: an `onError` reporter that throws or rejects is contained, so a failed background prune can no longer end the process (#248).
+
 ## [3.0.0] - 2026-09-26
 
 All eight packages ship together in this release.

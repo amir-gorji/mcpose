@@ -1,6 +1,6 @@
 {
   "name": "@mcpose/otel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry span adapter for the mcpose onTelemetry hook",
   "type": "module",
   "main": "./dist/index.js",

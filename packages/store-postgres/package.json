@@ -1,6 +1,6 @@
 {
   "name": "@mcpose/store-postgres",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Postgres-backed EventStore and SessionRegistry for mcpose: SSE reconnect replay that survives a restart",
   "type": "module",
   "main": "./dist/index.js",

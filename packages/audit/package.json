@@ -1,6 +1,6 @@
 {
   "name": "@mcpose/audit",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Integrity-chained audit middleware for mcpose — HMAC chain, Merkle proofs, ReplayManifest",
   "type": "module",
   "main": "./dist/index.js",
