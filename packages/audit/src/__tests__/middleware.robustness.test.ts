@@ -569,6 +569,31 @@ describe('createAuditMiddleware — close during an in-flight call (#168)', () =
     expect(await closeSession('s')).toBeUndefined();
   });
 
+  // The bound is the whole reason this option exists. `packages/audit/README.md`
+  // says the wait is bounded and names `Infinity` as the only way to wait
+  // without bound, so a value that is neither -- NaN, which the `?? 30_000`
+  // default does not catch, or a negative number -- must not leave the drain
+  // with a deadline that never fires.
+  it('rejects a closeDrainTimeoutMs that cannot bound the drain', () => {
+    expect(() =>
+      createAuditMiddleware(
+        makeOptions({ closeDrainTimeoutMs: Number('not a duration') }),
+      ),
+    ).toThrow(/closeDrainTimeoutMs must be >= 0 or Infinity, got NaN/);
+    expect(() =>
+      createAuditMiddleware(makeOptions({ closeDrainTimeoutMs: -1 })),
+    ).toThrow(/closeDrainTimeoutMs must be >= 0 or Infinity, got -1/);
+  });
+
+  it('accepts 0 and Infinity as the documented bounds', () => {
+    expect(() =>
+      createAuditMiddleware(makeOptions({ closeDrainTimeoutMs: 0 })),
+    ).not.toThrow();
+    expect(() =>
+      createAuditMiddleware(makeOptions({ closeDrainTimeoutMs: Infinity })),
+    ).not.toThrow();
+  });
+
   it('concurrent closeSession calls share one manifest', async () => {
     const { middleware, closeSession } = createAuditMiddleware(makeOptions());
     const release = deferred();
