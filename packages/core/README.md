@@ -353,7 +353,7 @@ interface HttpProxyOptions {
   path?: string;         // Default: '/mcp'
   onRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>;
   onError?: (err: unknown) => unknown;
-  maxBodyBytes?: number; // Default: 4 MB (4,194,304); excess returns 413
+  maxBodyBytes?: number; // Default: 4 MB (4,194,304); excess returns 413; Infinity opts out
   maxSessions?: number;  // Default: 1000; excess requests return 503; Infinity opts out
   sessionTtlMs?: number; // Default: 30 minutes (1,800,000); max finite 2,147,483,647; Infinity opts out
   /** Resolves caller identity once per session. A throw reports through onError and aborts the session with 401. */
@@ -395,8 +395,10 @@ function startHttpProxy(
 Unlimited sessions that never expire are a memory exhaustion path open to any client that can initialize, and each live session also pins whatever per-session state a host keeps beside it.
 Both are overridable, and `Infinity` is the explicit opt-out for either.
 `maxSessions: 0` is not an opt-out: it already means "reject every session", so it keeps that meaning.
-A `maxSessions` below zero, or a `sessionTtlMs` of zero or below, throws at startup rather than silently disabling the bound.
+A `maxSessions` below zero, a `sessionTtlMs` of zero or below, or a `maxBodyBytes` that is below zero or is not a number at all, throws at startup rather than quietly enforcing something other than what the option reads as.
 So does a finite `sessionTtlMs` above 2,147,483,647 ms (about 24.8 days), Node's maximum timer delay: `setTimeout` would otherwise clamp it to 1 ms and expire every session immediately, so anything longer must use `Infinity`.
+A `maxBodyBytes` of `NaN`, which is what `Number(process.env.MAX_BODY_BYTES)` gives for an unset key, compares false against every body size, so mcpose reads and serves a body far larger than the cap it was configured with instead of answering 413.
+`maxBodyBytes: 0` and `maxBodyBytes: Infinity` keep their literal meanings: reject every POST body, and no cap.
 
 This is a behavior change: both options used to be opt-in, so a proxy started with defaults accepted unlimited sessions that never expired.
 A long-lived deployment that relied on that must now pass `sessionTtlMs: Infinity`, `maxSessions: Infinity`, or values that match its own limits.
