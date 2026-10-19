@@ -36,6 +36,7 @@ The timings are as accurate as the event is; the span simply did not exist while
 
 **There is no context propagation.**
 The hook hands over no span context, so these spans are roots, not children of whatever the caller was tracing, and nothing the proxy does downstream is nested under them.
+Each span is created against `ROOT_CONTEXT` rather than the ambient one, so an instrumented host does not quietly reparent them: without that, `startSpan` takes its parent from whatever the host has active and these spans inherit an unrelated trace and sampling decision.
 Correlate on `mcpose.request.id` and `mcpose.session.id` instead.
 Real parent and child spans need instrumentation inside the pipeline, which is middleware work rather than sink work, and is not in this package.
 
