@@ -60,6 +60,7 @@ describe('a pipeline that resolves without a tool result', () => {
     ['null', null],
     ['a string', 'all good'],
     ['the number 0', 0],
+    ['an array', []],
   ] as const) {
     it(`records the call as an error when the pipeline resolves to ${label}`, async () => {
       const events: AuditEvent[] = [];

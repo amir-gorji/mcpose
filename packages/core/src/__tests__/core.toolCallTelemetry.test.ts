@@ -77,6 +77,44 @@ describe('tools/call telemetry — a result that is not a tool result', () => {
     });
   });
 
+  it('reports error when a local tool handler resolves to an array', async () => {
+    const events: TelemetryEvent[] = [];
+    const arrayResult: LocalTool = {
+      tool: {
+        name: 'array_tool',
+        description: 'returns an array',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      // An array is not a CallToolResult: the SDK answers `-32602 Invalid
+      // tools/call result` for it, so the call the client sees failed must not
+      // be recorded as a clean one.
+      handler: (async () => []) as unknown as LocalTool['handler'],
+    };
+
+    const server = createProxyServer(
+      { crm: makeBackend() },
+      {
+        name: 'test-server',
+        localTools: [arrayResult],
+        onTelemetry: (e) => events.push(e),
+      },
+    );
+
+    await expect(
+      invokeHandler(server, 'tools/call', {
+        name: 'array_tool',
+        arguments: {},
+      }),
+    ).rejects.toBeDefined();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'tool_call',
+      tool: 'array_tool',
+      outcome: 'error',
+    });
+  });
+
   it('still reports success for a real result and error for an isError one', async () => {
     const events: TelemetryEvent[] = [];
     const ok: LocalTool = {
