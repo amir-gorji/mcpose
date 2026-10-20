@@ -1,6 +1,6 @@
 {
   "name": "@mcpose/consent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Fail-closed GDPR/CCPA consent gate middleware for mcpose — host-resolved consent, audited refusals",
   "type": "module",
   "main": "./dist/index.js",
@@ -59,10 +59,10 @@
     "@mcpose/policy": "workspace:*",
     "@stryker-mutator/core": "10.0.0",
     "@stryker-mutator/vitest-runner": "10.0.0",
-    "@types/node": "^26.6.4",
-    "@vitest/coverage-v8": "5.0.3",
+    "@types/node": "^26.6.5",
+    "@vitest/coverage-v8": "5.0.4",
     "mcpose": "workspace:*",
     "typescript": "6.0.3",
-    "vitest": "5.0.3"
+    "vitest": "5.0.4"
   }
 }

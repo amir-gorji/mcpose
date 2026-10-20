@@ -1,6 +1,6 @@
 {
   "name": "@mcpose/store-postgres",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Postgres-backed EventStore and SessionRegistry for mcpose: SSE reconnect replay that survives a restart",
   "type": "module",
   "main": "./dist/index.js",
@@ -57,13 +57,13 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
-    "@vitest/coverage-v8": "5.0.3",
+    "@vitest/coverage-v8": "5.0.4",
     "mcpose": "workspace:*",
     "pg": "^8.23.1",
     "pg-mem": "^3.0.14",
     "typescript": "6.0.3",
-    "vitest": "5.0.3"
+    "vitest": "5.0.4"
   }
 }

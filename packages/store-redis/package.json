@@ -1,6 +1,6 @@
 {
   "name": "@mcpose/store-redis",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Redis-backed EventStore and SessionRegistry for mcpose: SSE reconnect replay that survives a restart",
   "type": "module",
   "main": "./dist/index.js",
@@ -57,11 +57,11 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
-    "@types/node": "^26.6.4",
-    "@vitest/coverage-v8": "5.0.3",
+    "@types/node": "^26.6.5",
+    "@vitest/coverage-v8": "5.0.4",
     "mcpose": "workspace:*",
     "redis": "^6.3.0",
     "typescript": "6.0.3",
-    "vitest": "5.0.3"
+    "vitest": "5.0.4"
   }
 }

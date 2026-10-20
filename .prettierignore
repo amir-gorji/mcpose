@@ -8,6 +8,7 @@ build
 
 # Testing
 coverage
+.vitest
 
 # Lockfiles
 pnpm-lock.yaml

@@ -6,8 +6,14 @@
 
 import type { ListToolsMiddleware } from './core.js';
 
-/** Matches http(s) URLs; always stripped regardless of `patterns`. */
-const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>()[\]]+/g;
+/**
+ * Matches http(s) URLs; always stripped regardless of `patterns`.
+ * The `i` flag is load-bearing: URI schemes are case-insensitive
+ * (RFC 3986 §6.2.2), so an uppercase `HTTPS://` is the same URL, and a
+ * case-sensitive strip would let an upstream leak a hostname simply by
+ * capitalizing the scheme.
+ */
+const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>()[\]]+/gi;
 
 /** Options for {@link sanitizeToolDescriptions}. */
 export interface SanitizeToolDescriptionsOptions {
