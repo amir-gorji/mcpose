@@ -21,6 +21,15 @@ export type { EventStore as PersistentEventStore };
  * Events are evicted FIFO once `maxEvents` is reached.
  */
 export function createInMemoryEventStore(maxEvents = 1000): EventStore {
+  // A NaN or negative cap silently keeps nothing or everything: `size > NaN`
+  // is always false, so the buffer grows without bound, and a negative cap
+  // evicts the event just stored. `0` keeps its literal meaning, like
+  // `maxSessions: 0`; `eventStore: null` remains the explicit opt-out.
+  if (!(maxEvents >= 0)) {
+    throw new Error(
+      `mcpose: maxEvents must be >= 0 or Infinity, got ${String(maxEvents)}`,
+    );
+  }
   const store = new Map<
     EventId,
     { streamId: StreamId; message: JSONRPCMessage }

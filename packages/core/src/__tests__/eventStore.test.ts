@@ -75,6 +75,31 @@ describe('createInMemoryEventStore()', () => {
     });
   });
 
+  it.each([NaN, -1, -Infinity])(
+    'rejects an invalid maxEvents of %s',
+    (maxEvents) => {
+      expect(() => createInMemoryEventStore(maxEvents)).toThrow(
+        `mcpose: maxEvents must be >= 0 or Infinity, got ${String(maxEvents)}`,
+      );
+    },
+  );
+
+  it('keeps no replay history when maxEvents is zero', async () => {
+    const store = createInMemoryEventStore(0);
+    const id = await store.storeEvent('stream-a', msg(1));
+
+    expect(await store.getStreamIdForEventId?.(id)).toBeUndefined();
+  });
+
+  it('never evicts when maxEvents is Infinity', async () => {
+    const store = createInMemoryEventStore(Infinity);
+    const first = await store.storeEvent('stream-a', msg(1));
+    await store.storeEvent('stream-a', msg(2));
+    await store.storeEvent('stream-a', msg(3));
+
+    expect(await store.getStreamIdForEventId?.(first)).toBe('stream-a');
+  });
+
   it('evicts FIFO once maxEvents is reached', async () => {
     const store = createInMemoryEventStore(2);
     const first = await store.storeEvent('stream-a', msg(1));
