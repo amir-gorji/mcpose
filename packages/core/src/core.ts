@@ -6,7 +6,6 @@ import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -1809,7 +1808,7 @@ export function startHttpProxy(
         );
       });
       try {
-        await proxyServer.connect(transport as Transport);
+        await proxyServer.connect(transport);
         const answer = await replayInitialize(transport, record.initialize, {
           ...(req.headers.host === undefined ? {} : { host: req.headers.host }),
           ...(req.headers.origin === undefined
@@ -2020,7 +2019,7 @@ export function startHttpProxy(
           // See backendClient.ts: the SDK's transports are not assignable to
           // its own `Transport` interface under `exactOptionalPropertyTypes`
           // (here `onclose?: () => void` vs `onclose: (() => void) | undefined`).
-          await proxyServer.connect(transport as Transport);
+          await proxyServer.connect(transport);
           try {
             await httpProxyContext.run(requestContext, () =>
               transport.handleRequest(req, res),
