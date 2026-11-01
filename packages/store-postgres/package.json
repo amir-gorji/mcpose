@@ -56,14 +56,14 @@
     "pg": "^8.0.0 || ^9.0.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1",
-    "@types/node": "^26.6.5",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
-    "@vitest/coverage-v8": "5.0.4",
+    "@vitest/coverage-v8": "5.0.5",
     "mcpose": "workspace:*",
     "pg": "^8.23.1",
     "pg-mem": "^3.0.14",
     "typescript": "6.0.3",
-    "vitest": "5.0.4"
+    "vitest": "5.0.5"
   }
 }
