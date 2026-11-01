@@ -59,7 +59,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
-    "@stryker-mutator/core": "10.1.1",
+    "@stryker-mutator/core": "10.0.0",
     "@stryker-mutator/vitest-runner": "10.0.0",
     "@types/node": "^26.6.6",
     "@vitest/coverage-v8": "5.0.5",
