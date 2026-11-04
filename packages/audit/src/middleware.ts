@@ -14,7 +14,7 @@ import {
   sha256hex,
   stableStringify,
 } from './chain.js';
-import { hasToolContent, markPassThroughObserver } from 'mcpose';
+import { isToolResultError, markPassThroughObserver } from 'mcpose';
 import type {
   Identity,
   ProxyContext,
@@ -354,26 +354,26 @@ export function createAuditMiddleware(
       try {
         const rejectionReason = threw ? getRejectionReason(thrown) : undefined;
         // A call can fail without throwing: an MCP tool reports failure
-        // in-band with `isError: true` (#171). The caller supplies the
-        // predicate, so only tool calls pass one and prompts never match.
+        // in-band with `isError: true` (#171), including a content-less
+        // `{ isError: true }` that the SDK fills with `content: []` (#261).
+        // The caller supplies the predicate, so only tool calls pass one and
+        // prompts never match; it reads `isError` on any object, because the
+        // flag, not `.content`, is what the client observes.
         //
-        // A result that is not an object is decided here too, and for the same
-        // reason: the predicate below narrows to a `CallToolResult` and a
-        // primitive has no `.content` to narrow on. A local tool handler that
-        // resolves to a string reaches the client as `-32602 Invalid
-        // tools/call result`, so recording it as a success would put a clean
-        // outcome, and no `error` field, in a signed chain covering a call the
-        // client saw fail. `isResultless` in core's telemetry draws the same
-        // line, so both record what the caller observed.
+        // A result that is not an object is decided here too: a primitive
+        // cannot carry `isError`, and a local tool handler that resolves to a
+        // string reaches the client as `-32602 Invalid tools/call result`, so
+        // recording it as a success would put a clean outcome, and no `error`
+        // field, in a signed chain covering a call the client saw fail.
+        // `isResultless` in core's telemetry draws the same line, so both
+        // record what the caller observed.
         //
-        // A nullish result is decided here, BEFORE the predicate narrows it,
-        // because narrowing reads `.content` and a nullish value has none: a
-        // local tool handler with a missing `return` made the predicate throw,
-        // and that throw reached the `catch` below, which reports and moves on
-        // — so `buildEvent` never ran and the governed call reached the client
-        // as a failure and the trail not at all. The manifest that counted it
-        // still verified, a valid chain under a valid signature, one event
-        // short of the calls it claims to cover.
+        // A nullish result is decided here too, before buildEvent: a local
+        // tool handler with a missing `return` used to make the old predicate
+        // throw, and that throw reached the `catch` below, which reports and
+        // moves on, so the governed call reached the client as a failure and
+        // the trail not at all. The manifest that counted it still verified,
+        // one event short of the calls it claims to cover.
         const noToolResult =
           !threw &&
           (result === null ||
@@ -481,13 +481,7 @@ export function createAuditMiddleware(
   // Tool calls: wrapped so `passThroughTools` stay audited. Prompts have no
   // pass-through concept, so the prompt middleware needs no wrapper.
   const inner: AuditMiddlewareHandle['middleware'] = (req, next, ctx) =>
-    observe(
-      undefined,
-      req,
-      next,
-      ctx,
-      (result) => hasToolContent(result) && result.isError === true,
-    );
+    observe(undefined, req, next, ctx, isToolResultError);
   const middleware = markPassThroughObserver(inner);
   const promptMiddleware: AuditMiddlewareHandle['promptMiddleware'] = (
     req,

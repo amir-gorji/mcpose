@@ -980,6 +980,40 @@ describe('createAuditMiddleware — in-band tool errors (#171)', () => {
     expect(events[0]!.outputHash).toBe(sha256hex(stableStringify(inBandError)));
   });
 
+  it('records a content-less isError result as error and returns it untouched', async () => {
+    const { events, middleware } = record();
+    const contentlessError = { isError: true };
+
+    const returned: unknown = await middleware(
+      makeReq('search'),
+      async () => contentlessError as never,
+      makeCtx(),
+    );
+
+    expect(returned).toBe(contentlessError);
+    expect(events[0]!.outcome).toBe('error');
+    expect(events[0]!.error).toEqual({
+      name: 'ToolError',
+      message: 'Tool result returned isError: true',
+    });
+    expect(events[0]!.outputHash).toBe(
+      sha256hex(stableStringify(contentlessError)),
+    );
+  });
+
+  it('records a legacy toolResult shape that sets isError as error', async () => {
+    const { events, middleware } = record();
+    const legacyError = { toolResult: { raw: true }, isError: true };
+
+    await middleware(makeReq('search'), async () => legacyError, makeCtx());
+
+    expect(events[0]!.outcome).toBe('error');
+    expect(events[0]!.error).toEqual({
+      name: 'ToolError',
+      message: 'Tool result returned isError: true',
+    });
+  });
+
   it('does not copy the tool text into the unencrypted error detail', async () => {
     const { events, middleware } = record();
 

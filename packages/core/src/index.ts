@@ -56,6 +56,7 @@ export type {
 } from './core.js';
 export {
   hasToolContent,
+  isToolResultError,
   mapToolResult,
   createProxyServer,
   startProxy,

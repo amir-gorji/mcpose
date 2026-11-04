@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hasToolContent, mapToolResult } from '../core.js';
+import { hasToolContent, isToolResultError, mapToolResult } from '../core.js';
 import type {
   CallToolResult,
   CompatibilityCallToolResult,
@@ -60,4 +60,42 @@ describe('hasToolContent()', () => {
       ).toBe(result);
     });
   }
+});
+
+/**
+ * `isToolResultError` reads the in-band `isError` flag, which the client
+ * observes even when the result carries no `content`: CallToolResultSchema
+ * fills `content: []` for `{ isError: true }` (#261). Unlike
+ * `hasToolContent`, the flag, not the content array, is the discriminator.
+ */
+describe('isToolResultError()', () => {
+  it('is true for a CallToolResult with isError', () => {
+    const result: CallToolResult = { content: [], isError: true };
+    expect(isToolResultError(result)).toBe(true);
+  });
+
+  it('is true for a content-less { isError: true } result', () => {
+    expect(isToolResultError(untyped({ isError: true }))).toBe(true);
+  });
+
+  it('is true for a legacy { toolResult } shape that sets isError', () => {
+    expect(
+      isToolResultError(untyped({ toolResult: { raw: true }, isError: true })),
+    ).toBe(true);
+  });
+
+  it('is false when the result has no isError flag', () => {
+    const legacy: CompatibilityCallToolResult = { toolResult: { raw: true } };
+    expect(isToolResultError(legacy)).toBe(false);
+    expect(isToolResultError({ content: [] })).toBe(false);
+    expect(isToolResultError({ content: [], isError: false })).toBe(false);
+    expect(isToolResultError(untyped({ isError: 'true' }))).toBe(false);
+  });
+
+  it('is false for a non-object, rather than throwing', () => {
+    expect(isToolResultError('a string')).toBe(false);
+    expect(isToolResultError(42)).toBe(false);
+    expect(isToolResultError(undefined)).toBe(false);
+    expect(isToolResultError(null)).toBe(false);
+  });
 });
