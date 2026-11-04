@@ -136,6 +136,25 @@ export function hasToolContent(
 }
 
 /**
+ * True when a pipeline result carries an in-band MCP tool error.
+ *
+ * MCP signals a tool failure with `isError: true` instead of throwing. The
+ * flag can arrive without `content`: the SDK's `CallToolResultSchema` accepts
+ * `{ isError: true }` and fills `content: []`, so the client receives a tool
+ * error even though the pipeline produced no content array (#261). Reading
+ * `isError` on any object, not only behind `hasToolContent`, keeps telemetry
+ * and the audit trail aligned with what the caller observed. A legacy
+ * `{ toolResult }` result without the flag stays a success.
+ */
+export function isToolResultError(result: unknown): boolean {
+  return (
+    result !== null &&
+    typeof result === 'object' &&
+    (result as { isError?: unknown }).isError === true
+  );
+}
+
+/**
  * Handlers for {@link mapToolResult}, one per payload channel. All three
  * are required, so forgetting a channel is a compile error rather than a
  * silent leak.
@@ -1208,29 +1227,17 @@ export function createProxyServer(
           context,
         );
         // MCP signals tool-level failures in-band via isError, not by throwing.
-        // Three shapes reach here, and `hasToolContent` alone cannot tell them
-        // apart because it answers false for two of them:
-        //
-        //   - a CallToolResult: judge it by `isError`;
-        //   - the legacy `{ toolResult }` shape (protocol 2024-10-07): a valid
-        //     result with no `.content`, so `mapToolResult` passes it through —
-        //     a success;
-        //   - nothing at all, from a local tool with a missing `return` or a
-        //     middleware that dropped the result: the call produced no result,
-        //     so it is not a success.
-        //
-        // A result-less call used to reach the `catch` as a TypeError from
-        // `hasToolContent` and be recorded as an error; now that the guard
-        // answers false instead of throwing, the shape has to be distinguished
-        // here or a `&&` would report it as a clean one.
+        // The flag can arrive without `content`: CallToolResultSchema fills
+        // `content: []` for `{ isError: true }`, so the client sees a tool error.
+        // Reading `isError` on any object keeps this decision aligned with what
+        // the caller observed (#261). The legacy `{ toolResult }` shape has no
+        // `isError` and stays a success; a result-less call (nothing at all,
+        // from a local tool with a missing `return` or a middleware that
+        // dropped the result) did not reach the client as a success either.
         const isResultless =
           result === null || result === undefined || typeof result !== 'object';
         emitTelemetry(
-          isResultless
-            ? 'error'
-            : hasToolContent(result) && result.isError === true
-              ? 'error'
-              : 'success',
+          isResultless || isToolResultError(result) ? 'error' : 'success',
         );
         return result;
       } catch (err) {

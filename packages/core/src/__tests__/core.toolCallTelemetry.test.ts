@@ -155,3 +155,70 @@ describe('tools/call telemetry — the legacy { toolResult } shape', () => {
     });
   });
 });
+
+/**
+ * A content-less `{ isError: true }` result is an in-band tool error (#261):
+ * `CallToolResultSchema` fills `content: []`, so the client receives an error
+ * even though the pipeline produced no content array. The telemetry outcome
+ * has to match what the caller observed.
+ */
+describe('tools/call telemetry — content-less isError results', () => {
+  it('reports error for { isError: true } without content', async () => {
+    const events: TelemetryEvent[] = [];
+    const tool: LocalTool = {
+      tool: {
+        name: 'contentless_error',
+        description: 'returns { isError: true } without content',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      handler: (async () => ({
+        isError: true,
+      })) as unknown as LocalTool['handler'],
+    };
+    const server = createProxyServer(
+      { crm: makeBackend() },
+      {
+        name: 'test-server',
+        localTools: [tool],
+        onTelemetry: (e) => events.push(e),
+      },
+    );
+
+    await invokeHandler(server, 'tools/call', {
+      name: 'contentless_error',
+      arguments: {},
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'tool_call',
+      tool: 'contentless_error',
+      outcome: 'error',
+    });
+  });
+
+  it('reports error for a legacy { toolResult } shape that sets isError', async () => {
+    const events: TelemetryEvent[] = [];
+    const backend = makeBackend();
+    backend.callTool = vi.fn().mockResolvedValue({
+      toolResult: { raw: true },
+      isError: true,
+    }) as BackendClient['callTool'];
+
+    const server = createProxyServer(
+      { crm: backend },
+      { name: 'test-server', onTelemetry: (e) => events.push(e) },
+    );
+
+    await invokeHandler(server, 'tools/call', {
+      name: 'crm__legacy_error',
+      arguments: {},
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'tool_call',
+      outcome: 'error',
+    });
+  });
+});
