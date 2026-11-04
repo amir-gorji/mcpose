@@ -19,8 +19,21 @@ export type { EventStore as PersistentEventStore };
  * In-memory EventStore — default for single-instance deployments.
  * Dropped connections can replay missed notifications on reconnect.
  * Events are evicted FIFO once `maxEvents` is reached.
+ *
+ * `maxEvents` must be >= 0 or `Infinity`: `0` keeps no replay history,
+ * `Infinity` disables the cap, and a `NaN` or negative value throws here
+ * instead of silently growing forever or emptying every replay buffer.
  */
 export function createInMemoryEventStore(maxEvents = 1000): EventStore {
+  // The limit is enforced with `store.size > maxEvents`, so a NaN cap never
+  // evicts and a negative cap evicts on every insert. Reject both at
+  // construction, matching maxSessions/maxBodyBytes (#274); `0` stays literal
+  // and `Infinity` is the explicit opt-out.
+  if (!(maxEvents >= 0)) {
+    throw new Error(
+      `mcpose: maxEvents must be >= 0 or Infinity, got ${String(maxEvents)}`,
+    );
+  }
   const store = new Map<
     EventId,
     { streamId: StreamId; message: JSONRPCMessage }

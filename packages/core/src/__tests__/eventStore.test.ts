@@ -85,6 +85,32 @@ describe('createInMemoryEventStore()', () => {
     expect(await store.getStreamIdForEventId?.(second)).toBe('stream-a');
     expect(await store.getStreamIdForEventId?.(third)).toBe('stream-a');
   });
+
+  it.each([Number.NaN, -1])(
+    'rejects an invalid maxEvents (%s) at construction',
+    (maxEvents) => {
+      expect(() => createInMemoryEventStore(maxEvents)).toThrow(
+        /mcpose: maxEvents must be >= 0 or Infinity/,
+      );
+    },
+  );
+
+  it('keeps maxEvents: 0 as a store with no replay history', async () => {
+    const store = createInMemoryEventStore(0);
+    const id = await store.storeEvent('stream-a', msg(1));
+
+    expect(await store.getStreamIdForEventId?.(id)).toBeUndefined();
+  });
+
+  it('accepts maxEvents: Infinity as the opt-out from the cap', async () => {
+    const store = createInMemoryEventStore(Infinity);
+    const first = await store.storeEvent('stream-a', msg(1));
+    for (let i = 0; i < 100; i += 1) {
+      await store.storeEvent('stream-a', msg(i));
+    }
+
+    expect(await store.getStreamIdForEventId?.(first)).toBe('stream-a');
+  });
 });
 
 describe('scopeEventStore()', () => {
