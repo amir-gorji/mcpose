@@ -9,7 +9,6 @@ import {
   StreamableHTTPClientTransport,
   type StreamableHTTPClientTransportOptions,
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { VERSION } from './version.js';
 
 /** Backend connection config. */
@@ -53,11 +52,7 @@ export async function createBackendClient(
         args: config.args ?? [],
       });
 
-  // The SDK's own transports are not assignable to its own `Transport`
-  // interface under `exactOptionalPropertyTypes` (the interface declares
-  // `sessionId?: string`, the implementations `sessionId: string | undefined`).
-  // Purely a declaration mismatch upstream — the value is a real Transport.
-  await client.connect(transport as Transport);
+  await client.connect(transport);
   return client;
 }
 
